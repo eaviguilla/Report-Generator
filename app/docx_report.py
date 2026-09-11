@@ -78,11 +78,9 @@ FRAGMENT_COMPONENT_FILES = {
     "caption": ("caption_fragment.docx", "caption-fragment"),
 }
 IMAGE_BORDER_RASTER_DPI = 192
-# Long endpoints are broken after one of these so they stay inside their column.
+# Long endpoints are broken so they stay inside their column.
 SCOPE_WRAP_CHARACTERS = 51
 LOCATION_WRAP_CHARACTERS = 36
-# Break points inside a URL or package name, in the order they naturally appear.
-WRAP_SEPARATORS = "/.-?&"
 
 
 class ReportGenerationError(ValueError):
@@ -302,17 +300,22 @@ def _clear_paragraph(paragraph: Paragraph) -> None:
 def _wrap_long_value(value: str, limit: int) -> list[str]:
     """Break a long location so no line can widen its column.
 
-    Prefer the farthest separator that still fits, keeping the scheme whole. A value
-    with no separator inside the limit is cut at the limit rather than left to
-    overflow the cell.
+    Count to the limit, walk back to the first character that is not a letter or
+    digit, and break after it; counting then restarts from the break. A stretch
+    offering no such character is cut at the limit rather than left to overflow.
+    Characters inside "://" are skipped so a long host cannot strand the scheme on a
+    line of its own.
     """
     scheme = value.find("://")
     offset = scheme + 3 if scheme != -1 else 0
     segments = []
     remaining = value
     while len(remaining) > limit:
-        cut = max(remaining.rfind(separator, offset, limit) for separator in WRAP_SEPARATORS)
-        cut = cut + 1 if cut >= offset else limit
+        window = remaining[:limit]
+        cut = next(
+            (index + 1 for index in range(limit - 1, offset - 1, -1) if not window[index].isalnum()),
+            limit,
+        )
         segments.append(remaining[:cut])
         remaining = remaining[cut:]
         offset = 0

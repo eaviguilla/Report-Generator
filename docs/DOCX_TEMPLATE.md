@@ -5,50 +5,29 @@
 The renderer preserves its styles, sections, headers, footers, numbering, and
 static content while replacing the fields below.
 
-## Render paths
+## Render path
 
-`render_report_docx` has two independent implementations of the findings body
-and picks one at runtime (`app/docx_report.py:167`):
+`render_report_docx` has one implementation of the findings body. The template
+must contain an exact `{{findings}}` body token; without it the render is
+rejected rather than falling back to a second renderer:
 
 ```python
-if _has_exact_body_token(document, "findings"):
-    _populate_component_findings(...)   # component path
-else:
-    _populate_finding_sections(...)     # legacy inline path
+if not _has_exact_body_token(document, "findings"):
+    raise ReportGenerationError(f"Template has no {{findings}} anchor paragraph: {template_path}")
+_populate_component_findings(...)
 ```
 
-The rest of this document describes the **component path**, which is what
-`resources/MAIN_TEST.docx` uses. The legacy path runs for any template that has
-no `{{findings}}` token; it is still reachable and still tested, so a change to
-fragment rendering usually has to be made in both places.
+A legacy inline renderer used to handle templates with no `{{findings}}` token.
+It was removed: `resources/MAIN_TEST.docx` carries the token, so the fallback
+could not run in production, yet every fragment rule had to be written twice and
+had already drifted. `resources/fixtures/report-name.docx` is retained only as
+the rejection test's fixture.
 
-| | Component path | Legacy inline path |
-|---|---|---|
-| Trigger | template contains a `findings` body token | it does not |
-| Findings body | composed from `resources/severity_titles/`, `resources/finding_types/`, `resources/fragments/` | cloned from a prototype block already inside the template, between the High and Medium headings |
-| Severity sections | inserted per severity that has findings | template's own severity headings are removed and re-added per severity that has findings; findings sorted case-insensitively by title |
-| Severity rendering | font color on the rating text (see [Tag formatting](#tag-formatting)) | `SEVERITY_COLORS` cell shading on the detail table (`docx_report.py:51`): critical `BD292E`, high `DF720B`, medium `E7B925`, low `39895A`, informational `7D8CA3` |
-| Fragment renderer | `_render_component_fragment` | `_render_fragment` |
-
-Both paths share the `description-fragments-here` and
-`recommended-remediation-fragments-here` anchors. The Proof of Concept anchors
-differ - the legacy path splits text from images:
-
-| Legacy anchor | Rendered content |
-|---|---|
-| `proof-of-concept-step` | Current PoC fragments, images excluded |
-| `prod-images-and-caption-here` | Current PoC production images |
-| `non-prod-images-and-caption-here` | Current PoC non-production images |
-| `previous-proof-of-concept-step` | Previous PoC fragments, images excluded |
-| `previous-poc-prod-images-and-caption-here` | Previous PoC production images |
-| `previous-poc-non-prod-images-and-caption-here` | Previous PoC non-production images |
-| `brief-explanation-here` | In Conclusion fragments |
-
-When a finding has no `previous_proof_of_concept` or `in_conclusion` content,
-the legacy path deletes the whole block by heading text rather than by anchor
-(`Previous Proof of Concept:` through `Proof of Concept:`, and `In Conclusion:`
-through `Severity Review Ticket (if applicable):`), so those literal headings
-have to stay intact in a legacy template.
+The findings body is composed from `resources/severity_titles/`,
+`resources/finding_types/` and `resources/fragments/`. A severity section is
+inserted for each severity that has findings, severity is rendered as a font
+colour on the rating text (see [Tag formatting](#tag-formatting)), and fragments
+are rendered by `_render_component_fragment`.
 
 ## Engagement fields
 
@@ -120,6 +99,19 @@ Detail sections are generated dynamically:
 - Multiple findings of one severity share one severity-title component.
 - Finding title, likelihood, impact, severity, ID, status, and affected locations
   are populated from report data.
+- A finding with no Vuln ID leaves that cell blank in both the findings summary
+  and the finding's detail table; the internal `uid` is never printed.
+- Affected locations render as a real bulleted list cloned from
+  `resources/fragments/bulleted_fragment.docx`, forced left-aligned, one bullet
+  per location. The bullet glyph comes from the list style, so it is not part of
+  the text and is not counted when wrapping.
+- Long values are wrapped so a line cannot widen its column: count to the limit,
+  walk back to the first character that is not a letter or digit, break after it
+  with a `w:br` inside the run, then start counting again. A stretch offering no
+  such character is cut at the limit. Characters inside `://` are skipped so a
+  long host cannot strand the scheme on a line of its own. Limits live in
+  `app/docx_report.py`: `LOCATION_WRAP_CHARACTERS` (74) for affected locations,
+  `SCOPE_WRAP_CHARACTERS` (84) for the web and API scope tables.
 - Previous Proof of Concept and In Conclusion exist only in retest finding
   components.
 

@@ -44,7 +44,7 @@ same change.
 | POST | `/reports/{id}/repair` | Repair duplicate fragment IDs in a legacy draft |
 | GET | `/reports/{id}/export` | Download a ZIP containing draft JSON and evidence |
 | GET | `/reports/{id}/generate` | Render and download a completed DOCX report |
-| POST | `/reports/{id}/generate` | Render, save beside the draft, and reveal a completed DOCX report in Explorer |
+| POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder |
 | POST | `/reports/import` | Validate/import a ZIP or evidence-free legacy JSON with a new report ID |
 | GET | `/library/search?q=` | Search the offline vulnerability library |
 | POST | `/reports/{id}/library/{library_id}` | Insert a library finding |
@@ -52,27 +52,36 @@ same change.
 | GET | `/reports/{id}/evidence/{evidence_id}` | Serve stored evidence |
 
 DOCX generation uses `resources/MAIN_TEST.docx` as the canonical template, then
-composes severity-title, finding-type, and fragment documents. The route rejects
-incomplete content or missing environment evidence with `422`.
+composes severity-title, finding-type, and fragment documents. A template
+without an exact `{{findings}}` anchor paragraph is rejected; there is no second
+renderer. The route rejects incomplete content or missing environment evidence
+with `422`.
 
 ## Entry Gates
 
 | Route | Server-side requirement | Outcome when unmet |
 |---|---|---|
 | `/reports/{id}/*` | Report exists and is valid | Missing: `404`; invalid legacy draft: navigable `422` |
-| `/reports/{id}/findings` | Segment, app name, report type, CI or BSN, tester, selected environments, complete dates, and a target per environment | 303 to Setup with an explanatory banner |
+| `/reports/{id}/findings` | Segment, app name, report type, tester, selected environments, complete dates, and a target per environment | 303 to Setup with an explanatory banner |
 | `/reports/{id}/edit` | Findings gate plus at least one complete finding | 303 to Findings with an explanatory banner |
 | `PUT /reports/{id}` | Valid schema and no unsafe state transition | `422` naming the validation or repair action |
 | `PUT /reports/{id}` | `saved_at` matches persisted version | `409` directing the tester to reload |
 
 A complete finding has a title, likelihood, impact, severity, status, and at
-least one selected or custom affected location.
+least one selected or custom affected location. CI and BSN numbers are optional.
+Two findings may not share a finding number.
 
 ## State Safety
 
 - Removing a Setup scope target referenced by a custom finding is rejected.
   The response names the linked findings so the tester can restore the target
-  or unlink it first.
+  or unlink it first. Findings scoped by mode rather than by target ID are
+  covered by the same rule: deselecting an environment or narrowing the test
+  surface is rejected when it would leave such a finding with no location at
+  all, and Setup names those findings before the change is committed.
+- Deleting a finding confirms first when it holds written content or uploaded
+  screenshots, and releases its evidence so the images stop travelling in
+  every export.
 - Changing a finding status confirms before content blocks would be discarded
   or resolved status would replace recommended remediation.
 - In Conclusion starts with one editable title/status sentence. It synchronizes

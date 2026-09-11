@@ -34,8 +34,6 @@ automation, and there is no opt-out on the web route:
   `RuntimeError("Microsoft Word automation requires the existing pywin32 package")`
   when `pythoncom` / `win32com.client` cannot be imported. The route converts
   that into HTTP 422.
-- `POST /reports/{id}/generate` also reveals the output folder, which raises
-  `OSError` when `os.name != "nt"`.
 
 Word supplies what python-docx cannot: repagination, Table of Contents and Table
 of Figures rebuild, and field refresh. Word calls are serialized by
@@ -106,7 +104,7 @@ report IDs are runtime data and are not tracked in this plan.
 
 1. Setup (`/reports/{report_id}/setup`)
    - Engagement metadata: segment, application name, report type, CI/BSN,
-     owner, tester, and report date.
+     owner, tester, and report date. CI and BSN are both optional.
    - Required segments: JH, GWAM, or Asia.
    - Required report types: Annual Pentest, Retest, Deployment Pentest, or New
      Test.
@@ -125,8 +123,8 @@ report IDs are runtime data and are not tracked in this plan.
      numbers, spaces, and `:'"/.,-_&`. Comment lines beginning with `#` are
      ignored. Web and API targets retain their independent behavior.
    - Browser and server validation both require segment, application name,
-     report type, CI or BSN, tester, at least one environment, complete dates,
-     and a target for every selected environment before advancing.
+     report type, tester, at least one environment, complete dates, and a
+     target for every selected environment before advancing.
    - Invalid-character messages identify only the offending unique characters,
      including both symbol and name, such as `"_" (underscore)`.
 
@@ -276,8 +274,9 @@ data/
 
 Folder names are not identities. `report_id` inside `draft.json` is the report
 identity; discovery scans drafts. `app_id` is derived from CI number, then BSN,
-then application name. Existing unnamed drafts move into the derived app folder
-when their application identity becomes available.
+then application name, then `unnamed` when none is set. Existing unnamed drafts
+move into the derived app folder when their application identity becomes
+available.
 
 ## API Surface
 
@@ -295,7 +294,7 @@ when their application identity becomes available.
 | DELETE | `/reports/{id}` | Delete report and its evidence |
 | GET | `/reports/{id}/export` | Download report and evidence ZIP |
 | GET | `/reports/{id}/generate` | Generate the completed Word report |
-| POST | `/reports/{id}/generate` | Save the generated Word report locally and reveal its folder |
+| POST | `/reports/{id}/generate` | Save the generated Word report into `generated/` at the repository root |
 | POST | `/reports/import` | Validate/import ZIP or evidence-free JSON |
 | PATCH | `/reports/{id}/name` | Rename the report application label |
 | POST | `/reports/{id}/duplicate` | Duplicate a report and its evidence |

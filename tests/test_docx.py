@@ -12,7 +12,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from PIL import Image
 
-from app.docx_report import ReportGenerationError, generation_issues, render_report_docx
+from app.docx_report import WRAP_SEPARATORS, ReportGenerationError, _wrap_long_value, generation_issues, render_report_docx
 from app.report_service import provision
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
 
@@ -377,6 +377,77 @@ class DocxReportTests(unittest.TestCase):
                 self.assertEqual(len(paragraph._p.findall(".//" + qn("w:br"))), 1)
                 self.assertEqual(paragraph.text.replace("\n", ""), target)
                 self.assertTrue(all(len(line) <= 51 for line in paragraph.text.split("\n")))
+
+    def test_a_value_with_no_separator_inside_the_limit_still_breaks(self) -> None:
+        """Breaking runs to the farthest separator that fits; a value offering none is cut
+        at the limit, because letting the line run widens the table."""
+        # A separator inside the limit is preferred over cutting mid-token.
+        self.assertEqual(
+            _wrap_long_value("https://prod.example.test/accounts/123/details/extra", 36),
+            ["https://prod.example.test/accounts/", "123/details/extra"],
+        )
+        self.assertEqual(_wrap_long_value("x" * 80, 36), ["x" * 36, "x" * 36, "x" * 8])
+        for limit in (36, 51):
+            for value in (
+                "https://internal-banking-portal-uat.northstar.example.test/accounts",
+                "com.northstar.mobile.banking.application.android",
+                "https://prod.example.test/reports/export?format=invalid&scope=all&page=2",
+            ):
+                with self.subTest(limit=limit, value=value):
+                    lines = _wrap_long_value(value, limit)
+                    self.assertEqual("".join(lines), value, "wrapping must not lose characters")
+                    self.assertTrue(all(len(line) <= limit for line in lines), f"{lines} exceeds {limit}")
+                    for line in lines[:-1]:
+                        self.assertTrue(
+                            line[-1] in WRAP_SEPARATORS or len(line) == limit,
+                            f"{line!r} should end on a separator or fill the line",
+                        )
+
+    def test_a_query_string_breaks_on_its_own_separators(self) -> None:
+        self.assertEqual(
+            _wrap_long_value("https://api.example.test/search?q=session+fixation&environment=production", 36),
+            ["https://api.example.test/search?", "q=session+fixation&", "environment=production"],
+        )
+
+    def test_a_finding_without_a_number_leaves_the_id_blank(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            (report_folder / "evidence").mkdir()
+            buffer = BytesIO()
+            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+            (report_folder / "evidence" / "ev_blank.png").write_bytes(buffer.getvalue())
+            now = datetime.now().astimezone()
+            report = Report(
+                report_id="r_blank", app_id="CI-DOCX", saved_at=now,
+                engagement=Engagement(
+                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], test_type="web",
+                    test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
+                ),
+                scope_targets=[ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test")],
+                evidence={"ev_blank": EvidenceItem(file="evidence/ev_blank.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)},
+            )
+            image = lambda index: [ImageFragment(frag_id=f"f_img_{index}", type="image", environment="production", evidence_id="ev_blank", caption="Production response")]
+            report.vulnerabilities = [
+                self._finding("v_numbered", "Numbered finding", "high", "042", ["t_web"], image(1)),
+                self._finding("v_unnumbered", "Unnumbered finding", "low", None, ["t_web"], image(2)),
+            ]
+            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN_TEST.docx"), report_folder)))
+
+            summary = next(table for table in rendered.tables if table.cell(0, 0).text == "Findings")
+            numbers = {row.cells[0].text: row.cells[4].text for row in summary.rows[1:]}
+            self.assertEqual(numbers, {"Numbered finding": "042", "Unnumbered finding": ""})
+
+            details = {
+                table.cell(0, 1).text: table.cell(1, 1).text
+                for table in rendered.tables
+                if table.cell(0, 0).text == "Severity" and len(table.rows) >= 5
+            }
+            self.assertEqual(details.get("High"), "042")
+            self.assertEqual(details.get("Low"), "", "an unnumbered finding must not fall back to its internal uid")
+
+            everything = "\n".join([*(p.text for p in rendered.paragraphs), *(c.text for t in rendered.tables for r in t.rows for c in r.cells)])
+            self.assertNotIn("v_unnumbered", everything)
 
     def _assert_image_fragment_format(self, document) -> None:
         for index in range(len(document.inline_shapes)):

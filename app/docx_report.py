@@ -78,9 +78,11 @@ FRAGMENT_COMPONENT_FILES = {
     "caption": ("caption_fragment.docx", "caption-fragment"),
 }
 IMAGE_BORDER_RASTER_DPI = 192
-# Long endpoints are broken after a slash so they stay inside their column.
+# Long endpoints are broken after one of these so they stay inside their column.
 SCOPE_WRAP_CHARACTERS = 51
 LOCATION_WRAP_CHARACTERS = 36
+# Break points inside a URL or package name, in the order they naturally appear.
+WRAP_SEPARATORS = "/.-?&"
 
 
 class ReportGenerationError(ValueError):
@@ -297,18 +299,22 @@ def _clear_paragraph(paragraph: Paragraph) -> None:
             paragraph._p.remove(child)
 
 
-def _wrap_after_slash(value: str, limit: int) -> list[str]:
-    """Split a long location after the last slash that still fits, keeping the scheme whole."""
+def _wrap_long_value(value: str, limit: int) -> list[str]:
+    """Break a long location so no line can widen its column.
+
+    Prefer the farthest separator that still fits, keeping the scheme whole. A value
+    with no separator inside the limit is cut at the limit rather than left to
+    overflow the cell.
+    """
     scheme = value.find("://")
     offset = scheme + 3 if scheme != -1 else 0
     segments = []
     remaining = value
     while len(remaining) > limit:
-        cut = remaining.rfind("/", offset, limit)
-        if cut < offset:
-            break
-        segments.append(remaining[:cut + 1])
-        remaining = remaining[cut + 1:]
+        cut = max(remaining.rfind(separator, offset, limit) for separator in WRAP_SEPARATORS)
+        cut = cut + 1 if cut >= offset else limit
+        segments.append(remaining[:cut])
+        remaining = remaining[cut:]
         offset = 0
     segments.append(remaining)
     return segments
@@ -316,7 +322,7 @@ def _wrap_after_slash(value: str, limit: int) -> list[str]:
 
 def _add_wrapped_run(paragraph, value: str, limit: int | None) -> None:
     """Add the value as one run, breaking inside it rather than starting a new bullet."""
-    segments = _wrap_after_slash(value, limit) if limit else [value]
+    segments = _wrap_long_value(value, limit) if limit else [value]
     run = paragraph.add_run(segments[0])
     for segment in segments[1:]:
         run.add_break()
@@ -415,7 +421,8 @@ def _populate_summary_table(document: DocumentType, report: Report) -> None:
             (likelihood.title(), RATING_FONT_COLORS[likelihood]),
             (impact.title(), RATING_FONT_COLORS[impact]),
             (severity.title(), RATING_FONT_COLORS[severity]),
-            (finding.display_id or finding.uid, None),
+            # The internal uid is not a finding number, so an unnumbered finding stays blank.
+            (finding.display_id or "", None),
             (STATUS_LABELS[finding.status], None),
         ]
         for cell, (value, font_color) in zip(row.cells, values):
@@ -558,7 +565,7 @@ def _replace_token_with_bullets(
                 replace_component_token_runs(
                     bullet,
                     bullet_token,
-                    [Run(text="\n".join(_wrap_after_slash(value, LOCATION_WRAP_CHARACTERS)))],
+                    [Run(text="\n".join(_wrap_long_value(value, LOCATION_WRAP_CHARACTERS)))],
                 )
                 for node in bullet:
                     for bullet_paragraph in node.iter(qn("w:p")):
@@ -597,7 +604,7 @@ def _render_finding_component(
     values = {
         "finding_title": finding.title,
         "vuln_severity": (finding.severity or "informational").title(),
-        "vuln_id": finding.display_id or finding.uid,
+        "vuln_id": finding.display_id or "",
         "status": STATUS_LABELS[finding.status],
         "severity-review-tickets": "N/A",
     }

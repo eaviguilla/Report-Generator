@@ -1,6 +1,28 @@
 # Save State & Autosave — Research + Implementation Plan
 ### 3-Page Form with Cross-Page Field Dependencies
 
+> **Status: superseded research plan. This is not documentation of the shipped
+> app.** It was written before the save system was built, and the
+> implementation diverged on most of its concrete technology choices. The
+> *principles* in Part 1 were followed; the *stack* in Part 2 was not. Read
+> `docs/PLAN.md` § Persistence and safety for what actually ships, and
+> `app/web/static/app.js` for the save machine itself.
+>
+> | This plan says | What shipped |
+> |---|---|
+> | Alpine.js | no framework; plain DOM + vanilla JS |
+> | Bootstrap | hand-written CSS in `app/web/static/styles.css` |
+> | IndexedDB draft tier | a local tier was built, but on `localStorage` per-tab envelopes plus `sessionStorage` for the tab id - not IndexedDB, and not the "skip Tier 1" option of § 2.9 either |
+> | `BroadcastChannel` multi-tab lock | no cross-tab channel; concurrent writers are resolved server-side by compare-and-swap (HTTP 409) |
+> | 400-600 ms debounce | 5000 ms idle autosave (`VULNREPORT_AUTOSAVE_IDLE_MS`), with a 150 ms local-draft debounce |
+> | `editing` / `saving` / `saved` / `blocked` | six states: `unsaved`, `saving`, `saved`, `failed`, `conflict`, `recovered` |
+> | revision number per snapshot | kept: `saveRevision` vs `savedRevision` |
+> | server-side conflict rejection | kept: monotonic `saved_at` compare-and-swap, 409 with `latest_saved_at` |
+>
+> Kept as-is for the reasoning, which is still the best written record of *why*
+> the save system looks the way it does. Do not treat any code sample below as
+> reflecting a file in this repository.
+
 ---
 
 ## Part 1 — Research Summary

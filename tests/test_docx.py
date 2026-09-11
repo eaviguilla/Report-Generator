@@ -12,7 +12,14 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from PIL import Image
 
-from app.docx_report import ReportGenerationError, _wrap_long_value, generation_issues, render_report_docx
+from app.docx_report import (
+    LOCATION_WRAP_CHARACTERS,
+    SCOPE_WRAP_CHARACTERS,
+    ReportGenerationError,
+    _wrap_long_value,
+    generation_issues,
+    render_report_docx,
+)
 from app.report_service import provision
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
 
@@ -334,8 +341,8 @@ class DocxReportTests(unittest.TestCase):
             Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
             (report_folder / "evidence" / "ev_wrap.png").write_bytes(buffer.getvalue())
             now = datetime.now().astimezone()
-            web_target = "https://prod.example.test/accounts/123/details/extra"
-            api_target = "https://api.example.test/v2/customers/profile/settings/advanced"
+            web_target = "https://prod.example.test/accounts/123/details/extra/settings/preferences/alerts/email"
+            api_target = "https://api.example.test/v2/customers/profile/settings/advanced/notifications/preferences"
             report = Report(
                 report_id="r_wrap", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
@@ -369,32 +376,34 @@ class DocxReportTests(unittest.TestCase):
                 self.assertEqual(len(paragraph._p.findall(".//" + qn("w:br"))), 1, "a long location should break once")
             self.assertNotIn("\u2022", locations.text, "the bullet glyph must come from the list style, not the text")
             self.assertTrue(bullets[0].text.startswith("https://prod.example.test/accounts/"))
-            self.assertTrue(all(len(line) <= 36 for line in bullets[0].text.split("\n")))
+            self.assertTrue(all(len(line) <= LOCATION_WRAP_CHARACTERS for line in bullets[0].text.split("\n")))
 
             for name, target in (("URL(s) in Scope", web_target), ("API Routes", api_target)):
                 table = next(candidate for candidate in rendered.tables if candidate.cell(0, 0).text == name)
                 paragraph = next(item for item in table.cell(2, 0).paragraphs if item.text.strip())
                 self.assertEqual(len(paragraph._p.findall(".//" + qn("w:br"))), 1)
                 self.assertEqual(paragraph.text.replace("\n", ""), target)
-                self.assertTrue(all(len(line) <= 51 for line in paragraph.text.split("\n")))
+                self.assertTrue(all(len(line) <= SCOPE_WRAP_CHARACTERS for line in paragraph.text.split("\n")))
 
     def test_a_value_with_no_separator_inside_the_limit_still_breaks(self) -> None:
-        """Breaking runs to the farthest separator that fits; a value offering none is cut
+        """Breaking runs back to the nearest special character; a value offering none is cut
         at the limit, because letting the line run widens the table."""
-        # A separator inside the limit is preferred over cutting mid-token.
+        # A special character inside the limit is preferred over cutting mid-token.
         self.assertEqual(
             _wrap_long_value("https://prod.example.test/accounts/123/details/extra", 36),
             ["https://prod.example.test/accounts/", "123/details/extra"],
         )
         self.assertEqual(_wrap_long_value("x" * 80, 36), ["x" * 36, "x" * 36, "x" * 8])
-        for limit in (36, 51):
+        for limit in (LOCATION_WRAP_CHARACTERS, SCOPE_WRAP_CHARACTERS):
             for value in (
-                "https://internal-banking-portal-uat.northstar.example.test/accounts",
-                "com.northstar.mobile.banking.application.android",
-                "https://prod.example.test/reports/export?format=invalid&scope=all&page=2",
+                "https://internal-banking-portal-uat.northstar.example.test/accounts/settings/notifications/preferences/email",
+                "com.northstar.mobile.banking.application.android.enterprise.edition.release.candidate",
+                "https://prod.example.test/reports/export?format=invalid&scope=all&page=2&size=100&sort=desc",
+                "x" * 200,
             ):
                 with self.subTest(limit=limit, value=value):
                     lines = _wrap_long_value(value, limit)
+                    self.assertGreater(len(lines), 1, "fixture must be long enough to wrap")
                     self.assertEqual("".join(lines), value, "wrapping must not lose characters")
                     self.assertTrue(all(len(line) <= limit for line in lines), f"{lines} exceeds {limit}")
                     for line in lines[:-1]:
@@ -404,6 +413,7 @@ class DocxReportTests(unittest.TestCase):
                         )
 
     def test_a_query_string_breaks_on_its_own_separators(self) -> None:
+        # Fixed limit: this pins where the algorithm breaks, not the shipped column widths.
         # Counting back from the 36th character lands on "=" rather than the earlier "?".
         self.assertEqual(
             _wrap_long_value("https://api.example.test/search?q=session+fixation&environment=production", 36),

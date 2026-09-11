@@ -524,6 +524,23 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 422)
         self.assertIn("same finding number", json.dumps(rejected.json()))
 
+    def test_setup_completes_without_a_ci_or_bsn_number(self) -> None:
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({
+            "app_name": "No Identifier", "ci_number": "", "bsn_number": "",
+            "segment": "JH", "report_type": "annual_pentest", "tester": "QA Tester",
+            "tested_environments": ["production"],
+            "test_windows": {"production": {"start_date": "2026-08-01", "end_date": "2026-08-02", "test_time": "Any time"}},
+        })
+        report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
+        saved = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(saved.status_code, 200)
+
+        stored = main.workspace.load(report_id)
+        self.assertTrue(main.setup_is_complete(stored), "a report without a CI or BSN number should still be complete")
+        self.assertEqual(self.client.get(f"/reports/{report_id}/findings", follow_redirects=False).status_code, 200)
+
     def test_workspace_compare_and_swap_allows_only_one_concurrent_writer(self) -> None:
         report = main.workspace.create_report()
         expected_saved_at = report.saved_at

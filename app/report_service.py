@@ -368,8 +368,6 @@ def setup_issues(report: Report) -> list[str]:
         issues.append("segment")
     if not engagement.report_type:
         issues.append("report type")
-    if not engagement.ci_number.strip() and not engagement.bsn_number.strip():
-        issues.append("CI or BSN number")
     if not engagement.tester.strip():
         issues.append("tester")
     if not engagement.tested_environments:

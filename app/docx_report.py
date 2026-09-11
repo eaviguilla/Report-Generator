@@ -326,12 +326,35 @@ def _set_cell_lines(cell, lines: list[str], *, label: str | None = None) -> None
     for paragraph in paragraphs[1:]:
         cell._tc.remove(paragraph._p)
     _clear_paragraph(first)
+    # An added paragraph inherits the style but not the template paragraph's direct
+    # formatting, so every line after the first would lose its alignment and indent.
+    template_properties = first._p.find(qn("w:pPr"))
     if label:
         first.add_run(label).bold = True
     values = lines or ["N/A"]
     for index, value in enumerate(values):
-        paragraph = first if index == 0 and not label else cell.add_paragraph(style=paragraph_style)
+        if index == 0 and not label:
+            paragraph = first
+        else:
+            paragraph = cell.add_paragraph(style=paragraph_style)
+            if template_properties is not None:
+                existing = paragraph._p.find(qn("w:pPr"))
+                if existing is not None:
+                    paragraph._p.remove(existing)
+                paragraph._p.insert(0, deepcopy(template_properties))
         paragraph.add_run(value if label is None else f"• {value}")
+
+
+def _center_plain(cell) -> None:
+    """The scope cells use a bullet-list style, so a placeholder needs the plain style to lose its bullet."""
+    for paragraph in cell.paragraphs:
+        paragraph.style = "Normal"
+        properties = paragraph._p.find(qn("w:pPr"))
+        if properties is not None:
+            for tag in ("w:numPr", "w:ind"):
+                for element in properties.findall(qn(tag)):
+                    properties.remove(element)
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
 def _populate_scope_tables(document: DocumentType, report: Report) -> None:
@@ -343,7 +366,10 @@ def _populate_scope_tables(document: DocumentType, report: Report) -> None:
     _set_cell_lines(api.cell(2, 0), _target_values(report, "production", "api"))
     _set_cell_lines(api.cell(4, 0), _target_values(report, "non_production", "api"))
     limitations = _find_table(document, "Limitations")
-    _set_cell_lines(limitations.cell(1, 0), [_display_value(engagement.limitations)])
+    limitation_text = _display_value(engagement.limitations)
+    _set_cell_lines(limitations.cell(1, 0), [limitation_text])
+    if limitation_text.casefold() in {"n/a", "na"}:
+        _center_plain(limitations.cell(1, 0))
 
     accounts = _find_table(document, "User Roles")
     prototype = deepcopy(accounts.rows[1]._tr)

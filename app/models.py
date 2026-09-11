@@ -125,7 +125,7 @@ class LibraryRef(BaseModel):
 
 class Vulnerability(BaseModel):
     uid: StableId
-    display_id: str | None = None
+    display_id: Annotated[str, Field(pattern=r"^[0-9]{1,5}$")] | None = None
     title: str = ""
     likelihood: Severity | None = None
     impact: Severity | None = None

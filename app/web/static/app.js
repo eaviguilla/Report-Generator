@@ -767,6 +767,15 @@
     while (runs.at(-1)?.text.trim() === "") runs.pop();
     return runs;
   }
+  // Re-fits on width changes only, and off the observer frame; resizing inline would loop the observer.
+  const observeWidth = (element, onWidthChange) => {
+    let lastWidth = null;
+    new ResizeObserver(() => {
+      if (element.clientWidth === lastWidth) return;
+      lastWidth = element.clientWidth;
+      requestAnimationFrame(onWidthChange);
+    }).observe(element);
+  };
   // Builds a bold/italic/underline editor and reports normalized runs on change.
   function rich(runs, onChange, includeToolbar = true, placeholder = "") {
     const wrap = document.createElement("div"); wrap.innerHTML = `${includeToolbar ? '<div class="toolbar" role="toolbar" aria-label="Text formatting"><button type="button" tabindex="-1" title="Bold" aria-label="Bold"><b>B</b></button><button type="button" tabindex="-1" title="Italic" aria-label="Italic"><i>I</i></button><button type="button" tabindex="-1" title="Underline" aria-label="Underline"><u>U</u></button></div>' : ""}<div class="rich" contenteditable="true" role="textbox" aria-multiline="true"></div>`;
@@ -779,7 +788,7 @@
     requestAnimationFrame(resize);
     // Height is frozen at construction, so re-measure once fonts settle and on every width change.
     document.fonts?.ready.then(resize);
-    new ResizeObserver(resize).observe(input);
+    observeWidth(input, resize);
     return wrap;
   }
   // Ensures a finding has the content blocks and required starter fragments for its status.
@@ -946,7 +955,7 @@
         input.rows = 1;
         grow();
         document.fonts?.ready.then(grow);
-        new ResizeObserver(grow).observe(input);
+        observeWidth(input, grow);
       }
       input.oninput = () => { report[section][field] = input.value || (input.matches('select, input[type="date"]') ? null : ""); if (input.value.trim()) input.classList.remove("validation-error"); grow?.(); scheduleSave(); };
       if (setupRules[field]) wireSetupRule(input, setupRules[field]);
@@ -1353,8 +1362,13 @@
       controls[2].onchange = event => { finding.impact = event.target.value || null; scheduleSave(); };
       controls[3].onchange = event => { finding.severity = event.target.value; scheduleSave(); };
       controls[4].oninput = event => {
-        const digits = event.target.value.replace(/\D/g, "").slice(0, 5);
-        if (event.target.value !== digits) event.target.value = digits;
+        const field = event.target;
+        const digits = field.value.replace(/\D/g, "").slice(0, 5);
+        if (field.value !== digits) {
+          const caret = Math.max(0, (field.selectionStart ?? digits.length) - (field.value.length - digits.length));
+          field.value = digits;
+          field.setSelectionRange(caret, caret);
+        }
         finding.display_id = digits || null;
         scheduleSave();
       };
@@ -1883,7 +1897,7 @@
         if (group) group.issues.push(issue);
         else groups.push({finding:issue.finding, issues:[issue]});
       });
-      const renderGroup = group => `<details class="review-group" data-level="${group.issues.some(issue => (issue.level || "error") === "error") ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${group.issues.length} issue${group.issues.length === 1 ? "" : "s"}</span></summary>${group.issues.map(({finding, message, fragmentId, contentLabel, fragmentLabel, level}) => `<div class="review-item" data-level="${level || "error"}"><span class="review-icon" aria-hidden="true">!</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${finding.uid}"${fragmentId ? ` data-review-fragment="${fragmentId}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
+      const renderGroup = group => `<details class="review-group" data-level="${group.issues.some(issue => (issue.level || "error") === "error") ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${group.issues.length} issue${group.issues.length === 1 ? "" : "s"}</span></summary>${group.issues.map(({finding, message, fragmentId, contentLabel, fragmentLabel, level}) => `<div class="review-item" data-level="${level || "error"}"><span class="review-icon" aria-hidden="true">!</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
       panel.innerHTML = issues.length
         ? groups.map(renderGroup).join("")
         : '<div class="review-empty">All existing finding details are complete.</div>';

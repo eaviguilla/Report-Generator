@@ -321,4 +321,16 @@ class Workspace:
         now = datetime.now().astimezone()
         report.saved_at = max(now, report.saved_at + timedelta(microseconds=1))
         atomic_write_json(path, report.model_dump(mode="json", by_alias=True))
+        self._drop_orphan_evidence(path.parent, report)
         return path
+
+    @staticmethod
+    def _drop_orphan_evidence(report_root: Path, report: Report) -> None:
+        """Delete evidence files the draft stopped referencing, such as after a library replace."""
+        evidence_root = report_root / "evidence"
+        if not evidence_root.is_dir():
+            return
+        referenced = {Path(evidence.file).name for evidence in report.evidence.values()}
+        for stored in evidence_root.glob("*.png"):
+            if stored.name not in referenced:
+                stored.unlink(missing_ok=True)

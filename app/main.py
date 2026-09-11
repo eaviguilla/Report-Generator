@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import uuid
 import zipfile
 from datetime import datetime
@@ -35,15 +36,23 @@ DATA = ROOT / "data"
 GENERATED = ROOT / "generated"
 prefs = load_or_bootstrap(DATA / "prefs.json")
 workspace = Workspace(DATA, prefs.get("tester", {}).get("display_name", ""))
-configured_library = Path(prefs.get("library_path", "vuln_library.json"))
+# The app reads the editable copy under resources/; vuln_library.json at the root stays the pristine export.
+configured_library = Path(prefs.get("library_path", "resources/vuln_library.json"))
 configured_library = configured_library if configured_library.is_absolute() else ROOT / configured_library
-if not configured_library.is_file() and prefs.get("library_path") == "library/vuln_library.json":
-    configured_library = ROOT / "vuln_library.json"
+if not configured_library.is_file():
+    configured_library = ROOT / "resources" / "vuln_library.json"
+    configured_library.parent.mkdir(parents=True, exist_ok=True)
+    if not configured_library.is_file():
+        shutil.copy2(ROOT / "vuln_library.json", configured_library)
 library = Library(configured_library)
 
 app = FastAPI(title="Report Generator")
 app.mount("/static", StaticFiles(directory=ROOT / "app" / "web" / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "app" / "web" / "templates")
+
+# Disposable: delete app/library_editor.py and these two lines to remove the tool.
+from app.library_editor import router as library_editor_router  # noqa: E402
+app.include_router(library_editor_router)
 # One cache-buster for every asset, so the four pages can never load different CSS versions.
 STATIC_DIR = ROOT / "app" / "web" / "static"
 templates.env.globals["asset_v"] = str(int(max(p.stat().st_mtime for p in STATIC_DIR.glob("*.*"))))

@@ -19,3 +19,6 @@ graphify-out/
 __pycache__/
 *.pyc
 .DS_Store
+
+# runtime backup written next to any JSON the app rewrites
+vuln_library.bak.json

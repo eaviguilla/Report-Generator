@@ -209,6 +209,9 @@ class Report(BaseModel):
         vulnerability_ids = [vulnerability.uid for vulnerability in self.vulnerabilities]
         if len(vulnerability_ids) != len(set(vulnerability_ids)):
             raise ValueError("duplicate vulnerability id")
+        numbers = [vulnerability.display_id for vulnerability in self.vulnerabilities if vulnerability.display_id]
+        if len(numbers) != len(set(numbers)):
+            raise ValueError("two findings cannot share the same finding number")
         target_ids = set(target_id_values)
         frag_ids: set[str] = set()
         referenced_evidence_ids: set[str] = set()

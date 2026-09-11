@@ -39,7 +39,7 @@ if not configured_library.is_file() and prefs.get("library_path") == "library/vu
     configured_library = ROOT / "vuln_library.json"
 library = Library(configured_library)
 
-app = FastAPI(title="VulnReport")
+app = FastAPI(title="Report Generator")
 app.mount("/static", StaticFiles(directory=ROOT / "app" / "web" / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "app" / "web" / "templates")
 # One cache-buster for every asset, so the four pages can never load different CSS versions.

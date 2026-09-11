@@ -37,8 +37,8 @@
 .report-name small { margin-top: 3px; color: var(--muted); font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; }
 .report-rename-input { width: 100%; min-width: 0; padding: 2px 4px; border: 1px solid #8196ad; border-radius: 3px; font: inherit; font-weight: 700; }
 .report-row time { color: #52627b; font-size: 11px; }
-.report-actions { display: flex; justify-content: flex-end; gap: 10px; }
-.report-actions a, .report-actions button { padding: 0; border: 0; color: var(--accent); background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
+.report-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.report-actions a, .report-actions button { padding: 0; border: 0; color: var(--accent); background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; line-height: 1; }
 .report-actions button { color: var(--danger); }
 .empty-reports { padding: 32px 14px; color: var(--muted); font-size: 12px; text-align: center; }
 @media (max-width: 680px) { #report-manager { padding: 20px 16px 64px; } .manager-heading { align-items: start; flex-direction: column; } .manager-search { max-width: none; } .manager-search input { flex: 1; } .app-group-columns { display: none; } .report-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; } .report-row time, .report-row > span { display: none; } .report-actions { align-self: center; } }

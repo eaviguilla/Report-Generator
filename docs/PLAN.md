@@ -175,7 +175,8 @@ report IDs are runtime data and are not tracked in this plan.
      be added through the fragment control. The editor displays a tester-only
      reminder to include a brief justification or explanation; that reminder is
      not stored in or exported with the report.
-   - Content readiness blocks both Previous navigation and report generation.
+   - Content readiness blocks report generation, but never Previous navigation:
+     a tester on their way back to fix gaps is not held on the page.
      Generate first saves and acknowledges every pending edit, then starts the
      generation request; duplicate clicks cannot start parallel generations.
 

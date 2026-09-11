@@ -1085,10 +1085,19 @@
           label.textContent = channelLabels[channel];
           const textarea = document.createElement("textarea");
           textarea.value = report.scope_text[environment][channel];
-          textarea.oninput = () => { report.scope_text[environment][channel] = textarea.value; if ([...root.querySelectorAll("#scope-grid textarea")].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) root.querySelectorAll("#scope-grid textarea.validation-error").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
+          // Two lines to start, then grow with the target list instead of scrolling.
+          textarea.rows = 2;
+          const grow = () => {
+            textarea.style.height = "auto";
+            textarea.style.height = `${textarea.scrollHeight}px`;
+          };
+          textarea.oninput = () => { report.scope_text[environment][channel] = textarea.value; grow(); if ([...root.querySelectorAll("#scope-grid textarea")].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) root.querySelectorAll("#scope-grid textarea.validation-error").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
           if (channel === "mobile") wireSetupRule(textarea, mobileScopeRule, `${environmentLabels[environment]} Mobile scope`);
           label.append(textarea);
           panel.append(label);
+          grow();
+          document.fonts?.ready.then(grow);
+          observeWidth(textarea, grow);
         });
         scopeGrid.append(panel);
       });

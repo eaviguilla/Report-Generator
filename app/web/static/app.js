@@ -523,9 +523,6 @@
     if (!root.querySelector('[data-path="engagement.app_name"]')?.value.trim()) missing.push("application name");
     if (!root.querySelector('[data-path="engagement.segment"]')?.value) missing.push("segment");
     if (!root.querySelector('[data-path="engagement.report_type"]')?.value) missing.push("report type");
-    const ciNumber = root.querySelector('[data-path="engagement.ci_number"]')?.value.trim();
-    const bsnNumber = root.querySelector('[data-path="engagement.bsn_number"]')?.value.trim();
-    if (!ciNumber && !bsnNumber) missing.push("CI or BSN number");
     if (!root.querySelector('[data-path="engagement.tester"]')?.value.trim()) missing.push("tester");
     if (!root.querySelector('#test-windows input[type="checkbox"]:checked')) missing.push("selected environment");
     if ([...root.querySelectorAll('#test-windows input[type="date"]')].some(input => !input.value)) missing.push("testing dates");
@@ -1598,23 +1595,20 @@
         return false;
       }
       const requiredMetadata = [root.querySelector('[data-path="engagement.segment"]'), root.querySelector('[data-path="engagement.app_name"]'), root.querySelector('[data-path="engagement.report_type"]'), root.querySelector('[data-path="engagement.tester"]')];
-      const identityInputs = [root.querySelector('[data-path="engagement.ci_number"]'), root.querySelector('[data-path="engagement.bsn_number"]')];
       const requiredDates = [...root.querySelectorAll('#test-windows input[type="date"]')];
       const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => !input?.value.trim());
-      const missingIdentity = !identityInputs.some(input => input?.value.trim());
       const missingEnvironment = !root.querySelector('#test-windows input[type="checkbox"]:checked');
       const missingScopePanels = [...root.querySelectorAll("#scope-grid .scope-panel")].filter(panel => ![...panel.querySelectorAll("textarea")].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#"))));
-      if (incompleteSetup.length || missingIdentity || missingEnvironment || missingScopePanels.length) {
+      if (incompleteSetup.length || missingEnvironment || missingScopePanels.length) {
         if (reveal) {
           const setupNotice = document.querySelector("#setup-validation-note");
           if (setupNotice) setupNotice.dataset.validationAttempted = "true";
           incompleteSetup.forEach(input => input.classList.add("validation-error"));
-          identityInputs.forEach(input => input.classList.toggle("validation-error", missingIdentity));
           missingScopePanels.forEach(panel => panel.querySelectorAll("textarea").forEach(input => input.classList.add("validation-error")));
-          const firstIncomplete = incompleteSetup[0] || (missingIdentity ? identityInputs[0] : null) || missingScopePanels[0]?.querySelector("textarea");
+          const firstIncomplete = incompleteSetup[0] || missingScopePanels[0]?.querySelector("textarea");
           firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
           firstIncomplete?.focus({preventScroll:true});
-          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length || missingIdentity ? "Complete the highlighted application details and testing dates" : "Define at least one scope target for each selected environment");
+          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : "Define at least one scope target for each selected environment");
           updateSetupValidationNotice();
         }
         return false;

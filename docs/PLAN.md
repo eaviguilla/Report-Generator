@@ -11,9 +11,66 @@ management, and Word report generation through the supplied canonical template.
 - Runtime: local FastAPI app on `127.0.0.1`; `run.py` selects the first
   available port from `8765` through `8799` (the manual command below uses
   `8770`)
+- Setup: `py -3 run.py` is the only command a user needs. It creates `.venv`,
+  installs `requirements.txt` into it when the file's sha256 differs from the
+  stamp in `.venv/.requirements-sha256`, then relaunches itself with the
+  virtual-environment interpreter.
 - Distribution: plain project folder with Python dependencies; no hosted service
 - Persistence: JSON drafts and PNG evidence under `data/apps/`
+- Platform: drafting, saving, import, and export are cross-platform. **Report
+  generation requires Windows with Microsoft Word installed** - see
+  [Platform requirements](#platform-requirements).
 - Last verified: 2026-09-11; all 70 automated tests pass
+
+## Platform requirements
+
+Every code path that produces a finished report ends in Microsoft Word COM
+automation, and there is no opt-out on the web route:
+
+- `finalized_report` in `app/main.py` calls `update_docx_bytes_with_word`
+  unconditionally after `render_report_docx`.
+- `scripts/generate_report.py` does the same.
+- `app/docx_captions.py` raises
+  `RuntimeError("Microsoft Word automation requires the existing pywin32 package")`
+  when `pythoncom` / `win32com.client` cannot be imported. The route converts
+  that into HTTP 422.
+- `POST /reports/{id}/generate` also reveals the output folder, which raises
+  `OSError` when `os.name != "nt"`.
+
+Word supplies what python-docx cannot: repagination, Table of Contents and Table
+of Figures rebuild, and field refresh. Word calls are serialized by
+`WORD_AUTOMATION_LOCK`.
+
+Only `scripts/postprocess_captions.py` accepts `--skip-word-update`, and it
+operates on an already-generated document.
+
+On macOS or Linux the application runs, saves, imports, and exports normally;
+Generate fails with a 422. That is expected, not a defect.
+
+## Configuration
+
+All limits are read from the environment at import time through
+`configured_limit`, which silently falls back to the default when a value cannot
+be parsed. Changing one requires a restart.
+
+| Variable | Default |
+|---|---|
+| `VULNREPORT_MAX_JSON_BYTES` | 10 MB |
+| `VULNREPORT_MAX_BUNDLE_BYTES` | 100 MB |
+| `VULNREPORT_MAX_EXPANDED_BUNDLE_BYTES` | 250 MB |
+| `VULNREPORT_MAX_BUNDLE_FILES` | 1000 |
+| `VULNREPORT_MAX_IMAGE_BYTES` | 20 MB |
+| `VULNREPORT_MAX_IMAGE_PIXELS` | 40000000 |
+| `VULNREPORT_MAX_REPORT_EVIDENCE_BYTES` | 250 MB |
+
+Two browser-side values are read off `window` rather than the environment:
+`VULNREPORT_AUTOSAVE_IDLE_MS` and its older alias
+`VULNREPORT_AUTOSAVE_INTERVAL_MS` (default 5000 ms, floor 100 ms).
+
+The vulnerability library path comes from `prefs.library_path`. A relative value
+resolves against the project root, and the single legacy value
+`library/vuln_library.json` falls back to `vuln_library.json` when the original
+path is missing.
 
 ## Implemented Features
 

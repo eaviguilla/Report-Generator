@@ -1,0 +1,21 @@
+# runtime state — app recreates these on boot
+data/apps/
+data/.locks/
+data/prefs.json
+data/vulnreport-errors.log
+
+# generated output
+generated/*
+!generated/.gitkeep
+
+# agent tooling — not needed on other devices
+.claude/
+.impeccable/
+.graphifyignore
+graphify-out/
+
+# python / macOS
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

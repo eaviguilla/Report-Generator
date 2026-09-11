@@ -11,6 +11,8 @@ Status = Literal["open_new", "open_previously_discovered", "resolved"]
 Environment = Literal["production", "non_production"]
 Channel = Literal["api", "web", "mobile"]
 TestType = Literal["web", "api", "mobile", "web_api"]
+# Only labels the Proof of Concept evidence groups; it never renames the environment itself.
+NonProductionLabel = Literal["UAT", "TEST/MO", "DEV"]
 Segment = Literal["JH", "GWAM", "Asia"]
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
 ContentType = Literal["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]
@@ -147,6 +149,7 @@ class Engagement(BaseModel):
     end_date: date | None = None
     tested_environments: list[Environment] = Field(default_factory=lambda: ["production", "non_production"])
     test_type: TestType = "web"
+    non_production_label: NonProductionLabel = "UAT"
     test_windows: dict[Environment, TestWindow] = Field(default_factory=dict)
     test_accounts: list[TestAccount] = Field(default_factory=lambda: [TestAccount()])
     limitations: str = "N/A"

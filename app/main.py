@@ -31,6 +31,8 @@ from .workspace import StaleReportError, Workspace, app_id_for
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
+# One shared folder at the repo root so testers do not have to dig through per-report directories.
+GENERATED = ROOT / "generated"
 prefs = load_or_bootstrap(DATA / "prefs.json")
 workspace = Workspace(DATA, prefs.get("tester", {}).get("display_name", ""))
 configured_library = Path(prefs.get("library_path", "vuln_library.json"))
@@ -456,17 +458,9 @@ def generate_report(report_id: str):
 
 @app.post("/reports/{report_id}/generate")
 def generate_report_to_folder(report_id: str):
-    """Render, save, and reveal a complete report in its local report folder."""
+    """Render and save a complete report into the shared generated folder."""
     report, _, _, output_path = finalized_report(report_id, save_to_folder=True)
-    try:
-        reveal_generated_report(output_path)
-    except OSError as error:
-        logger.exception("Generated %s but could not open Explorer", output_path, exc_info=error)
-        raise HTTPException(
-            500,
-            f"Report saved to {output_path}, but its folder could not be opened.",
-        ) from error
-    return {"filename": output_path.name, "path": str(output_path), "folder_opened": True}
+    return {"filename": output_path.name, "path": str(output_path), "folder": str(GENERATED)}
 
 
 def finalized_report(report_id: str, *, save_to_folder: bool = False) -> tuple[Report, Path, bytes, Path]:
@@ -483,8 +477,10 @@ def finalized_report(report_id: str, *, save_to_folder: bool = False) -> tuple[R
                 validation_issues=issues,
             )
             contents = update_docx_bytes_with_word(contents)
-            output_path = draft_path.parent / report_export_filename(report, ".docx")
+            output_path = GENERATED / report_export_filename(report, ".docx")
             if save_to_folder:
+                GENERATED.mkdir(parents=True, exist_ok=True)
+                output_path = unused_export_path(output_path)
                 atomic_write_bytes(output_path, contents)
             return report, draft_path.parent, contents, output_path
     except FileNotFoundError as error:
@@ -493,11 +489,14 @@ def finalized_report(report_id: str, *, save_to_folder: bool = False) -> tuple[R
         raise HTTPException(422, str(error)) from error
 
 
-def reveal_generated_report(path: Path) -> None:
-    """Open the generated report's folder in Windows Explorer."""
-    if os.name != "nt":
-        raise OSError("Automatic folder opening is supported on Windows")
-    os.startfile(path.resolve().parent)
+def unused_export_path(path: Path) -> Path:
+    """Number repeat exports so regenerating never overwrites an earlier report."""
+    candidate = path
+    counter = 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
+        counter += 1
+    return candidate
 
 
 @app.get("/reports/{report_id}")

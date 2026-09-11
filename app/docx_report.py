@@ -88,7 +88,7 @@ FRAGMENT_COMPONENT_FILES = {
     "bulleted_list": ("bulleted_fragment.docx", "bullet-list-fragment"),
     "note": ("note_fragment.docx", "note-fragment"),
     "code_block": ("code_fragment.docx", "code-fragment"),
-    "instance_title": ("instance_fragment.docx", "instance-fragment"),
+    "instance_title": ("title_fragment.docx", "instance-fragment"),
     "caption": ("caption_fragment.docx", "caption-fragment"),
 }
 DEFAULT_IMAGE_FRAGMENT_TEMPLATE = Path(__file__).resolve().parent.parent / "resources" / "fragments" / "image_fragment.docx"
@@ -114,7 +114,8 @@ def generation_issues(report: Report) -> list[str]:
             for fragment in content.fragments
             if isinstance(fragment, ImageFragment)
         ]
-        for environment in affected_environments(finding, report):
+        environments = affected_environments(finding, report)
+        for environment in environments:
             if not any(image.environment == environment and image.evidence_id for image in images):
                 issues.append(f"{label}: {'Production' if environment == 'production' else 'Non-Production'} evidence image required")
         for content in finding.contents:
@@ -124,6 +125,9 @@ def generation_issues(report: Report) -> list[str]:
                 elif isinstance(fragment, ListFragment) and any(not _runs_have_text(item.runs) for item in fragment.items):
                     issues.append(f"{label}: {content.type} list item text is required")
                 elif isinstance(fragment, ImageFragment):
+                    # An image for an environment this finding does not affect is not the tester's to complete.
+                    if fragment.environment and fragment.environment not in environments:
+                        continue
                     missing = []
                     if not fragment.environment:
                         missing.append("environment")
@@ -582,8 +586,32 @@ def _render_finding_component(
             report_folder,
             component_root,
             allow_incomplete,
+            label_environments=set(affected_environments(finding, report)),
+            label_images=anchor in {"poc-fragments-here", "prev-poc-fragments-here"},
         )
         elements = _replace_component_anchor(elements, anchor, rendered)
+    return elements
+
+
+def _environment_label(report: Report, environment: str) -> str:
+    return "PROD:" if environment == "production" else f"{report.engagement.non_production_label.upper()}:"
+
+
+def _render_environment_label(
+    document: DocumentType,
+    component_root: Path,
+    report: Report,
+    environment: str,
+) -> list:
+    elements = _render_text_component(
+        document,
+        component_root,
+        "instance_title",
+        [Run(text=_environment_label(report, environment))],
+    )
+    for element in elements:
+        if element.tag == qn("w:p"):
+            Paragraph(element, document._body).paragraph_format.space_after = Pt(0)
     return elements
 
 
@@ -594,6 +622,9 @@ def _render_component_content(
     report_folder: Path,
     component_root: Path,
     allow_incomplete: bool,
+    *,
+    label_images: bool = False,
+    label_environments: set[str] | None = None,
 ) -> list:
     if content is None or not content.fragments:
         rendered = _render_text_component(
@@ -604,7 +635,18 @@ def _render_component_content(
         )
     else:
         rendered = []
+        labelled_environment = None
         for fragment in content.fragments:
+            # One label per run of images, and only for environments this finding actually affects.
+            if (
+                label_images
+                and isinstance(fragment, ImageFragment)
+                and fragment.environment
+                and (label_environments is None or fragment.environment in label_environments)
+                and fragment.environment != labelled_environment
+            ):
+                labelled_environment = fragment.environment
+                rendered.extend(_render_environment_label(document, component_root, report, fragment.environment))
             rendered.extend(
                 _render_component_fragment(
                     document,
@@ -1063,6 +1105,7 @@ def _replace_image_anchor(
         return [element for index, element in enumerate(elements) if index not in remove]
     if label_index is not None:
         label = Paragraph(elements[label_index], document._body)
+        _set_paragraph_runs(label, text=_environment_label(report, environment))
         for run in label.runs:
             run.bold = True
     rendered = []

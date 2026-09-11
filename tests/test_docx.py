@@ -111,7 +111,9 @@ class DocxReportTests(unittest.TestCase):
             self._assert_image_fragment_format(rendered)
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("PROD:"), 2)
-            self.assertEqual(paragraph_texts.count("NON-PROD:"), 1)
+            # The evidence label follows the engagement's chosen non-production name.
+            self.assertEqual(paragraph_texts.count("UAT:"), 1)
+            self.assertEqual(paragraph_texts.count("NON-PROD:"), 0)
             code_paragraph = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "GET /accounts/123")
             self.assertIsNone(code_paragraph._p.pPr.numPr)
             with ZipFile(BytesIO(generated)) as archive:

@@ -12,7 +12,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from PIL import Image
 
-from app.docx_report import WRAP_SEPARATORS, ReportGenerationError, _wrap_long_value, generation_issues, render_report_docx
+from app.docx_report import ReportGenerationError, _wrap_long_value, generation_issues, render_report_docx
 from app.report_service import provision
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
 
@@ -399,14 +399,15 @@ class DocxReportTests(unittest.TestCase):
                     self.assertTrue(all(len(line) <= limit for line in lines), f"{lines} exceeds {limit}")
                     for line in lines[:-1]:
                         self.assertTrue(
-                            line[-1] in WRAP_SEPARATORS or len(line) == limit,
-                            f"{line!r} should end on a separator or fill the line",
+                            not line[-1].isalnum() or len(line) == limit,
+                            f"{line!r} should end on a special character or fill the line",
                         )
 
     def test_a_query_string_breaks_on_its_own_separators(self) -> None:
+        # Counting back from the 36th character lands on "=" rather than the earlier "?".
         self.assertEqual(
             _wrap_long_value("https://api.example.test/search?q=session+fixation&environment=production", 36),
-            ["https://api.example.test/search?", "q=session+fixation&", "environment=production"],
+            ["https://api.example.test/search?q=", "session+fixation&environment=", "production"],
         )
 
     def test_a_finding_without_a_number_leaves_the_id_blank(self) -> None:

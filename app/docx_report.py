@@ -38,23 +38,9 @@ from .docx_components import (
     replace_component_token_runs,
     replace_pattern_across_text_nodes,
 )
-from .report_service import REPORT_TYPE_LABELS, affected_environments, finding_is_complete, setup_issues
+from .report_service import REPORT_TYPE_LABELS, affected_environments, finding_is_complete, fragment_applies, setup_issues
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
-SEVERITY_HEADINGS = {
-    "critical": "CRITICAL FINDINGS",
-    "high": "HIGH FINDINGS",
-    "medium": "MEDIUM FINDINGS",
-    "low": "LOW FINDINGS",
-    "informational": "INFORMATIONAL FINDINGS",
-}
-SEVERITY_COLORS = {
-    "critical": "BD292E",
-    "high": "DF720B",
-    "medium": "E7B925",
-    "low": "39895A",
-    "informational": "7D8CA3",
-}
 STATUS_LABELS = {
     "open_new": "Open (New)",
     "open_previously_discovered": "Open (Previously Discovered)",
@@ -91,7 +77,6 @@ FRAGMENT_COMPONENT_FILES = {
     "instance_title": ("title_fragment.docx", "instance-fragment"),
     "caption": ("caption_fragment.docx", "caption-fragment"),
 }
-DEFAULT_IMAGE_FRAGMENT_TEMPLATE = Path(__file__).resolve().parent.parent / "resources" / "fragments" / "image_fragment.docx"
 IMAGE_BORDER_RASTER_DPI = 192
 
 
@@ -125,8 +110,7 @@ def generation_issues(report: Report) -> list[str]:
                 elif isinstance(fragment, ListFragment) and any(not _runs_have_text(item.runs) for item in fragment.items):
                     issues.append(f"{label}: {content.type} list item text is required")
                 elif isinstance(fragment, ImageFragment):
-                    # An image for an environment this finding does not affect is not the tester's to complete.
-                    if fragment.environment and fragment.environment not in environments:
+                    if not fragment_applies(fragment, finding, report):
                         continue
                     missing = []
                     if not fragment.environment:
@@ -168,16 +152,15 @@ def render_report_docx(
     _populate_scope_tables(document, report)
     _populate_summary_table(document, report)
     _replace_metadata(document, report)
-    if _has_exact_body_token(document, "findings"):
-        _populate_component_findings(
-            document,
-            report,
-            report_folder,
-            template_path.parent,
-            allow_incomplete,
-        )
-    else:
-        _populate_finding_sections(document, report, report_folder, allow_incomplete)
+    if not _has_exact_body_token(document, "findings"):
+        raise ReportGenerationError(f"Template has no {{{{findings}}}} anchor paragraph: {template_path}")
+    _populate_component_findings(
+        document,
+        report,
+        report_folder,
+        template_path.parent,
+        allow_incomplete,
+    )
     add_native_image_captions(document)
     unresolved = _unresolved_placeholders(document)
     if unresolved:
@@ -309,18 +292,6 @@ def _clear_paragraph(paragraph: Paragraph) -> None:
     for child in list(paragraph._p):
         if child.tag != qn("w:pPr"):
             paragraph._p.remove(child)
-
-
-def _set_paragraph_runs(paragraph: Paragraph, runs: list[Run] | None = None, text: str | None = None) -> None:
-    _clear_paragraph(paragraph)
-    if text is not None:
-        paragraph.add_run(text)
-        return
-    for source in runs or []:
-        run = paragraph.add_run(source.text)
-        run.bold = source.bold
-        run.italic = source.italic
-        run.underline = source.underline
 
 
 def _set_cell_lines(cell, lines: list[str], *, label: str | None = None) -> None:
@@ -586,7 +557,7 @@ def _render_finding_component(
             report_folder,
             component_root,
             allow_incomplete,
-            label_environments=set(affected_environments(finding, report)),
+            finding=finding,
             label_images=anchor in {"poc-fragments-here", "prev-poc-fragments-here"},
         )
         elements = _replace_component_anchor(elements, anchor, rendered)
@@ -623,10 +594,15 @@ def _render_component_content(
     component_root: Path,
     allow_incomplete: bool,
     *,
+    finding: Vulnerability | None = None,
     label_images: bool = False,
-    label_environments: set[str] | None = None,
 ) -> list:
-    if content is None or not content.fragments:
+    fragments = [] if content is None else [
+        fragment
+        for fragment in content.fragments
+        if finding is None or fragment_applies(fragment, finding, report)
+    ]
+    if not fragments:
         rendered = _render_text_component(
             document,
             component_root,
@@ -636,13 +612,12 @@ def _render_component_content(
     else:
         rendered = []
         labelled_environment = None
-        for fragment in content.fragments:
-            # One label per run of images, and only for environments this finding actually affects.
+        for fragment in fragments:
+            # One label per run of images.
             if (
                 label_images
                 and isinstance(fragment, ImageFragment)
                 and fragment.environment
-                and (label_environments is None or fragment.environment in label_environments)
                 and fragment.environment != labelled_environment
             ):
                 labelled_environment = fragment.environment
@@ -925,46 +900,6 @@ def _component_anchor_index(elements: list, token: str) -> int:
     return matches[0]
 
 
-def _populate_finding_sections(document: DocumentType, report: Report, report_folder: Path, allow_incomplete: bool) -> None:
-    body = document.element.body
-    severity_headings = {severity: _find_body_element(document, heading) for severity, heading in SEVERITY_HEADINGS.items()}
-    appendix = _find_body_element(document, "Appendix: Common Vulnerability Scoring System (CVSS)")
-    high_heading = severity_headings["high"]
-    medium_heading = severity_headings["medium"]
-    prototype = []
-    current = high_heading.getnext()
-    while current is not medium_heading:
-        prototype.append(deepcopy(current))
-        current = current.getnext()
-
-    current = severity_headings["critical"]
-    while current is not appendix:
-        following = current.getnext()
-        body.remove(current)
-        current = following
-
-    for severity in SEVERITY_ORDER:
-        findings = sorted((item for item in report.vulnerabilities if item.severity == severity), key=lambda item: item.title.casefold())
-        if not findings:
-            continue
-        appendix.addprevious(deepcopy(severity_headings[severity]))
-        for index, finding in enumerate(findings):
-            elements = [deepcopy(element) for element in prototype]
-            elements = _populate_finding_block(document, elements, finding, report, report_folder, allow_incomplete)
-            if index:
-                _set_page_break_before(next(element for element in elements if _paragraph_style(element) == "ReportHeading2"))
-            for element in elements:
-                appendix.addprevious(element)
-
-
-def _paragraph_style(element) -> str:
-    if element.tag != qn("w:p"):
-        return ""
-    properties = element.find(qn("w:pPr"))
-    style = properties.find(qn("w:pStyle")) if properties is not None else None
-    return style.get(qn("w:val"), "") if style is not None else ""
-
-
 def _set_page_break_before(paragraph_element) -> None:
     paragraph_properties = paragraph_element.find(qn("w:pPr"))
     if paragraph_properties is None:
@@ -972,52 +907,6 @@ def _set_page_break_before(paragraph_element) -> None:
         paragraph_element.insert(0, paragraph_properties)
     if paragraph_properties.find(qn("w:pageBreakBefore")) is None:
         paragraph_properties.append(OxmlElement("w:pageBreakBefore"))
-
-
-def _populate_finding_block(
-    document: DocumentType,
-    elements: list,
-    finding: Vulnerability,
-    report: Report,
-    report_folder: Path,
-    allow_incomplete: bool,
-) -> list:
-    content = {item.type: item for item in finding.contents}
-    if "previous_proof_of_concept" not in content:
-        elements = _remove_range(elements, "Previous Proof of Concept:", "Proof of Concept:")
-    if "in_conclusion" not in content:
-        elements = _remove_range(elements, "In Conclusion:", "Severity Review Ticket (if applicable):")
-
-    title = next(element for element in elements if _paragraph_style(element) == "ReportHeading2")
-    _set_paragraph_runs(Paragraph(title, document._body), text=finding.title)
-    detail_element = next(element for element in elements if element.tag == qn("w:tbl"))
-    detail = Table(detail_element, document._body)
-    _set_cell_lines(detail.cell(0, 1), [(finding.severity or "informational").title()])
-    _shade_cell(detail.cell(0, 1), SEVERITY_COLORS[finding.severity or "informational"])
-    _set_cell_lines(detail.cell(1, 1), [finding.display_id or finding.uid])
-    _set_cell_lines(detail.cell(2, 1), [STATUS_LABELS[finding.status]])
-    locations = _finding_locations(report, finding)
-    _set_cell_lines(detail.cell(3, 1), locations["production"], label="Production Environment:")
-    _set_cell_lines(detail.cell(4, 1), locations["non_production"], label="Lower Region Environment:")
-
-    elements = _replace_fragment_anchor(document, elements, "description-fragments-here", content.get("description"), report, report_folder, allow_incomplete)
-    elements = _replace_fragment_anchor(document, elements, "recommended-remediation-fragments-here", content.get("recommended_remediation"), report, report_folder, allow_incomplete)
-    if "previous_proof_of_concept" in content:
-        elements = _replace_fragment_anchor(document, elements, "previous-proof-of-concept-step", content["previous_proof_of_concept"], report, report_folder, allow_incomplete, exclude_images=True)
-        elements = _replace_image_anchor(document, elements, "previous-poc-prod-images-and-caption-here", content["previous_proof_of_concept"], "production", report, report_folder, allow_incomplete)
-        elements = _replace_image_anchor(document, elements, "previous-poc-non-prod-images-and-caption-here", content["previous_proof_of_concept"], "non_production", report, report_folder, allow_incomplete)
-    elements = _replace_fragment_anchor(document, elements, "proof-of-concept-step", content.get("proof_of_concept"), report, report_folder, allow_incomplete, exclude_images=True)
-    elements = _replace_image_anchor(document, elements, "prod-images-and-caption-here", content.get("proof_of_concept"), "production", report, report_folder, allow_incomplete)
-    elements = _replace_image_anchor(document, elements, "non-prod-images-and-caption-here", content.get("proof_of_concept"), "non_production", report, report_folder, allow_incomplete)
-    if "in_conclusion" in content:
-        elements = _replace_fragment_anchor(document, elements, "brief-explanation-here", content["in_conclusion"], report, report_folder, allow_incomplete)
-    return elements
-
-
-def _remove_range(elements: list, start_text: str, end_text: str) -> list:
-    start = next(index for index, element in enumerate(elements) if _element_text(element).casefold() == start_text.casefold())
-    end = next(index for index, element in enumerate(elements) if index > start and _element_text(element).casefold() == end_text.casefold())
-    return elements[:start] + elements[end:]
 
 
 def _finding_locations(report: Report, finding: Vulnerability) -> dict[str, list[str]]:
@@ -1040,206 +929,6 @@ def _finding_locations(report: Report, finding: Vulnerability) -> dict[str, list
             if target.environment in environments:
                 values[target.environment].append(target.value)
     return values
-
-
-def _shade_cell(cell, fill: str) -> None:
-    properties = cell._tc.get_or_add_tcPr()
-    shading = properties.find(qn("w:shd"))
-    if shading is None:
-        shading = OxmlElement("w:shd")
-        properties.append(shading)
-    shading.set(qn("w:fill"), fill)
-    for paragraph in cell.paragraphs:
-        for run in paragraph.runs:
-            run.font.color.rgb = RGBColor(255, 255, 255)
-            run.bold = True
-
-
-def _replace_fragment_anchor(
-    document: DocumentType,
-    elements: list,
-    marker: str,
-    content: Content | None,
-    report: Report,
-    report_folder: Path,
-    allow_incomplete: bool,
-    *,
-    exclude_images: bool = False,
-) -> list:
-    indices = [index for index, element in enumerate(elements) if marker in _element_text(element).casefold()]
-    if not indices:
-        return elements
-    anchor = elements[indices[0]]
-    fragments = [] if content is None else [fragment for fragment in content.fragments if not exclude_images or not isinstance(fragment, ImageFragment)]
-    rendered = []
-    for fragment in fragments:
-        rendered.extend(_render_fragment(document, anchor, fragment, report, report_folder, allow_incomplete))
-    if not rendered:
-        rendered.append(_new_paragraph(document, anchor, text="N/A"))
-    return [
-        *elements[:indices[0]],
-        *rendered,
-        *(element for index, element in enumerate(elements[indices[0] + 1:], start=indices[0] + 1) if index not in indices),
-    ]
-
-
-def _replace_image_anchor(
-    document: DocumentType,
-    elements: list,
-    marker: str,
-    content: Content | None,
-    environment: str,
-    report: Report,
-    report_folder: Path,
-    allow_incomplete: bool,
-) -> list:
-    anchor_index = next((index for index, element in enumerate(elements) if marker in _element_text(element).casefold()), None)
-    if anchor_index is None:
-        return elements
-    images = [] if content is None else [fragment for fragment in content.fragments if isinstance(fragment, ImageFragment) and fragment.environment == environment]
-    label_index = next((index for index in range(anchor_index - 1, -1, -1) if _element_text(elements[index]).casefold() in {"prod:", "non-prod:"}), None)
-    if not images:
-        remove = {anchor_index}
-        if label_index is not None:
-            remove.add(label_index)
-        return [element for index, element in enumerate(elements) if index not in remove]
-    if label_index is not None:
-        label = Paragraph(elements[label_index], document._body)
-        _set_paragraph_runs(label, text=_environment_label(report, environment))
-        for run in label.runs:
-            run.bold = True
-    rendered = []
-    for image in images:
-        rendered.extend(_render_image(document, elements[anchor_index], image, report, report_folder, allow_incomplete))
-    return [*elements[:anchor_index], *rendered, *elements[anchor_index + 1:]]
-
-
-def _render_fragment(document: DocumentType, anchor, fragment, report: Report, report_folder: Path, allow_incomplete: bool) -> list:
-    if isinstance(fragment, ParagraphFragment):
-        return [
-            _new_paragraph(document, anchor, runs=fragment.runs),
-            _new_paragraph(document, anchor),
-        ]
-    if isinstance(fragment, NoteFragment):
-        paragraph = _new_paragraph(document, anchor, style="Intense Quote")
-        wrapper = Paragraph(paragraph, document._body)
-        wrapper.add_run("Note: ").bold = True
-        _append_runs(wrapper, fragment.runs)
-        return [paragraph]
-    if isinstance(fragment, ListFragment):
-        rendered = []
-        for index, item in enumerate(fragment.items):
-            paragraph = _new_paragraph(document, anchor, style="List Paragraph")
-            wrapper = Paragraph(paragraph, document._body)
-            wrapper.add_run(f"{index + 1}. " if fragment.type == "numbered_list" else "• ").bold = fragment.type == "numbered_list"
-            _append_runs(wrapper, item.runs)
-            rendered.append(paragraph)
-        return rendered
-    if isinstance(fragment, InstanceTitleFragment):
-        paragraph = _new_paragraph(document, anchor, text=fragment.text, style="Normal")
-        for run in Paragraph(paragraph, document._body).runs:
-            run.bold = True
-        return [paragraph]
-    if isinstance(fragment, CodeFragment):
-        rendered = []
-        if fragment.caption:
-            rendered.append(_new_paragraph(document, anchor, text=fragment.caption, style="Caption"))
-        paragraph = _new_paragraph(document, anchor, text=fragment.text, style="Normal")
-        wrapper = Paragraph(paragraph, document._body)
-        for run in wrapper.runs:
-            run.font.name = "Consolas"
-            run.font.size = Pt(9)
-        properties = wrapper._p.get_or_add_pPr()
-        shading = OxmlElement("w:shd")
-        shading.set(qn("w:fill"), "F1F4F8")
-        properties.append(shading)
-        return [*rendered, paragraph]
-    if isinstance(fragment, TableFragment):
-        rendered = []
-        if fragment.caption:
-            rendered.append(_new_paragraph(document, anchor, text=fragment.caption, style="Caption"))
-        rows = max(1, len(fragment.rows)) + (1 if fragment.header else 0)
-        columns = max([len(fragment.header), *(len(row) for row in fragment.rows), 1])
-        table = document.add_table(rows=rows, cols=columns)
-        try:
-            table.style = "PentestReport"
-        except KeyError:
-            table.style = "Table Grid"
-        document.element.body.remove(table._tbl)
-        row_offset = 0
-        if fragment.header:
-            for index, cell in enumerate(fragment.header):
-                _set_cell_runs(table.cell(0, index), cell.runs, bold=True)
-            row_offset = 1
-        for row_index, source_row in enumerate(fragment.rows):
-            for column_index, cell in enumerate(source_row):
-                _set_cell_runs(table.cell(row_index + row_offset, column_index), cell.runs)
-        rendered.append(table._tbl)
-        return rendered
-    if isinstance(fragment, ImageFragment):
-        return _render_image(document, anchor, fragment, report, report_folder, allow_incomplete)
-    return []
-
-
-def _new_paragraph(document: DocumentType, anchor, *, text: str | None = None, runs: list[Run] | None = None, style: str | None = None):
-    paragraph = document.add_paragraph()
-    document.element.body.remove(paragraph._p)
-    if style:
-        paragraph.style = style
-    else:
-        source_properties = anchor.find(qn("w:pPr"))
-        if source_properties is not None:
-            current = paragraph._p.find(qn("w:pPr"))
-            if current is not None:
-                paragraph._p.remove(current)
-            paragraph._p.insert(0, deepcopy(source_properties))
-    if text is not None:
-        paragraph.add_run(text)
-    else:
-        _append_runs(paragraph, runs or [])
-    return paragraph._p
-
-
-def _append_runs(paragraph: Paragraph, runs: list[Run]) -> None:
-    for source in runs:
-        run = paragraph.add_run(source.text)
-        run.bold = source.bold
-        run.italic = source.italic
-        run.underline = source.underline
-
-
-def _set_cell_runs(cell, runs: list[Run], *, bold: bool = False) -> None:
-    paragraph = cell.paragraphs[0]
-    for extra in cell.paragraphs[1:]:
-        cell._tc.remove(extra._p)
-    _clear_paragraph(paragraph)
-    for source in runs:
-        run = paragraph.add_run(source.text)
-        run.bold = bold or source.bold
-        run.italic = source.italic
-        run.underline = source.underline
-
-
-def _render_image(document: DocumentType, anchor, fragment: ImageFragment, report: Report, report_folder: Path, allow_incomplete: bool) -> list:
-    evidence = report.evidence.get(fragment.evidence_id or "")
-    if evidence is None:
-        if not allow_incomplete:
-            raise ReportGenerationError(f"Missing evidence for image fragment {fragment.frag_id}")
-        return [_new_paragraph(document, anchor, text=f"[Evidence image not attached: {_display_value(fragment.caption)}]", style="Intense Quote")]
-    path = report_folder / evidence.file
-    if not path.is_file():
-        raise ReportGenerationError(f"Evidence file not found: {evidence.file}")
-    paragraph_element = _new_paragraph(document, anchor, style="Normal")
-    paragraph = Paragraph(paragraph_element, document._body)
-    image_width_mm = min(fragment.width_mm or 155, 155)
-    picture = paragraph.add_run().add_picture(
-        _bordered_image_stream(path, image_width_mm, DEFAULT_IMAGE_FRAGMENT_TEMPLATE),
-        width=Mm(image_width_mm),
-    )
-    _apply_image_fragment_format(picture, paragraph, DEFAULT_IMAGE_FRAGMENT_TEMPLATE)
-    caption = _new_paragraph(document, anchor, text=_display_value(fragment.caption), style="Caption")
-    Paragraph(caption, document._body).alignment = WD_ALIGN_PARAGRAPH.CENTER
-    return [paragraph_element, caption]
 
 
 def _bordered_image_stream(path: Path, width_mm: float, template_path: Path) -> BytesIO:

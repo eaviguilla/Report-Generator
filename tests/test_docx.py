@@ -12,7 +12,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from PIL import Image
 
-from app.docx_report import render_report_docx
+from app.docx_report import ReportGenerationError, generation_issues, render_report_docx
 from app.report_service import provision
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
 
@@ -83,7 +83,7 @@ class DocxReportTests(unittest.TestCase):
                 ListItem(runs=[Run(text="Record the original vulnerable response.")]),
             ]
 
-            template = Path(__file__).resolve().parent.parent / "resources" / "fixtures" / "report-name.docx"
+            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
             generated = render_report_docx(report, template, report_folder)
             rendered = Document(BytesIO(generated))
             text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
@@ -91,8 +91,6 @@ class DocxReportTests(unittest.TestCase):
             self.assertNotIn("-fragments-here", text.casefold())
             self.assertEqual(text.count("Authorization bypass"), 2)
             self.assertEqual(text.count("Session fixation"), 3)
-            self.assertNotIn("CRITICAL FINDINGS", text)
-            self.assertIn("HIGH FINDINGS", text)
             summary = next(table for table in rendered.tables if table.cell(0, 0).text == "Findings")
             self.assertEqual(len(summary.rows), 3)
             expected_rating_colors = {
@@ -108,19 +106,15 @@ class DocxReportTests(unittest.TestCase):
                     rating_run = next(run for run in row.cells[index].paragraphs[0].runs if run.text)
                     self.assertEqual(rating_run.font.size, Pt(12))
             self.assertEqual(len(rendered.inline_shapes), 4)
-            self._assert_image_fragment_format(rendered)
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("PROD:"), 2)
             # The evidence label follows the engagement's chosen non-production name.
             self.assertEqual(paragraph_texts.count("UAT:"), 1)
             self.assertEqual(paragraph_texts.count("NON-PROD:"), 0)
-            code_paragraph = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "GET /accounts/123")
-            self.assertIsNone(code_paragraph._p.pPr.numPr)
-            with ZipFile(BytesIO(generated)) as archive:
-                self.assertIn("word/document.xml", archive.namelist())
 
-            component_generated = render_report_docx(report, Path("resources/MAIN_TEST.docx"), report_folder)
-            component_document = Document(BytesIO(component_generated))
+            # The component template is the only supported one, so the checks below share this render.
+            component_generated = generated
+            component_document = rendered
             template_document = Document(Path("resources/MAIN_TEST.docx"))
             template_revision = next(
                 table for table in template_document.tables if table.cell(0, 0).text == "Version"
@@ -259,6 +253,74 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(sum(int(column.get(qn("w:w"))) for column in generated_table._tbl.tblGrid.iterchildren(qn("w:gridCol"))), 9994)
             with ZipFile(BytesIO(component_generated)) as archive:
                 self.assertIn("word/document.xml", archive.namelist())
+
+    def test_template_without_the_findings_anchor_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = Report(
+                report_id="r_legacy_template",
+                app_id="CI-DOCX",
+                saved_at=datetime.now().astimezone(),
+                engagement=Engagement(app_name="Northstar Banking"),
+            )
+            template = Path(__file__).resolve().parent.parent / "resources" / "fixtures" / "report-name.docx"
+            with self.assertRaises(ReportGenerationError) as raised:
+                render_report_docx(report, template, report_folder, allow_incomplete=True)
+            self.assertIn("{{findings}}", str(raised.exception))
+
+    def test_image_left_behind_for_an_unaffected_environment_is_not_rendered(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            evidence_folder = report_folder / "evidence"
+            evidence_folder.mkdir()
+            buffer = BytesIO()
+            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+            for evidence_id in ("ev_prod", "ev_stale"):
+                (evidence_folder / f"{evidence_id}.png").write_bytes(buffer.getvalue())
+            now = datetime.now().astimezone()
+            report = Report(
+                report_id="r_stale_image",
+                app_id="CI-DOCX",
+                saved_at=now,
+                engagement=Engagement(
+                    app_name="Northstar Banking",
+                    ci_number="CI-DOCX",
+                    segment="JH",
+                    report_type="annual_pentest",
+                    report_date=date(2026, 9, 9),
+                    tester="QA Tester",
+                    tested_environments=["production", "non_production"],
+                    test_type="web",
+                    test_windows={
+                        "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
+                        "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Any time"),
+                    },
+                ),
+                scope_targets=[
+                    ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test"),
+                    ScopeTarget(target_id="t_uat", environment="non_production", channel="web", value="https://uat.example.test"),
+                ],
+                evidence={
+                    evidence_id: EvidenceItem(file=f"evidence/{evidence_id}.png", original_name=f"{evidence_id}.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)
+                    for evidence_id in ("ev_prod", "ev_stale")
+                },
+            )
+            # The finding covers production only, but a non-production image is still attached.
+            report.vulnerabilities = [
+                self._finding("v_prod_only", "Authorization bypass", "high", "001", ["t_prod"], [
+                    ImageFragment(frag_id="f_img_prod", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
+                    ImageFragment(frag_id="f_img_stale", type="image", environment="non_production", evidence_id="ev_stale", caption="Stale lower-region response"),
+                ]),
+            ]
+            self.assertEqual(generation_issues(report), [])
+
+            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
+            rendered = Document(BytesIO(render_report_docx(report, template, report_folder)))
+            paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
+            self.assertEqual(paragraph_texts.count("PROD:"), 1)
+            self.assertEqual(paragraph_texts.count("UAT:"), 0)
+            self.assertEqual(len(rendered.inline_shapes), 1)
+            self.assertNotIn("Stale lower-region response", "\n".join(paragraph_texts))
 
     def _assert_image_fragment_format(self, document) -> None:
         for index in range(len(document.inline_shapes)):

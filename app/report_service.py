@@ -234,6 +234,13 @@ def affected_environments(vulnerability: Vulnerability, report: Report) -> list[
     return ordered
 
 
+def fragment_applies(fragment, vulnerability: Vulnerability, report: Report) -> bool:
+    """Single owner of the rule: an image left behind for an environment the finding no longer
+    affects is stale, so it is neither the tester's to complete nor ours to render."""
+    environment = getattr(fragment, "environment", None)
+    return not environment or environment in affected_environments(vulnerability, report)
+
+
 def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> None:
     """Ensure each affected environment has an image slot while preserving extra images."""
     environments = affected_environments(vulnerability, report)

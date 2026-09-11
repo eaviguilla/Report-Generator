@@ -18,9 +18,10 @@ from PIL import Image
 from playwright.sync_api import sync_playwright
 
 from app import main
+from app.docx_report import generation_issues
 from app.storage import atomic_write_json, read_json
 from app.workspace import Workspace
-from app.models import EvidenceItem, Run, Scope, ScopeTarget, TestWindow, Vulnerability
+from app.models import EvidenceItem, ImageFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
 
 
 class BrowserWorkflowTests(unittest.TestCase):
@@ -889,6 +890,86 @@ class BrowserWorkflowTests(unittest.TestCase):
             header.locator(".toolbar").get_by_role("button").evaluate_all("buttons => buttons.map(button => button.title)"),
             ["Bold", "Italic", "Underline"],
         )
+
+    def _complete_finding(self, report_id: str):
+        """Fill the seeded finding in so both sides consider the report ready to generate."""
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        next(content for content in finding.contents if content.type == "description").fragments[0].runs = [Run(text="Complete description")]
+        next(content for content in finding.contents if content.type == "recommended_remediation").fragments[0].runs = [Run(text="Complete remediation")]
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Complete proof step")]
+        image_data = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        evidence_id = "ev_contract"
+        image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        image.evidence_id = evidence_id
+        image.caption = "Production proof"
+        report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name="proof.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
+        evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_path.write_bytes(image_data.getvalue())
+        return report, finding
+
+    def test_browser_readiness_verdict_matches_server_generation_issues(self) -> None:
+        """The scope and completeness rules live in both Python and JavaScript. If they ever
+        disagree the tester is told a report is ready that the server then refuses, so pin
+        the two together over the cases where the rules are easiest to get wrong."""
+
+        def unchanged(report, finding):
+            return None
+
+        def blank_caption(report, finding):
+            proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+            next(fragment for fragment in proof.fragments if fragment.type == "image").caption = "   "
+
+        def placeholder_text(report, finding):
+            next(content for content in finding.contents if content.type == "description").fragments[0].runs = [Run(text="(insert version here)")]
+
+        def no_affected_location(report, finding):
+            finding.scope = Scope(mode="custom", target_ids=[])
+
+        def missing_rating(report, finding):
+            finding.severity = None
+
+        def stale_image_for_unaffected_environment(report, finding):
+            # The finding covers production only; the lower-region image is left over from a
+            # scope change and belongs to neither side's idea of "required".
+            report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
+            report.engagement.tested_environments = ["production", "non_production"]
+            report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+            proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+            proof.fragments.append(ImageFragment(frag_id="f_stale", type="image", environment="non_production", evidence_id=None, caption=""))
+
+        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment]
+        for case in cases:
+            with self.subTest(case=case.__name__):
+                report_id = self.ready_report(include_finding=True)
+                report, finding = self._complete_finding(report_id)
+                case(report, finding)
+                # Mirror the save route so both sides judge the same canonical state.
+                main.provision_report(report)
+                main.workspace.save(report)
+
+                server_issues = generation_issues(main.workspace.load(report_id))
+                self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                if "/findings" in self.page.url:
+                    # The server refused to open the editor, so it must have had a reason.
+                    self.assertTrue(server_issues, f"{case.__name__}: editor was blocked but the server reports no issues")
+                    continue
+
+                self.page.wait_for_selector("#issue-count")
+                browser_state = self.page.locator("#issue-count").get_attribute("data-state")
+                self.assertEqual(
+                    browser_state,
+                    "ready" if not server_issues else "issues",
+                    f"{case.__name__}: browser says {browser_state!r} but the server reports {server_issues}",
+                )
+                self.assertEqual(
+                    self.page.get_by_role("button", name="Generate Report").is_enabled(),
+                    not server_issues,
+                    f"{case.__name__}: generate button does not match server readiness",
+                )
 
     def test_complete_report_saves_generated_docx_to_generated_folder(self) -> None:
         self.page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")

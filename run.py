@@ -85,7 +85,7 @@ def serve() -> None:
 
     port = free_port()
     url = f"http://127.0.0.1:{port}"
-    print(f"VulnReport is running at {url}")
+    print(f"Report Generator is running at {url}")
     print("Close this window to stop the application.")
     threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     uvicorn.run("app.main:app", host="127.0.0.1", port=port)

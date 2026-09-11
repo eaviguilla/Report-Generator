@@ -12,6 +12,15 @@
   const serverReport = JSON.parse(root.dataset.report);
   let report = serverReport;
   const reportId = report.report_id;
+  const reportTypeLabels = {annual_pentest:"Annual Pentest", retest:"Retest", deployment_pentest:"Deployment Pentest", new_test:"New Test"};
+  // The header names the engagement only once both halves are saved; a missing half falls back.
+  const updateEngagementName = (saved = report) => {
+    const heading = document.querySelector(".engagement-name");
+    if (!heading) return;
+    const appName = saved.engagement?.app_name?.trim();
+    const testType = reportTypeLabels[saved.engagement?.report_type];
+    heading.textContent = appName && testType ? `${appName} - ${testType}` : "Application Penetration Testing";
+  };
   const localDraftPrefix = `vulnreport-pending:${reportId}`;
   const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
   let recoveryStorageError = null;
@@ -330,7 +339,8 @@
     let changed = false;
     const keys = new Set([...Object.keys(sent || {}), ...Object.keys(canonical || {})]);
     keys.forEach(key => {
-      if (["saved_at", "app_id", "_folder_name_hint"].includes(key)) return;
+      // scope_text is client-only; the server consumes it into scope_targets and never echoes it back.
+      if (["saved_at", "app_id", "_folder_name_hint", "scope_text"].includes(key)) return;
       const sentValue = sent?.[key];
       const canonicalValue = canonical?.[key];
       if (sameValue(sentValue, canonicalValue)) return;
@@ -625,6 +635,7 @@
             if (recoveryStorageError) showRecoveryStorageWarning(recoveryStorageError);
             saveRetryCount = 0;
             setSaveState(successStatus ? SAVE_STATES.SAVING : SAVE_STATES.SAVED, successStatus);
+            updateEngagementName();
           } else {
             pendingSave = true;
             queueLocalDraft();
@@ -2104,4 +2115,5 @@
     render();
   }
   root.id === "setup" ? setup() : continuousEditor();
+  updateEngagementName(serverReport);
 })();

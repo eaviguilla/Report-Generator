@@ -316,6 +316,17 @@ body > header.app-header {
   font-size: 13px;
 }
 
+/* The logo is its own artwork, so it drops the lettered tile's fill, border and shadow. */
+img.brand-mark {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  object-fit: contain;
+}
+
 .engagement-name {
   max-width: min(48vw, 560px);
   overflow: hidden;

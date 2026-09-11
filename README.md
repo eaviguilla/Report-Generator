@@ -17,6 +17,3 @@ Close the console window to stop the app.
 
 Report generation requires Windows with Microsoft Word installed. Everything
 else - drafting, saving, import, and export - runs anywhere.
-
-See [docs/PLAN.md](docs/PLAN.md), [docs/ROUTES.md](docs/ROUTES.md), and
-[docs/DOCX_TEMPLATE.md](docs/DOCX_TEMPLATE.md) for implementation details.

@@ -503,22 +503,22 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(image_cards.count(), 2)
         self.assertEqual(proof.locator(".evidence-environment").evaluate_all("selects => selects.map(select => select.value)"), ["production", "non_production"])
         self.assertEqual(proof.locator(".evidence-environment option").evaluate_all("options => [...new Set(options.map(option => option.value))]"), ["production", "non_production"])
-        self.assertTrue(page.get_by_text(" - Production evidence image required", exact=True).is_visible())
-        self.assertTrue(page.get_by_text(" - Non-Production evidence image required", exact=True).is_visible())
+        self.assertTrue(page.get_by_text("Production evidence image required", exact=True).is_visible())
+        self.assertTrue(page.get_by_text("Non-Production evidence image required", exact=True).is_visible())
 
         image_data = BytesIO()
         Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
         image_cards.nth(0).locator(".evidence-caption").fill("Production transaction response")
         image_cards.nth(0).locator('input[type="file"]').set_input_files({"name": "prod.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
-        self.assertEqual(page.get_by_text(" - Production evidence image required", exact=True).count(), 0)
-        self.assertTrue(page.get_by_text(" - Non-Production evidence image required", exact=True).is_visible())
+        self.assertEqual(page.get_by_text("Production evidence image required", exact=True).count(), 0)
+        self.assertTrue(page.get_by_text("Non-Production evidence image required", exact=True).is_visible())
 
         image_cards = proof.locator(".fragment").filter(has=page.locator(".evidence-environment"))
         image_cards.nth(1).locator(".evidence-caption").fill("Non-Production transaction response")
         image_cards.nth(1).locator('input[type="file"]').set_input_files({"name": "uat.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
-        self.assertEqual(page.get_by_text(" - Non-Production evidence image required", exact=True).count(), 0)
+        self.assertEqual(page.get_by_text("Non-Production evidence image required", exact=True).count(), 0)
 
         proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
         image_cards = proof.locator(".fragment").filter(has=page.locator(".evidence-environment"))
@@ -736,12 +736,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         title = page.locator(".finding-title-cell input")
         replacement = "Missing/Misconfigured Security Header: Content Security-Policy (CSP)"
         title.fill(replacement)
+        page.once("dialog", lambda dialog: dialog.accept())
         page.locator('.row-library-results [role="option"]').filter(has_text=replacement).click()
         page.get_by_role("button", name="Next: Content", exact=False).click()
         page.wait_for_url(f"**/reports/{report_id}/edit")
         self.assertEqual(page.get_by_role("heading", name=replacement).text_content(), replacement)
 
-    def test_invalid_pages_block_previous_and_next_navigation(self) -> None:
+    def test_invalid_findings_block_navigation_but_content_allows_back(self) -> None:
         findings_report_id = self.ready_report()
         page = self.page
         page.goto(f"{self.base_url}/reports/{findings_report_id}/findings")
@@ -765,24 +766,51 @@ class BrowserWorkflowTests(unittest.TestCase):
         content_report_id = self.ready_report(include_finding=True)
         page.goto(f"{self.base_url}/reports/{content_report_id}/edit")
         self.assertEqual(page.locator("#issue-count").get_attribute("data-state"), "issues")
+        # Going back from Content is never gated: the tester is on their way to fix the gaps.
         page.get_by_role("button", name="Previous: Findings").click()
-        page.wait_for_timeout(200)
-        self.assertTrue(page.url.endswith(f"/reports/{content_report_id}/edit"))
+        page.wait_for_url(f"**/reports/{content_report_id}/findings")
+
+    def test_declining_the_library_replacement_restores_the_previous_name(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        title = "Session Token Remains Valid after Session Expiry Message"
+        page.get_by_role("button", name="Edit finding name").click()
+        page.once("dialog", lambda dialog: dialog.dismiss())
+        page.locator(".finding-title-cell input").fill(title)
+        page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        finding = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(finding.title, "Browser finding")
+        self.assertIsNone(finding.library_ref)
 
     def test_library_remediation_does_not_gain_empty_paragraph(self) -> None:
         report_id = self.ready_report(include_finding=True)
         page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        page.locator(".edit-title").click()
+        # Library content is applied from Findings; renaming on Content never replaces a body.
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
         title = "Session Token Remains Valid after Session Expiry Message"
+        page.get_by_role("button", name="Edit finding name").click()
         search = page.get_by_role("combobox", name="Finding Name")
         search.fill(title)
+        page.once("dialog", lambda dialog: dialog.accept())
         page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
+        # The autosave is debounced, so wait for it to leave and re-enter "saved" before asserting.
+        page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
-        remediation = page.locator(".content-block").filter(has_text="Recommended Remediation")
+        # Replacing from the library swaps the whole body, so the stored remediation is the
+        # library's own fragments with no stray empty paragraph appended.
+        report = main.workspace.load(report_id)
+        remediation = next(
+            content
+            for content in report.vulnerabilities[0].contents
+            if content.type == "recommended_remediation"
+        )
         self.assertEqual(
-            remediation.locator(".fragment .tag").all_text_contents(),
-            ["bulleted list", "note"],
+            [fragment.type for fragment in remediation.fragments],
+            ["bulleted_list", "note"],
         )
 
     def test_readiness_flags_placeholder_and_whitespace_content(self) -> None:
@@ -836,7 +864,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".table-fragment").count(), 1)
         self.assertGreaterEqual(page.locator(".fragment .rich").count(), 3)
         self.assertGreaterEqual(page.locator(".list-textarea").count(), 2)
-        self.assertGreaterEqual(page.locator('.fragment input[placeholder="Text"]').count(), 1)
+        self.assertGreaterEqual(page.locator(".fragment input.instance-title-input").count(), 1)
         self.assertGreaterEqual(page.locator(".evidence-card").count(), 2)
 
         page.get_by_role("button", name="Save").click()

@@ -693,7 +693,8 @@
   });
   document.querySelectorAll(".back-link").forEach(link => link.addEventListener("click", async event => {
     event.preventDefault();
-    if (!validateCurrentPage(true)) {
+    // Going back is never gated: the tester is on their way to fix the gaps.
+    if (!document.querySelector("#editor") && !validateCurrentPage(true)) {
       return;
     }
     if (await save()) window.location.assign(link.dataset.href);
@@ -767,14 +768,19 @@
     return runs;
   }
   // Builds a bold/italic/underline editor and reports normalized runs on change.
-  function rich(runs, onChange, includeToolbar = true) {
-    const wrap = document.createElement("div"); wrap.innerHTML = `${includeToolbar ? '<div class="toolbar"><button type="button" title="Bold"><b>B</b></button><button type="button" title="Italic"><i>I</i></button><button type="button" title="Underline"><u>U</u></button></div>' : ""}<div class="rich" contenteditable="true"></div>`;
+  function rich(runs, onChange, includeToolbar = true, placeholder = "") {
+    const wrap = document.createElement("div"); wrap.innerHTML = `${includeToolbar ? '<div class="toolbar" role="toolbar" aria-label="Text formatting"><button type="button" tabindex="-1" title="Bold" aria-label="Bold"><b>B</b></button><button type="button" tabindex="-1" title="Italic" aria-label="Italic"><i>I</i></button><button type="button" tabindex="-1" title="Underline" aria-label="Underline"><u>U</u></button></div>' : ""}<div class="rich" contenteditable="true" role="textbox" aria-multiline="true"></div>`;
     const input = wrap.querySelector(".rich"); input.innerHTML = runs.map(run => `${run.bold ? "<b>" : ""}${run.italic ? "<i>" : ""}${run.underline ? "<u>" : ""}${escape(run.text)}${run.underline ? "</u>" : ""}${run.italic ? "</i>" : ""}${run.bold ? "</b>" : ""}`).join("");
+    if (placeholder) { input.dataset.placeholder = placeholder; input.setAttribute("aria-label", placeholder); }
     const resize = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
     wrap.querySelectorAll("button").forEach((button, index) => button.onclick = () => { input.focus(); document.execCommand(["bold", "italic", "underline"][index]); onChange(runsFrom(input)); });
     input.onpaste = event => { event.preventDefault(); document.execCommand("insertText", false, event.clipboardData?.getData("text/plain") || ""); requestAnimationFrame(() => { resize(); onChange(runsFrom(input)); }); };
     input.oninput = () => { resize(); onChange(runsFrom(input)); };
-    requestAnimationFrame(resize); return wrap;
+    requestAnimationFrame(resize);
+    // Height is frozen at construction, so re-measure once fonts settle and on every width change.
+    document.fonts?.ready.then(resize);
+    new ResizeObserver(resize).observe(input);
+    return wrap;
   }
   // Ensures a finding has the content blocks and required starter fragments for its status.
   const fragmentHasText = fragment => (fragment.runs || []).some(run => run.text?.trim());
@@ -933,7 +939,16 @@
     root.querySelectorAll("[data-path]").forEach(input => {
       const [section, field] = input.dataset.path.split(".");
       input.value = report[section][field] ?? "";
-      input.oninput = () => { report[section][field] = input.value || (input.matches('select, input[type="date"]') ? null : ""); if (input.value.trim()) input.classList.remove("validation-error"); scheduleSave(); };
+      const grow = input.tagName === "TEXTAREA"
+        ? () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; }
+        : null;
+      if (grow) {
+        input.rows = 1;
+        grow();
+        document.fonts?.ready.then(grow);
+        new ResizeObserver(grow).observe(input);
+      }
+      input.oninput = () => { report[section][field] = input.value || (input.matches('select, input[type="date"]') ? null : ""); if (input.value.trim()) input.classList.remove("validation-error"); grow?.(); scheduleSave(); };
       if (setupRules[field]) wireSetupRule(input, setupRules[field]);
     });
     const accountBody = document.querySelector("#test-accounts");
@@ -1105,6 +1120,27 @@
       }).filter(missing => missing.length);
       note.hidden = !incomplete.length;
       note.textContent = incomplete.length ? `${incomplete.length} finding${incomplete.length === 1 ? " is" : "s are"} incomplete: ${incomplete[0].join(", ")}.` : "";
+    };
+    const evidenceIdsIn = finding => new Set((finding.contents || []).flatMap(content => content.fragments || []).filter(fragment => fragment.evidence_id).map(fragment => fragment.evidence_id));
+    const dropUnreferencedEvidence = previousIds => {
+      if (!report.evidence || !previousIds.size) return;
+      const stillUsed = new Set(report.vulnerabilities.flatMap(candidate => [...evidenceIdsIn(candidate)]));
+      previousIds.forEach(evidenceId => { if (!stillUsed.has(evidenceId)) delete report.evidence[evidenceId]; });
+    };
+    // Pulling in a library entry swaps the whole body, so tester work in that finding cannot survive.
+    const replaceFromLibrary = (finding, entry, previousTitle) => {
+      const warning = `Replace this finding with the library version?\n\n"${entry.title}" is saved in the vulnerability library.\n\nUsing it will erase everything written for this finding on the Content page, including any screenshots that were uploaded.\n\nOK - use the library version\nCancel - keep the current content and finding name`;
+      if (!window.confirm(warning)) {
+        finding.title = previousTitle ?? finding.title;
+        syncConclusion(finding);
+        renderFindings();
+        scheduleSave();
+        return false;
+      }
+      const previousEvidence = evidenceIdsIn(finding);
+      applyLibraryEntry(finding, entry);
+      dropUnreferencedEvidence(previousEvidence);
+      return true;
     };
     const applyLibraryEntry = (finding, entry) => {
       Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || "informational", library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}, contents:JSON.parse(JSON.stringify(entry.contents || []))});
@@ -1301,13 +1337,27 @@
         });
       });
     };
-    const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.mode === "custom" ? finding.scope.target_ids : []; const locationValues = finding.scope.location_values || {}; const customLocations = finding.scope.custom_locations || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}${(customLocations[environment] || []).map((value, customIndex) => `<div class="location-option custom-location"><button class="remove-location" type="button" data-remove-location="${environment}" data-custom-index="${customIndex}" aria-label="Remove custom ${locationLabels[environment]} location" title="Remove location">x</button><input class="location-value" data-custom-location="${environment}" data-custom-index="${customIndex}" value="${escape(value)}" aria-label="Custom ${locationLabels[environment]} location"></div>`).join("")}</div><button class="subtle add-location" type="button" data-add-location="${environment}">Add location</button></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
-      const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (entry) { applyLibraryEntry(finding, entry); renderFindings(); scheduleSave(); } }); };
-      titleInput.oninput = event => { finding.title = event.target.value; syncConclusion(finding); renderRowResults(); scheduleSave(); }; titleInput.onfocus = renderRowResults; titleInput.onkeydown = event => { if (event.key === "Escape") clearResults(); }; titleInput.onblur = () => setTimeout(clearResults, 150);
+    const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.mode === "custom" ? finding.scope.target_ids : []; const locationValues = finding.scope.location_values || {}; const customLocations = finding.scope.custom_locations || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}${(customLocations[environment] || []).map((value, customIndex) => `<div class="location-option custom-location"><button class="remove-location" type="button" data-remove-location="${environment}" data-custom-index="${customIndex}" aria-label="Remove custom ${locationLabels[environment]} location" title="Remove location">x</button><input class="location-value" data-custom-location="${environment}" data-custom-index="${customIndex}" value="${escape(value)}" aria-label="Custom ${locationLabels[environment]} location"></div>`).join("")}</div><button class="subtle add-location" type="button" data-add-location="${environment}">Add location</button></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
+      let titleBeforeEdit = finding.title || "";
+      const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (!entry || finding.library_ref?.library_id === entry.library_id) { clearResults(); return; } if (replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); } }); };
+      titleInput.oninput = event => { finding.title = event.target.value; syncConclusion(finding); renderRowResults(); scheduleSave(); }; titleInput.onfocus = () => { titleBeforeEdit = finding.title || ""; renderRowResults(); }; titleInput.onkeydown = event => { if (event.key === "Escape") clearResults(); };
+      // A committed title that names a library entry pulls that entry in; any other title is just a rename.
+      titleInput.onchange = () => {
+        const typed = titleInput.value.trim().toLowerCase();
+        const entry = library.find(candidate => candidate.title.trim().toLowerCase() === typed);
+        if (!entry || finding.library_ref?.library_id === entry.library_id) return;
+        if (replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); }
+      };
+      titleInput.onblur = () => setTimeout(clearResults, 150);
       controls[1].onchange = event => { finding.likelihood = event.target.value || null; scheduleSave(); };
       controls[2].onchange = event => { finding.impact = event.target.value || null; scheduleSave(); };
       controls[3].onchange = event => { finding.severity = event.target.value; scheduleSave(); };
-      controls[4].oninput = event => { finding.display_id = event.target.value || null; scheduleSave(); };
+      controls[4].oninput = event => {
+        const digits = event.target.value.replace(/\D/g, "").slice(0, 5);
+        if (event.target.value !== digits) event.target.value = digits;
+        finding.display_id = digits || null;
+        scheduleSave();
+      };
       controls[5].onchange = event => {
         const nextStatus = event.target.value;
         const nextTypes = nextStatus === "open_new" ? ["description", "recommended_remediation", "proof_of_concept"] : ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"];
@@ -1487,7 +1537,11 @@
     moveDown.disabled = content.fragments.indexOf(fragment) === content.fragments.length - 1;
     moveUp.onclick = () => moveFragment(-1);
     moveDown.onclick = () => moveFragment(1);
+    // Reorder and drag stay out of the tab chain; the field is the tab stop.
+    moveUp.tabIndex = -1;
+    moveDown.tabIndex = -1;
     const dragHandle = card.querySelector(".fragment-drag-handle");
+    dragHandle.tabIndex = -1;
     dragHandle.ondragstart = event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", fragment.frag_id); card.classList.add("is-dragging"); };
     dragHandle.ondragend = () => card.classList.remove("is-dragging");
     card.ondragover = event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; };
@@ -1503,8 +1557,9 @@
       scheduleSave();
     };
     const changed=()=>scheduleSave();
+    const fragmentPlaceholders = {paragraph: "Write the paragraph", note: "Write the note"};
     if (fragment.runs) {
-      const editor = rich(fragment.runs, runs=>{fragment.runs=runs;changed();}, fragment.type !== "note");
+      const editor = rich(fragment.runs, runs=>{fragment.runs=runs;changed();}, fragment.type !== "note", fragmentPlaceholders[fragment.type] || "Write the text");
       const toolbar = editor.querySelector(".toolbar");
       if (toolbar) card.querySelector(".fragment-head .tag").after(toolbar);
       card.append(editor);
@@ -1571,6 +1626,7 @@
         input.rows = 1;
         const fitToText = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
         fitToText();
+        document.fonts?.ready.then(fitToText);
         input.oninput = () => { cell.runs = input.value ? [{text:input.value}] : []; resizeTableRow(input.closest("tr")); changed(); };
         return input;
       };
@@ -1733,7 +1789,25 @@
       };
       evidenceCard.append(previewArea, details, upload);
       card.append(evidenceCard);
-    } else { const input=document.createElement(fragment.type === "code_block" ? "textarea" : "input"); input.value=fragment.text || fragment.caption || ""; input.placeholder="Text"; input.oninput=()=>{fragment.text=input.value;changed();};card.append(input); }
+    } else {
+      const isCode = fragment.type === "code_block";
+      const input = document.createElement(isCode ? "textarea" : "input");
+      const label = isCode ? "Paste the command or response" : "Instance title, for example the login endpoint";
+      input.className = isCode ? "code-block" : "instance-title-input";
+      input.value = fragment.text || "";
+      input.placeholder = label;
+      input.setAttribute("aria-label", label);
+      if (isCode) {
+        input.rows = 1;
+        const fit = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
+        fit();
+        document.fonts?.ready.then(fit);
+        input.oninput = () => { fragment.text = input.value; fit(); changed(); };
+      } else {
+        input.oninput = () => { fragment.text = input.value; changed(); };
+      }
+      card.append(input);
+    }
     return card;
   }
   // Renders the current multi-finding content editor and its navigation rail.
@@ -1781,7 +1855,7 @@
           if (missing.length) issues.push({contentLabel, fragmentLabel:`${environment} image`, message:`${missing.join(" and ")} required`, fragmentId:fragment.frag_id});
         }
         if (!fragment.runs && !fragment.items && fragment.type !== "table" && fragment.type !== "image" && !fragment.text?.trim()) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
-        if (placeholderPattern.test(fragmentText(fragment))) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"replace placeholder text", fragmentId:fragment.frag_id});
+        if (placeholderPattern.test(fragmentText(fragment))) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"replace placeholder text", fragmentId:fragment.frag_id, level:"warning"});
         return issues;
       }));
       const issues = report.vulnerabilities.flatMap(finding => {
@@ -1802,8 +1876,16 @@
         generateButton.disabled = Boolean(issues.length) || generateButton.dataset.busy === "true";
         generateButton.title = issues.length ? "Resolve review issues before generating" : "Generate Word report";
       }
+      // One card per finding, so a finding with five gaps reads as one row rather than five.
+      const groups = [];
+      issues.forEach(issue => {
+        const group = groups.find(candidate => candidate.finding === issue.finding);
+        if (group) group.issues.push(issue);
+        else groups.push({finding:issue.finding, issues:[issue]});
+      });
+      const renderGroup = group => `<details class="review-group" data-level="${group.issues.some(issue => (issue.level || "error") === "error") ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${group.issues.length} issue${group.issues.length === 1 ? "" : "s"}</span></summary>${group.issues.map(({finding, message, fragmentId, contentLabel, fragmentLabel, level}) => `<div class="review-item" data-level="${level || "error"}"><span class="review-icon" aria-hidden="true">!</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${finding.uid}"${fragmentId ? ` data-review-fragment="${fragmentId}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
       panel.innerHTML = issues.length
-        ? issues.map(({finding, message, fragmentId, contentLabel, fragmentLabel}) => `<div class="review-item"><span class="review-icon" aria-hidden="true">!</span><div><b>${escape(finding.title || "Untitled finding")}</b>${contentLabel ? `<span> - </span><b>${escape(contentLabel)}</b><span>: </span><b>${escape(fragmentLabel)}</b><span> ${escape(message)}</span>` : `<span> - ${escape(message)}</span>`}<button type="button" data-review-finding="${finding.uid}"${fragmentId ? ` data-review-fragment="${fragmentId}"` : ""}>Go to</button></div></div>`).join("")
+        ? groups.map(renderGroup).join("")
         : '<div class="review-empty">All existing finding details are complete.</div>';
       panel.querySelectorAll("[data-review-finding]").forEach(button => button.onclick = () => {
         const findingUid = button.dataset.reviewFinding;
@@ -1940,9 +2022,10 @@
             titleInput.setAttribute("aria-expanded", String(matches.length > 0));
             results.querySelectorAll("[data-id]").forEach(item => {
               item.onmousedown = event => event.preventDefault();
+              // Renaming here never replaces content; library swaps belong to the Findings page.
               item.onclick = () => {
                 const entry = library.find(candidate => candidate.library_id === item.dataset.id);
-                if (entry) { applyLibraryEntry(finding, entry); render(finding.uid); scheduleSave(); }
+                if (entry) { finding.title = entry.title; syncConclusion(finding); finishTitle(); }
               };
             });
           };

@@ -1,29 +1,44 @@
+/* Palette and radii follow GitHub Primer. */
 :root {
-  --accent: #126d67;
-  --accent-strong: #0c5752;
-  --accent-soft: #e4f2ef;
-  --accent-faint: #f2f8f6;
-  --ink: #182522;
-  --ink-soft: #344541;
-  --muted: #5d6b67;
-  --muted-light: #899590;
-  --line: #d5dfdc;
-  --line-strong: #b9c8c4;
+  --accent: #0969da;
+  --accent-strong: #0550ae;
+  --accent-soft: #ddf4ff;
+  --accent-faint: #f6f8fa;
+  --ink: #1f2328;
+  --ink-soft: #424a53;
+  --muted: #59636e;
+  --muted-light: #818b98;
+  --line: #d1d9e0;
+  --line-strong: #afb8c1;
   --panel: #ffffff;
-  --canvas: #f3f6f4;
-  --canvas-deep: #e9efec;
-  --danger: #b53f48;
-  --danger-soft: #fbecee;
-  --warning: #a96821;
-  --warning-soft: #fff4df;
-  --success: #277153;
-  --critical: #b9303a;
-  --high: #d86622;
-  --medium: #c99218;
-  --low: #31805d;
-  --informational: #718096;
-  --shadow: 0 14px 34px rgba(28, 55, 49, 0.08);
-  --shadow-small: 0 5px 14px rgba(28, 55, 49, 0.07);
+  --canvas: #ffffff;
+  --canvas-deep: #f6f8fa;
+  --danger: #cf222e;
+  --danger-soft: #ffebe9;
+  --warning: #9a6700;
+  --warning-soft: #fff8c5;
+  --success: #1a7f37;
+  --critical: #cf222e;
+  --high: #bc4c00;
+  --medium: #9a6700;
+  --low: #1a7f37;
+  --informational: #59636e;
+  --shadow: 0 3px 6px rgba(140, 149, 159, 0.15);
+  --shadow-small: 0 1px 0 rgba(31, 35, 40, 0.04);
+  --grid-line: rgba(31, 35, 40, 0.02);
+  --canvas-veil: rgba(255, 255, 255, 0.9);
+  --surface-bar: #f6f8fa;
+  --surface-field: #ffffff;
+  --surface-quiet: #f6f8fa;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f6f8fa;
+  --radius-sm: 3px;
+  --radius: 6px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+  --btn-primary: #1f883d;
+  --btn-primary-hover: #1a7f37;
+  --btn-primary-border: rgba(31, 35, 40, 0.15);
   --header-height: 54px;
   --stepper-height: 44px;
   --shell-max: 1280px;
@@ -34,9 +49,59 @@
   --footer-height: 58px;
 }
 
+/* Dark theme. JS sets data-theme on <html> from the stored choice or the OS setting. */
+:root[data-theme="dark"] {
+  --accent: #4493f8;
+  --accent-strong: #58a6ff;
+  --accent-soft: rgba(56, 139, 253, 0.15);
+  --accent-faint: #151b23;
+  --ink: #f0f6fc;
+  --ink-soft: #d1d7e0;
+  --muted: #9198a1;
+  --muted-light: #656c76;
+  --line: #3d444d;
+  --line-strong: #4a5057;
+  --panel: #0d1117;
+  --canvas: #0d1117;
+  --canvas-deep: #151b23;
+  --danger: #f85149;
+  --danger-soft: rgba(248, 81, 73, 0.15);
+  --warning: #d29922;
+  --warning-soft: rgba(210, 153, 34, 0.15);
+  --success: #3fb950;
+  --critical: #f85149;
+  --high: #db6d28;
+  --medium: #d29922;
+  --low: #3fb950;
+  --informational: #9198a1;
+  --shadow: 0 3px 6px rgba(1, 4, 9, 0.4);
+  --shadow-small: 0 1px 0 rgba(1, 4, 9, 0.2);
+  --grid-line: rgba(240, 246, 252, 0.02);
+  --canvas-veil: rgba(13, 17, 23, 0.9);
+  --surface-bar: #010409;
+  --surface-field: #0d1117;
+  --surface-quiet: #212830;
+  --surface-raised: #0d1117;
+  --surface-sunken: #010409;
+  --btn-primary: #238636;
+  --btn-primary-hover: #2ea043;
+  --btn-primary-border: rgba(240, 246, 252, 0.1);
+  --grid-line: rgba(240, 246, 252, 0.028);
+  --canvas-veil: rgba(13, 17, 23, 0.9);
+  --surface-bar: #161b22;
+  --surface-field: #0d1117;
+  --surface-quiet: #21262d;
+  --surface-raised: #161b22;
+  --surface-sunken: #010409;
+}
+
 html {
   color-scheme: light;
   scroll-behavior: smooth;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body,
@@ -49,8 +114,8 @@ body {
   min-width: 320px;
   background-color: var(--canvas);
   background-image:
-    linear-gradient(rgba(24, 37, 34, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(24, 37, 34, 0.025) 1px, transparent 1px);
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
   background-size: 32px 32px;
   color: var(--ink);
   font-size: 14px;
@@ -61,7 +126,7 @@ body::before {
   position: fixed;
   z-index: -1;
   inset: 0;
-  background: rgba(243, 246, 244, 0.88);
+  background: var(--canvas-veil);
   content: "";
   pointer-events: none;
 }
@@ -101,7 +166,7 @@ body::before {
   border-left: 4px solid var(--danger);
   border-radius: 5px;
   color: var(--ink);
-  background: #fff;
+  background: var(--surface-raised);
   box-shadow: 0 18px 48px rgba(66, 27, 32, 0.18);
 }
 
@@ -236,7 +301,7 @@ body > header.app-header {
   gap: 16px;
   border-bottom: 1px solid rgba(185, 200, 196, 0.86);
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--surface-bar);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(14px);
 }
@@ -314,7 +379,7 @@ body > header.app-header {
   gap: 52px;
   padding: 0 clamp(18px, 5vw, 72px);
   border-bottom-color: var(--line);
-  background: rgba(249, 251, 250, 0.96);
+  background: var(--surface-bar);
   backdrop-filter: blur(12px);
 }
 
@@ -388,9 +453,10 @@ textarea,
 button,
 .primary {
   min-height: 34px;
-  border-color: var(--accent);
-  border-radius: 4px;
-  background: var(--accent);
+  border-color: var(--btn-primary-border);
+  border-radius: var(--radius);
+  color: #ffffff;
+  background: var(--btn-primary);
   box-shadow: none;
   font-size: 12px;
   font-weight: 600;
@@ -398,9 +464,9 @@ button,
 
 button:hover:not(:disabled),
 .primary:hover:not(:disabled) {
-  border-color: var(--accent-strong);
-  color: #fff;
-  background: var(--accent-strong);
+  border-color: var(--btn-primary-border);
+  color: #ffffff;
+  background: var(--btn-primary-hover);
 }
 
 button:active:not(:disabled),
@@ -415,7 +481,7 @@ button.subtle,
 .icon-command {
   border-color: var(--line-strong);
   color: var(--ink-soft);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--surface-quiet);
 }
 
 button.subtle:hover:not(:disabled),
@@ -444,7 +510,7 @@ select:focus-visible,
 textarea:focus-visible,
 .rich:focus-visible,
 [contenteditable="true"]:focus-visible {
-  outline: 3px solid rgba(18, 109, 103, 0.22);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-color: var(--accent);
 }
@@ -456,7 +522,7 @@ textarea,
   border-color: var(--line-strong);
   border-radius: 3px;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface-field);
   font-size: 13px;
 }
 
@@ -467,13 +533,19 @@ textarea:hover,
   border-color: #9fafaa;
 }
 
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+.rich:focus:not(:focus-visible) {
+  outline: 0;
+}
+
 input:focus,
 select:focus,
 textarea:focus,
 .rich:focus {
-  outline: 0;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(18, 109, 103, 0.12);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 input[data-path*="scope"],
@@ -483,9 +555,8 @@ input[data-path*="scope"],
 .finding-id-cell input,
 .finding-id-display,
 .finding-id-value,
-.fragment textarea,
+.fragment > textarea,
 .code-block,
-.table-cell-input,
 .report-name small,
 .finding-nav-meta,
 .content-toggle small,
@@ -555,6 +626,14 @@ input[data-path*="scope"],
 #setup > section > .limitations-field {
   grid-column: 2;
   margin: 0;
+}
+
+/* Starts at one line and grows with its content. */
+.limitations-field textarea {
+  min-height: 0;
+  height: auto;
+  overflow-y: hidden;
+  resize: none;
 }
 
 #setup > section > .muted {
@@ -647,7 +726,7 @@ label,
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.68);
+  background: var(--surface-raised);
 }
 
 #setup .scope-panel h2 {
@@ -720,7 +799,7 @@ label,
 
 .table-wrap {
   border-top: 2px solid var(--ink);
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--surface-sunken);
 }
 
 #setup[data-step="findings"] table {
@@ -739,11 +818,11 @@ label,
 #setup[data-step="findings"] td {
   padding: 10px 12px;
   border-color: var(--line);
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--surface-raised);
 }
 
 #setup[data-step="findings"] tr:hover > td {
-  background: #fff;
+  background: var(--accent-faint);
 }
 
 .finding-title-display span {
@@ -802,7 +881,7 @@ button.finding-title-display:hover:not(:disabled) span {
   padding: 7px clamp(18px, 3vw, 42px);
   border-color: var(--line-strong);
   color: var(--ink-soft);
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface-bar);
   font-size: 11px;
   backdrop-filter: blur(12px);
 }
@@ -829,8 +908,8 @@ button.finding-title-display:hover:not(:disabled) span {
 .summary-medium,
 .assessment-medium,
 .finding-assessment .summary-medium {
-  color: #4a3406 !important;
-  background: #e6b844 !important;
+  color: #fff !important;
+  background: #bd7100 !important;
 }
 
 .summary-low,
@@ -871,7 +950,7 @@ button.finding-title-display:hover:not(:disabled) span {
 #finding-nav {
   padding: 20px 12px;
   border-color: var(--line-strong);
-  background: rgba(238, 243, 241, 0.86);
+  background: var(--surface-sunken);
 }
 
 .finding-nav-heading {
@@ -900,7 +979,7 @@ button.finding-title-display:hover:not(:disabled) span {
 }
 
 .finding-nav:hover {
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--surface-raised);
 }
 
 button.finding-nav:hover:not(:disabled) {
@@ -921,7 +1000,7 @@ button.finding-nav:hover:not(:disabled) .finding-nav-meta span {
 
 .finding-nav.active {
   color: var(--ink) !important;
-  background: #fff;
+  background: var(--surface-raised);
   box-shadow: var(--shadow-small);
 }
 
@@ -939,14 +1018,14 @@ button.finding-nav:hover:not(:disabled) .finding-nav-meta span {
   min-height: 0;
   overflow-y: auto;
   padding: var(--editor-inset) var(--editor-inset) 56px;
-  background: rgba(247, 249, 248, 0.72);
+  background: var(--surface-sunken);
 }
 
 .finding-card {
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
-  background: var(--panel);
+  background: var(--surface-raised);
   box-shadow: var(--shadow);
 }
 
@@ -1025,7 +1104,7 @@ button.finding-nav:hover:not(:disabled) .finding-nav-meta span {
   padding: 0 24px;
   border-color: var(--line);
   color: var(--ink-soft);
-  background: #fbfcfb;
+  background: var(--surface-raised);
   font-size: 13px;
 }
 
@@ -1052,9 +1131,9 @@ button.content-toggle:hover:not(:disabled) small {
   margin-bottom: 18px;
   padding: 18px;
   border: 1px solid var(--line);
-  border-left: 3px solid #b8c8c3;
+  border-left: 3px solid var(--line-strong);
   border-radius: 4px;
-  background: #fff;
+  background: var(--surface-raised);
 }
 
 .fragment:hover {
@@ -1077,6 +1156,7 @@ button.content-toggle:hover:not(:disabled) small {
 .rich {
   min-height: 44px;
   padding: 12px 14px;
+  overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.75;
 }
@@ -1111,7 +1191,7 @@ button.content-toggle:hover:not(:disabled) small {
   border-color: var(--line-strong);
   border-radius: 3px;
   color: var(--accent-strong);
-  background: #fff;
+  background: var(--surface-raised);
 }
 
 .evidence-preview:hover:not(:disabled) {
@@ -1144,7 +1224,7 @@ button.content-toggle:hover:not(:disabled) small {
 .review-panel {
   padding: 20px 14px;
   border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--surface-bar);
 }
 
 .review-heading {
@@ -1152,7 +1232,7 @@ button.content-toggle:hover:not(:disabled) small {
   margin: 0 -14px 14px;
   padding: 20px 14px 13px;
   border-color: var(--line);
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface-bar);
   font-size: 12px;
 }
 
@@ -1168,26 +1248,110 @@ button.content-toggle:hover:not(:disabled) small {
 
 .review-item {
   grid-template-columns: 16px minmax(0, 1fr);
-  padding: 11px;
-  border: 1px solid #efc8cc;
-  border-radius: 3px;
-  color: var(--danger);
-  background: var(--danger-soft);
+  margin: 0;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink);
+  background: transparent;
   font-size: 11px;
 }
 
-.review-item button:hover:not(:disabled) {
+.review-group .review-item + .review-item {
+  border-top: 1px solid var(--line);
+}
+
+.review-group .review-item .review-detail {
+  display: block;
+  color: var(--muted);
+}
+
+.review-group .review-icon {
+  width: 13px;
+  height: 13px;
+  margin-top: 1px;
+  color: #fff;
+  background: var(--danger);
+  font-size: 9px;
+}
+
+.review-group .review-item[data-level="warning"] .review-icon {
+  background: var(--warning);
+}
+
+.review-group .review-item button {
+  margin-top: 4px;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.review-group .review-item button:hover:not(:disabled) {
   border-color: transparent;
-  color: #7d252d;
+  color: var(--accent-strong);
   background: transparent;
+}
+
+/* Red earns a scannable rail down the left edge instead of flooding the card. */
+.review-group {
+  overflow: hidden;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.review-group[data-level="warning"] {
+  border-left-color: var(--warning);
+}
+
+.review-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 11px;
+  color: var(--ink);
+  background: var(--surface-quiet);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.review-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.review-group > summary::after {
+  color: var(--muted);
+  content: "\25BE";
+  font-size: 9px;
+}
+
+.review-group[open] > summary::after {
+  content: "\25B4";
+}
+
+.review-group-title {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-group-count {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .review-empty {
   padding: 12px;
-  border: 1px solid #c5ded7;
+  border: 1px solid var(--line-strong);
   border-left: 3px solid var(--success);
-  color: #285f4c;
-  background: #edf7f2;
+  color: var(--success);
+  background: var(--surface-raised);
   font-size: 12px;
 }
 
@@ -1201,7 +1365,7 @@ button.content-toggle:hover:not(:disabled) small {
   min-height: 58px;
   padding: 10px clamp(18px, 3vw, 42px);
   border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface-bar);
   box-shadow: 0 -8px 24px rgba(28, 55, 49, 0.06);
   backdrop-filter: blur(12px);
 }
@@ -1278,7 +1442,7 @@ button.content-toggle:hover:not(:disabled) small {
   overflow: hidden;
   border-color: var(--line-strong);
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--surface-raised);
   box-shadow: var(--shadow);
 }
 
@@ -1304,7 +1468,7 @@ button.content-toggle:hover:not(:disabled) small {
   padding: 9px 16px;
   border-color: var(--line);
   color: var(--muted);
-  background: #fbfcfb;
+  background: var(--surface-raised);
   text-transform: none;
 }
 
@@ -1312,7 +1476,7 @@ button.content-toggle:hover:not(:disabled) small {
   min-height: 68px;
   padding: 11px 16px;
   border-color: var(--line);
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--surface-raised);
 }
 
 .report-row:hover {
@@ -1348,7 +1512,6 @@ button.content-toggle:hover:not(:disabled) small {
 .evidence-details > label,
 .evidence-file,
 .evidence-file small,
-.evidence-replace,
 .review-heading b {
   font-size: 11px;
 }
@@ -1604,6 +1767,61 @@ body > main {
   }
 }
 
+/* GitHub radius scale, applied once at the component layer.
+   Legacy 3/4/5px values scattered through overrides.css are superseded here. */
+button,
+.primary,
+.back-link,
+.subtle,
+.icon-command,
+.theme-toggle,
+input,
+select,
+textarea,
+.rich,
+.list-textarea,
+.fragment,
+.finding-card,
+.evidence-card,
+.evidence-preview,
+.add-fragment,
+.scope-panel,
+.location-group,
+.test-configuration fieldset,
+#library-results,
+.row-library-results,
+.review-empty,
+.table-wrap,
+.table-fragment,
+.app-group,
+.report-row,
+.legacy-report,
+.finding-nav,
+.content-toggle,
+.brand-mark,
+#findings-empty,
+.engagement-context > summary,
+.assessment-critical,
+.assessment-high,
+.assessment-medium,
+.assessment-low,
+.assessment-informational {
+  border-radius: var(--radius);
+}
+
+.tag,
+#finding-summary b,
+.finding-assessment b,
+.review-heading b,
+.finding-id-value,
+.image-preview,
+.fragment-drag-handle,
+.fragment-move-up,
+.fragment-move-down,
+.toolbar button {
+  border-radius: var(--radius-sm);
+}
+
 /* Was referenced by the templates but never defined, so "hidden" labels rendered. */
 .sr-only {
   position: absolute;
@@ -1613,6 +1831,116 @@ body > main {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.theme-toggle {
+  display: grid;
+  width: 30px;
+  min-height: 30px;
+  height: 30px;
+  margin-left: auto;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.theme-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+/* Fragment chrome stays out of the way until the card is engaged. */
+.fragment-head > * {
+  margin-left: 0;
+}
+
+.fragment-head .fragment-move-up {
+  margin-left: auto;
+}
+
+.fragment-head .toolbar,
+.fragment-head .fragment-move-up,
+.fragment-head .fragment-move-down,
+.fragment-head button.danger {
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+
+.fragment:hover .fragment-head .toolbar,
+.fragment:hover .fragment-head .fragment-move-up,
+.fragment:hover .fragment-head .fragment-move-down,
+.fragment:hover .fragment-head button.danger,
+.fragment:focus-within .fragment-head .toolbar,
+.fragment:focus-within .fragment-head .fragment-move-up,
+.fragment:focus-within .fragment-head .fragment-move-down,
+.fragment:focus-within .fragment-head button.danger {
+  opacity: 1;
+}
+
+.fragment-drag-handle,
+.fragment-move-up,
+.fragment-move-down,
+.toolbar button {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+}
+
+.fragment-move-up:disabled,
+.fragment-move-down:disabled {
+  opacity: 1;
+  color: var(--muted-light);
+}
+
+/* contenteditable has no native placeholder. */
+.rich:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.theme-toggle svg {
+  display: block;
+}
+
+.theme-toggle .theme-icon-sun {
+  display: none;
+}
+
+:root[data-theme="dark"] .theme-toggle .theme-icon-moon {
+  display: none;
+}
+
+:root[data-theme="dark"] .theme-toggle .theme-icon-sun {
+  display: block;
+}
+
+/* The toggle opens the right-hand cluster; history controls follow it. */
+.theme-toggle ~ .history-controls {
+  margin-left: 0;
+}
+
+.theme-icon-sun,
+:root[data-theme="dark"] .theme-icon-moon {
+  display: none;
+}
+
+:root[data-theme="dark"] .theme-icon-sun {
+  display: block;
+}
+
+/* superseded by the scoped .theme-toggle rules above */
 
 /* Completed steps are real navigation; they reuse .back-link's flush-then-navigate handler. */
 .stepper button.step {

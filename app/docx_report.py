@@ -79,8 +79,8 @@ FRAGMENT_COMPONENT_FILES = {
 }
 IMAGE_BORDER_RASTER_DPI = 192
 # Long endpoints are broken so they stay inside their column.
-SCOPE_WRAP_CHARACTERS = 51
-LOCATION_WRAP_CHARACTERS = 36
+SCOPE_WRAP_CHARACTERS = 84
+LOCATION_WRAP_CHARACTERS = 74
 
 
 class ReportGenerationError(ValueError):

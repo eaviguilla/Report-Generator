@@ -5,6 +5,51 @@
 The renderer preserves its styles, sections, headers, footers, numbering, and
 static content while replacing the fields below.
 
+## Render paths
+
+`render_report_docx` has two independent implementations of the findings body
+and picks one at runtime (`app/docx_report.py:167`):
+
+```python
+if _has_exact_body_token(document, "findings"):
+    _populate_component_findings(...)   # component path
+else:
+    _populate_finding_sections(...)     # legacy inline path
+```
+
+The rest of this document describes the **component path**, which is what
+`resources/MAIN_TEST.docx` uses. The legacy path runs for any template that has
+no `{{findings}}` token; it is still reachable and still tested, so a change to
+fragment rendering usually has to be made in both places.
+
+| | Component path | Legacy inline path |
+|---|---|---|
+| Trigger | template contains a `findings` body token | it does not |
+| Findings body | composed from `resources/severity_titles/`, `resources/finding_types/`, `resources/fragments/` | cloned from a prototype block already inside the template, between the High and Medium headings |
+| Severity sections | inserted per severity that has findings | template's own severity headings are removed and re-added per severity that has findings; findings sorted case-insensitively by title |
+| Severity rendering | font color on the rating text (see [Tag formatting](#tag-formatting)) | `SEVERITY_COLORS` cell shading on the detail table (`docx_report.py:51`): critical `BD292E`, high `DF720B`, medium `E7B925`, low `39895A`, informational `7D8CA3` |
+| Fragment renderer | `_render_component_fragment` | `_render_fragment` |
+
+Both paths share the `description-fragments-here` and
+`recommended-remediation-fragments-here` anchors. The Proof of Concept anchors
+differ - the legacy path splits text from images:
+
+| Legacy anchor | Rendered content |
+|---|---|
+| `proof-of-concept-step` | Current PoC fragments, images excluded |
+| `prod-images-and-caption-here` | Current PoC production images |
+| `non-prod-images-and-caption-here` | Current PoC non-production images |
+| `previous-proof-of-concept-step` | Previous PoC fragments, images excluded |
+| `previous-poc-prod-images-and-caption-here` | Previous PoC production images |
+| `previous-poc-non-prod-images-and-caption-here` | Previous PoC non-production images |
+| `brief-explanation-here` | In Conclusion fragments |
+
+When a finding has no `previous_proof_of_concept` or `in_conclusion` content,
+the legacy path deletes the whole block by heading text rather than by anchor
+(`Previous Proof of Concept:` through `Proof of Concept:`, and `In Conclusion:`
+through `Severity Review Ticket (if applicable):`), so those literal headings
+have to stay intact in a legacy template.
+
 ## Engagement fields
 
 | Template token | Report value |
@@ -127,9 +172,11 @@ will then request field updates when opened in Word. Images not followed by a
 `Caption` or `Figures and Tables` paragraph are ignored.
 
 Normal app and CLI report generation automatically creates native image-caption
-fields and runs the same Word finalization step. The existing methodology image
-in `MAIN_TEST.docx` is Figure 1, so generated evidence captions continue at
-Figure 2 in document order.
+fields and runs the same Word finalization step. There is no `--skip-word-update`
+equivalent on those paths, so **generating a report requires Windows with
+Microsoft Word installed**; see `docs/PLAN.md` § Platform requirements. The
+existing methodology image in `MAIN_TEST.docx` is Figure 1, so generated evidence
+captions continue at Figure 2 in document order.
 
 `generated/native-image-caption-test.docx` is the three-image native-caption
 proof. Its captions display Figure 1 through Figure 3 and contain genuine Word

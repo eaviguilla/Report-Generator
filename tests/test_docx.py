@@ -206,9 +206,13 @@ class DocxReportTests(unittest.TestCase):
                 production_location = details.cell(3, 1)
                 self.assertEqual(
                     production_location.text,
-                    "Production Environment:\n• https://prod.example.test\n• https://prod-api.example.test",
+                    "Production Environment:\nhttps://prod.example.test\nhttps://prod-api.example.test",
                 )
-                self.assertEqual(len(production_location._tc.findall(".//" + qn("w:br"))), 1)
+                # The glyph comes from the list style, so short locations need no manual break.
+                self.assertEqual(len(production_location._tc.findall(".//" + qn("w:br"))), 0)
+                bullets = [item for item in production_location.paragraphs if item.style.name == "List Paragraph"]
+                self.assertEqual(len(bullets), 2)
+                self.assertTrue(all(item._p.find(qn("w:pPr")).find(qn("w:numPr")) is not None for item in bullets))
             section_titles = {
                 "Recommended Remediation:",
                 "Proof of Concept:",
@@ -321,6 +325,58 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(paragraph_texts.count("UAT:"), 0)
             self.assertEqual(len(rendered.inline_shapes), 1)
             self.assertNotIn("Stale lower-region response", "\n".join(paragraph_texts))
+
+    def test_affected_locations_are_real_bullets_and_long_paths_wrap_on_a_slash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            (report_folder / "evidence").mkdir()
+            buffer = BytesIO()
+            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+            (report_folder / "evidence" / "ev_wrap.png").write_bytes(buffer.getvalue())
+            now = datetime.now().astimezone()
+            web_target = "https://prod.example.test/accounts/123/details/extra"
+            api_target = "https://api.example.test/v2/customers/profile/settings/advanced"
+            report = Report(
+                report_id="r_wrap", app_id="CI-DOCX", saved_at=now,
+                engagement=Engagement(
+                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], test_type="web_api",
+                    test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
+                ),
+                scope_targets=[
+                    ScopeTarget(target_id="t_web", environment="production", channel="web", value=web_target),
+                    ScopeTarget(target_id="t_api", environment="production", channel="api", value=api_target),
+                ],
+                evidence={"ev_wrap": EvidenceItem(file="evidence/ev_wrap.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)},
+            )
+            report.vulnerabilities = [self._finding("v_wrap", "Authorization bypass", "high", "001", ["t_web", "t_api"], [
+                ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_wrap", caption="Production response"),
+            ])]
+            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN_TEST.docx"), report_folder)))
+
+            locations = next(
+                cell
+                for table in rendered.tables if table.cell(0, 0).text not in {"URL(s) in Scope", "API Routes"}
+                for row in table.rows for cell in row.cells
+                if "prod.example.test/accounts" in cell.text
+            )
+            bullets = [paragraph for paragraph in locations.paragraphs if paragraph.style.name == "List Paragraph"]
+            self.assertEqual(len(bullets), 2)
+            for paragraph in bullets:
+                properties = paragraph._p.find(qn("w:pPr"))
+                self.assertIsNotNone(properties.find(qn("w:numPr")), "affected locations must be a real bullet list")
+                self.assertEqual(properties.find(qn("w:jc")).get(qn("w:val")), "left")
+                self.assertEqual(len(paragraph._p.findall(".//" + qn("w:br"))), 1, "a long location should break once")
+            self.assertNotIn("\u2022", locations.text, "the bullet glyph must come from the list style, not the text")
+            self.assertTrue(bullets[0].text.startswith("https://prod.example.test/accounts/"))
+            self.assertTrue(all(len(line) <= 36 for line in bullets[0].text.split("\n")))
+
+            for name, target in (("URL(s) in Scope", web_target), ("API Routes", api_target)):
+                table = next(candidate for candidate in rendered.tables if candidate.cell(0, 0).text == name)
+                paragraph = next(item for item in table.cell(2, 0).paragraphs if item.text.strip())
+                self.assertEqual(len(paragraph._p.findall(".//" + qn("w:br"))), 1)
+                self.assertEqual(paragraph.text.replace("\n", ""), target)
+                self.assertTrue(all(len(line) <= 51 for line in paragraph.text.split("\n")))
 
     def _assert_image_fragment_format(self, document) -> None:
         for index in range(len(document.inline_shapes)):

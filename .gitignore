@@ -11,6 +11,7 @@ generated/*
 
 # agent tooling — not needed on other devices
 .claude/
+CLAUDE.md
 .impeccable/
 .graphifyignore
 graphify-out/

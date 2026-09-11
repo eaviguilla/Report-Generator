@@ -53,10 +53,6 @@ templates = Jinja2Templates(directory=ROOT / "app" / "web" / "templates")
 # Disposable: delete app/library_editor.py and these two lines to remove the tool.
 from app.library_editor import router as library_editor_router  # noqa: E402
 app.include_router(library_editor_router)
-
-# Disposable: delete app/field_map.py and these two lines to remove the tool.
-from app.field_map import router as field_map_router  # noqa: E402
-app.include_router(field_map_router)
 # One cache-buster for every asset, so the four pages can never load different CSS versions.
 STATIC_DIR = ROOT / "app" / "web" / "static"
 templates.env.globals["asset_v"] = str(int(max(p.stat().st_mtime for p in STATIC_DIR.glob("*.*"))))

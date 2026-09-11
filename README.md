@@ -1,38 +1,22 @@
-# VulnReport
-
-Local FastAPI application for drafting and generating vulnerability reports.
-
-## Project layout
-
-- `app/` - application code, domain models, storage, report generation, and web assets
-- `scripts/` - offline converters, document utilities, and command-line report generation
-- `tests/` - unit, API, browser, converter, and DOCX tests
-- `docs/` - architecture, routes, form-state, and DOCX template documentation
-- `resources/` - Word templates, fragments, finding types, and test fixtures
-- `data/` - local preferences and report drafts
-- `generated/` - disposable generated artifacts
-- `run.py` - local application launcher
-- `vuln_library.json` - configured offline vulnerability library
-
-## Run
+Run the app from this folder:
 
 ```powershell
-python run.py
+py -3 run.py
 ```
 
-## Test
+Use `python run.py` if `py` is not available on your machine.
 
-```powershell
-python -m unittest discover -s tests -p "test_*.py"
-```
+The first run creates `.venv`, installs dependencies, and opens the app in your
+browser. Every run after that opens the browser straight away. When
+`requirements.txt` changes, the next run reinstalls on its own. Nothing else to
+set up.
 
-## Utilities
+Close the console window to stop the app.
 
-```powershell
-python -m scripts.generate_report <report_id>
-python -m scripts.html_to_fragments vulnerabilities.json -o vuln_library.json
-python -m scripts.postprocess_captions generated-report.docx
-python -m scripts.compose_component_test
-```
+## Generating reports
 
-See [docs/PLAN.md](docs/PLAN.md), [docs/ROUTES.md](docs/ROUTES.md), and [docs/DOCX_TEMPLATE.md](docs/DOCX_TEMPLATE.md) for implementation details.
+Report generation requires Windows with Microsoft Word installed. Everything
+else - drafting, saving, import, and export - runs anywhere.
+
+See [docs/PLAN.md](docs/PLAN.md), [docs/ROUTES.md](docs/ROUTES.md), and
+[docs/DOCX_TEMPLATE.md](docs/DOCX_TEMPLATE.md) for implementation details.

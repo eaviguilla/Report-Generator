@@ -2,7 +2,8 @@
 data/apps/
 data/.locks/
 data/prefs.json
-data/vulnreport-errors.log
+# the handler rotates into .log.1, .log.2 and so on
+data/vulnreport-errors.log*
 
 # generated output
 generated/*

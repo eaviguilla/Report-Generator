@@ -1379,6 +1379,13 @@ button.content-toggle:hover:not(:disabled) small {
   text-align: right;
 }
 
+/* Height is driven by content, so the global textarea floor and the drag handle would both fight it. */
+#scope-grid textarea {
+  min-height: 0;
+  overflow-y: hidden;
+  resize: none;
+}
+
 .workflow-footer {
   z-index: 45;
   min-height: 58px;

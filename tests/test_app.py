@@ -482,6 +482,48 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 422)
         self.assertIn("Scoped finding", rejected.json()["detail"])
 
+    def test_coverage_change_that_strands_a_mode_scoped_finding_is_rejected(self) -> None:
+        """A finding scoped to "all non-production" holds no target IDs, so only a
+        before-and-after location check can notice that Setup just stranded it."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Coverage Test", "ci_number": "CI-COVER", "tested_environments": ["production", "non_production"]})
+        report["scope_text"] = {"production": {"web": "https://prod.example.test"}, "non_production": {"web": "https://uat.example.test"}}
+        saved = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(saved.status_code, 200)
+
+        current = saved.json()["report"]
+        current["vulnerabilities"] = [{"uid": "v_lower", "title": "Lower region finding", "likelihood": "low", "impact": "low", "severity": "low", "status": "open_new", "scope": {"mode": "all_non_production"}}]
+        saved = self.client.put(f"/reports/{report_id}", json=current)
+        self.assertEqual(saved.status_code, 200)
+
+        # The tester unchecks Non-Production on Setup.
+        narrowed = saved.json()["report"]
+        narrowed["engagement"]["tested_environments"] = ["production"]
+        narrowed["scope_text"] = {"production": {"web": "https://prod.example.test"}, "non_production": {"web": "https://uat.example.test"}}
+        rejected = self.client.put(f"/reports/{report_id}", json=narrowed)
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["error"]["code"], "referenced_scope_removed")
+        self.assertIn("Lower region finding", rejected.json()["detail"])
+
+        # Narrowing that leaves the finding a location is still allowed.
+        widened = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        widened["scope_text"] = {"production": {"web": "https://prod.example.test"}, "non_production": {"web": "https://uat.example.test\nhttps://staging.example.test"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=widened).status_code, 200)
+
+    def test_two_findings_cannot_share_a_finding_number(self) -> None:
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Numbering", "ci_number": "CI-NUM"})
+        report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
+        report["vulnerabilities"] = [
+            {"uid": "v_one", "display_id": "1", "title": "First", "status": "open_new", "scope": {"mode": "all"}},
+            {"uid": "v_two", "display_id": "1", "title": "Second", "status": "open_new", "scope": {"mode": "all"}},
+        ]
+        rejected = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(rejected.status_code, 422)
+        self.assertIn("same finding number", json.dumps(rejected.json()))
+
     def test_workspace_compare_and_swap_allows_only_one_concurrent_writer(self) -> None:
         report = main.workspace.create_report()
         expected_saved_at = report.saved_at

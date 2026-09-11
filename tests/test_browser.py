@@ -971,6 +971,34 @@ class BrowserWorkflowTests(unittest.TestCase):
                     f"{case.__name__}: generate button does not match server readiness",
                 )
 
+    def test_deleting_a_finding_with_work_in_it_asks_first(self) -> None:
+        """Nothing on the server stops a delete, so the confirmation is the only guard."""
+        report_id = self.ready_report(include_finding=True)
+        report, _ = self._complete_finding(report_id)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#findings button.danger")
+        prompts = []
+        accept = False
+        def handle(dialog):
+            prompts.append(dialog.message)
+            dialog.accept() if accept else dialog.dismiss()
+        page.on("dialog", handle)
+
+        page.locator("#findings button.danger").first.click()
+        page.wait_for_timeout(200)
+        self.assertTrue(prompts, "deleting a finding did not ask for confirmation")
+        self.assertIn("screenshot", prompts[0])
+        self.assertEqual(page.locator("#findings button.danger").count(), 1, "cancelling still deleted the finding")
+
+        accept = True
+        page.locator("#findings button.danger").first.click()
+        page.wait_for_selector("#save-button[data-save-state='saved']", timeout=15000)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities, [])
+        self.assertEqual(main.workspace.load(report_id).evidence, {}, "deleting the finding left its evidence behind")
+
     def test_complete_report_saves_generated_docx_to_generated_folder(self) -> None:
         self.page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
         report_id = self.ready_report(include_finding=True)

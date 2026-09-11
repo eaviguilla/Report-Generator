@@ -1011,12 +1011,39 @@
     const scopeGrid = document.querySelector("#scope-grid");
     const selected = (values, value) => values.includes(value);
     if (configuration && windows && scopeGrid) {
+    // Mirrors the server's removal guard so Setup can warn before a save is rejected.
+    const scopeReaches = (scope, targets) => {
+      const mode = scope?.mode || "custom";
+      if (mode === "custom") {
+        if ((scope?.target_ids || []).some(targetId => targets.some(target => target.target_id === targetId))) return true;
+        return Object.values(scope?.custom_locations || {}).flat().some(value => value.trim());
+      }
+      if (mode === "all") return targets.length > 0;
+      const environment = mode === "all_production" ? "production" : "non_production";
+      return targets.some(target => target.environment === environment);
+    };
+    const findingsStrandedBy = (environments, testType) => {
+      const channels = testTypes[testType].channels;
+      const surviving = (report.scope_targets || []).filter(target => environments.includes(target.environment) && channels.includes(target.channel));
+      return (report.vulnerabilities || [])
+        .filter(finding => scopeReaches(finding.scope, report.scope_targets || []) && !scopeReaches(finding.scope, surviving))
+        .map(finding => finding.title || "Untitled finding");
+    };
+    const confirmScopeLoss = (environments, testType, change) => {
+      const stranded = findingsStrandedBy(environments, testType);
+      if (!stranded.length) return true;
+      return window.confirm(`${change} will leave ${stranded.length} finding${stranded.length === 1 ? "" : "s"} with no affected location:\n\n${stranded.join("\n")}\n\nThose findings become incomplete and will block the Content page until you give them a location.\n\nOK - make the change anyway\nCancel - keep the current coverage`);
+    };
     const renderCoverage = () => {
       configuration.innerHTML = "";
       const typeGroup = document.createElement("label");
       typeGroup.className = "test-type-select";
       typeGroup.innerHTML = `<span>Test Surface</span><select>${Object.entries(testTypes).map(([value, type]) => `<option value="${value}" ${report.engagement.test_type === value ? "selected" : ""}>${type.label}</option>`).join("")}</select>`;
       typeGroup.querySelector("select").onchange = event => {
+        if (!confirmScopeLoss(report.engagement.tested_environments, event.target.value, "Changing the test surface")) {
+          event.target.value = report.engagement.test_type;
+          return;
+        }
         report.engagement.test_type = event.target.value;
         renderCoverage();
         scheduleSave();
@@ -1042,7 +1069,12 @@
         }
         panel.querySelector("input[type=checkbox]").onchange = event => {
           const values = report.engagement.tested_environments;
-          report.engagement.tested_environments = event.target.checked ? [...values, environment] : values.filter(item => item !== environment);
+          const next = event.target.checked ? [...values, environment] : values.filter(item => item !== environment);
+          if (!event.target.checked && !confirmScopeLoss(next, report.engagement.test_type, `Removing ${label}`)) {
+            event.target.checked = true;
+            return;
+          }
+          report.engagement.tested_environments = next;
           renderCoverage();
           scheduleSave();
         };
@@ -1486,7 +1518,23 @@
         scheduleSave();
       });
       locationRow.querySelectorAll("[data-select-all]").forEach(control => control.onchange = () => { locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`).forEach(option => { option.checked = control.checked; }); updateLocations(); });
-      row.querySelector("button").onclick = () => { report.vulnerabilities.splice(index,1); renderFindings(); scheduleSave(); };
+      // Deleting a finding takes its content and screenshots with it, so it needs the same guard as a library replace.
+      row.querySelector("button").onclick = () => {
+        const evidenceCount = evidenceIdsIn(finding).size;
+        const hasContent = fragment => fragmentHasText(fragment)
+          || (fragment.items || []).some(item => (item.runs || []).some(run => run.text?.trim()))
+          || [...(fragment.header || []), ...(fragment.rows || []).flat()].some(cell => (cell.runs || []).some(run => run.text?.trim()))
+          || fragment.text?.trim() || fragment.caption?.trim() || fragment.evidence_id;
+        const written = finding.contents?.some(content => (content.fragments || []).some(hasContent));
+        const label = finding.title?.trim() || "this untitled finding";
+        const losses = [written && "everything written on the Content page", evidenceCount && `${evidenceCount} uploaded screenshot${evidenceCount === 1 ? "" : "s"}`].filter(Boolean);
+        if (losses.length && !window.confirm(`Delete ${label}?\n\nThis also removes ${losses.join(" and ")}.\n\nOK - delete the finding\nCancel - keep it`)) return;
+        const previousEvidence = evidenceIdsIn(finding);
+        report.vulnerabilities.splice(index, 1);
+        dropUnreferencedEvidence(previousEvidence);
+        renderFindings();
+        scheduleSave();
+      };
       findingBody.append(row, locationRow);
     });
   };

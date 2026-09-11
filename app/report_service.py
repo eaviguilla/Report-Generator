@@ -286,6 +286,19 @@ def assign_fresh_fragment_ids(vulnerability: Vulnerability) -> None:
             fragment.frag_id = f"f_{uuid.uuid4().hex[:8]}"
 
 
+def _scope_reaches_a_location(scope: dict, targets: list[dict]) -> bool:
+    """Answer scope_has_location for a raw payload scope against a raw target list."""
+    mode = scope.get("mode", "custom")
+    if mode == "custom":
+        if set(scope.get("target_ids") or []) & {target["target_id"] for target in targets}:
+            return True
+        return any(str(value).strip() for values in (scope.get("custom_locations") or {}).values() for value in values)
+    if mode == "all":
+        return bool(targets)
+    environment = "production" if mode == "all_production" else "non_production"
+    return any(target["environment"] == environment for target in targets)
+
+
 def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     """Turn setup textarea values into stable scope targets and identify unsafe removals."""
     if "scope_text" not in payload:
@@ -322,6 +335,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
                 targets.append({"target_id": old.get((environment, channel, value), f"tgt_{uuid.uuid4().hex[:8]}"), "environment": environment, "channel": channel, "value": value, "order": order})
     payload["scope_targets"] = targets
     target_ids = {target["target_id"] for target in targets}
+    prior_targets = [target.model_dump(mode="json") for target in prior.scope_targets]
     removed_references = []
     vulnerabilities = payload.get("vulnerabilities", [])
     if not isinstance(vulnerabilities, list):
@@ -332,10 +346,15 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
         scope = vulnerability.get("scope", {})
         if not isinstance(scope, dict):
             raise ValueError("finding scope must be an object")
+        title = vulnerability.get("title") or "Untitled finding"
         if scope.get("mode") == "custom":
-            missing_ids = set(scope.get("target_ids", [])) - target_ids
-            if missing_ids:
-                removed_references.append(vulnerability.get("title") or "Untitled finding")
+            if set(scope.get("target_ids", [])) - target_ids:
+                removed_references.append(title)
+            continue
+        # An "all production"-style finding holds no target IDs, so only losing every
+        # location it could resolve to shows that the scope change stranded it.
+        if _scope_reaches_a_location(scope, prior_targets) and not _scope_reaches_a_location(scope, targets):
+            removed_references.append(title)
     return removed_references
 
 

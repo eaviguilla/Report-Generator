@@ -78,6 +78,9 @@ FRAGMENT_COMPONENT_FILES = {
     "caption": ("caption_fragment.docx", "caption-fragment"),
 }
 IMAGE_BORDER_RASTER_DPI = 192
+# Long endpoints are broken after a slash so they stay inside their column.
+SCOPE_WRAP_CHARACTERS = 51
+LOCATION_WRAP_CHARACTERS = 36
 
 
 class ReportGenerationError(ValueError):
@@ -294,7 +297,33 @@ def _clear_paragraph(paragraph: Paragraph) -> None:
             paragraph._p.remove(child)
 
 
-def _set_cell_lines(cell, lines: list[str], *, label: str | None = None) -> None:
+def _wrap_after_slash(value: str, limit: int) -> list[str]:
+    """Split a long location after the last slash that still fits, keeping the scheme whole."""
+    scheme = value.find("://")
+    offset = scheme + 3 if scheme != -1 else 0
+    segments = []
+    remaining = value
+    while len(remaining) > limit:
+        cut = remaining.rfind("/", offset, limit)
+        if cut < offset:
+            break
+        segments.append(remaining[:cut + 1])
+        remaining = remaining[cut + 1:]
+        offset = 0
+    segments.append(remaining)
+    return segments
+
+
+def _add_wrapped_run(paragraph, value: str, limit: int | None) -> None:
+    """Add the value as one run, breaking inside it rather than starting a new bullet."""
+    segments = _wrap_after_slash(value, limit) if limit else [value]
+    run = paragraph.add_run(segments[0])
+    for segment in segments[1:]:
+        run.add_break()
+        run.add_text(segment)
+
+
+def _set_cell_lines(cell, lines: list[str], *, wrap: int | None = None) -> None:
     paragraphs = cell.paragraphs
     first = paragraphs[0]
     paragraph_style = first.style
@@ -304,11 +333,8 @@ def _set_cell_lines(cell, lines: list[str], *, label: str | None = None) -> None
     # An added paragraph inherits the style but not the template paragraph's direct
     # formatting, so every line after the first would lose its alignment and indent.
     template_properties = first._p.find(qn("w:pPr"))
-    if label:
-        first.add_run(label).bold = True
-    values = lines or ["N/A"]
-    for index, value in enumerate(values):
-        if index == 0 and not label:
+    for index, value in enumerate(lines or ["N/A"]):
+        if index == 0:
             paragraph = first
         else:
             paragraph = cell.add_paragraph(style=paragraph_style)
@@ -317,7 +343,7 @@ def _set_cell_lines(cell, lines: list[str], *, label: str | None = None) -> None
                 if existing is not None:
                     paragraph._p.remove(existing)
                 paragraph._p.insert(0, deepcopy(template_properties))
-        paragraph.add_run(value if label is None else f"• {value}")
+        _add_wrapped_run(paragraph, value, wrap)
 
 
 def _center_plain(cell) -> None:
@@ -335,11 +361,11 @@ def _center_plain(cell) -> None:
 def _populate_scope_tables(document: DocumentType, report: Report) -> None:
     engagement = report.engagement
     web = _find_table(document, "URL(s) in Scope")
-    _set_cell_lines(web.cell(2, 0), _target_values(report, "production", "web"))
-    _set_cell_lines(web.cell(4, 0), _target_values(report, "non_production", "web"))
+    _set_cell_lines(web.cell(2, 0), _target_values(report, "production", "web"), wrap=SCOPE_WRAP_CHARACTERS)
+    _set_cell_lines(web.cell(4, 0), _target_values(report, "non_production", "web"), wrap=SCOPE_WRAP_CHARACTERS)
     api = _find_table(document, "API Routes")
-    _set_cell_lines(api.cell(2, 0), _target_values(report, "production", "api"))
-    _set_cell_lines(api.cell(4, 0), _target_values(report, "non_production", "api"))
+    _set_cell_lines(api.cell(2, 0), _target_values(report, "production", "api"), wrap=SCOPE_WRAP_CHARACTERS)
+    _set_cell_lines(api.cell(4, 0), _target_values(report, "non_production", "api"), wrap=SCOPE_WRAP_CHARACTERS)
     limitations = _find_table(document, "Limitations")
     limitation_text = _display_value(engagement.limitations)
     _set_cell_lines(limitations.cell(1, 0), [limitation_text])
@@ -505,6 +531,55 @@ def _populate_component_findings(
     anchor.getparent().remove(anchor)
 
 
+def _replace_token_with_bullets(
+    document: DocumentType,
+    elements: list,
+    token: str,
+    values: list[str],
+    component_root: Path,
+) -> None:
+    """Swap a cell token for real bullet-list paragraphs cloned from the bullet fragment."""
+    pattern = re.compile(r"\{\{\s*" + re.escape(token) + r"\s*\}\}", re.IGNORECASE)
+    if not values:
+        replace_component_token_runs(elements, token, [Run(text="N/A")])
+        return
+    filename, bullet_token = FRAGMENT_COMPONENT_FILES["bulleted_list"]
+    for element in elements:
+        for paragraph in list(element.iter(qn("w:p"))):
+            if not pattern.search(_element_text(paragraph)):
+                continue
+            numbering_ids: dict[tuple[Path, int], int] = {}
+            for value in values:
+                bullet = clone_component_elements(
+                    document,
+                    component_root / "fragments" / filename,
+                    numbering_ids=numbering_ids,
+                )
+                replace_component_token_runs(
+                    bullet,
+                    bullet_token,
+                    [Run(text="\n".join(_wrap_after_slash(value, LOCATION_WRAP_CHARACTERS)))],
+                )
+                for node in bullet:
+                    for bullet_paragraph in node.iter(qn("w:p")):
+                        _align_left(bullet_paragraph)
+                    paragraph.addprevious(node)
+            paragraph.getparent().remove(paragraph)
+            return
+
+
+def _align_left(paragraph_element) -> None:
+    properties = paragraph_element.find(qn("w:pPr"))
+    if properties is None:
+        properties = OxmlElement("w:pPr")
+        paragraph_element.insert(0, properties)
+    for existing in properties.findall(qn("w:jc")):
+        properties.remove(existing)
+    alignment = OxmlElement("w:jc")
+    alignment.set(qn("w:val"), "left")
+    properties.append(alignment)
+
+
 def _render_finding_component(
     document: DocumentType,
     finding: Vulnerability,
@@ -532,11 +607,7 @@ def _render_finding_component(
         ("prod_affected_locations", locations["production"]),
         ("non-prod-affected-locations", locations["non_production"]),
     ):
-        replace_component_token_runs(
-            elements,
-            token,
-            [Run(text="\n".join(f"• {value}" for value in location_values) or "N/A")],
-        )
+        _replace_token_with_bullets(document, elements, token, location_values, component_root)
 
     contents = {content.type: content for content in finding.contents}
     anchors = {

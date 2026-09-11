@@ -249,7 +249,7 @@ body::before {
   border: 1px solid var(--line);
   border-radius: 3px;
   color: var(--ink-soft);
-  background: #f7f9f8;
+  background: var(--canvas-deep);
   font: 10px/1.5 "Cascadia Code", Consolas, monospace !important;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -528,6 +528,12 @@ textarea,
   color: var(--ink);
   background: var(--surface-field);
   font-size: 13px;
+}
+
+/* The native popup does not inherit the field colours, so dark mode shows white on white. */
+select option {
+  color: var(--ink);
+  background: var(--panel);
 }
 
 input:hover,
@@ -1362,6 +1368,15 @@ button.content-toggle:hover:not(:disabled) small {
 .review-note {
   color: var(--muted);
   font-size: 12px;
+}
+
+#generate-status {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
 }
 
 .workflow-footer {

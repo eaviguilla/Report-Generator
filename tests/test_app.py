@@ -674,21 +674,28 @@ class ReportApiTests(unittest.TestCase):
         image_paragraph = next(shape._inline.iterancestors(qn("w:p")))
         self.assertEqual(image_paragraph.find(qn("w:pPr") + "/" + qn("w:jc")).get(qn("w:val")), "center")
 
-        with (
-            patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents),
-            patch.object(main, "reveal_generated_report") as reveal,
-        ):
+        with patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents):
             saved = self.client.post(f"/reports/{report_id}/generate")
         self.assertEqual(saved.status_code, 200)
-        output_path = main.workspace.find_path(report_id).parent / "JH - Generated Report - Annual Pentest 2026.docx"
+        # Generated reports land in one shared folder at the project root.
+        output_path = main.GENERATED / "JH - Generated Report - Annual Pentest 2026.docx"
         self.assertEqual(saved.json(), {
             "filename": output_path.name,
             "path": str(output_path),
-            "folder_opened": True,
+            "folder": str(main.GENERATED),
         })
         self.assertTrue(output_path.is_file())
         self.assertTrue(output_path.read_bytes().startswith(b"PK"))
-        reveal.assert_called_once_with(output_path)
+
+        # Regenerating keeps the earlier export instead of overwriting it.
+        with patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents):
+            again = self.client.post(f"/reports/{report_id}/generate")
+        second_path = main.GENERATED / "JH - Generated Report - Annual Pentest 2026 (2).docx"
+        self.assertEqual(again.json()["filename"], second_path.name)
+        self.assertTrue(second_path.is_file())
+        self.assertTrue(output_path.is_file())
+        output_path.unlink()
+        second_path.unlink()
 
     def test_library_rejects_invalid_documents(self) -> None:
         path = Path(self.temp_dir.name) / "invalid-library.json"

@@ -76,7 +76,7 @@ class DocxComponentTests(unittest.TestCase):
                     DocxComponent(fragments / "bulleted_fragment.docx", {"bullet-list-fragment": "Add regression coverage."}),
                 ],
                 "prev-poc-fragments-here": [
-                    DocxComponent(fragments / "instance_fragment.docx", {"instance-fragment": "Instance 1: Production"}),
+                    DocxComponent(fragments / "title_fragment.docx", {"instance-fragment": "Instance 1: Production"}),
                     DocxComponent(fragments / "numbered_fragment.docx", {"numbered-list-fragment": "Sign in as a standard user."}),
                     DocxComponent(fragments / "numbered_fragment.docx", {"numbered-list-fragment": "Request another user's record."}),
                     DocxComponent(fragments / "numbered_fragment.docx", {"numbered-list-fragment": "Change the record identifier."}),
@@ -84,7 +84,7 @@ class DocxComponentTests(unittest.TestCase):
                     DocxComponent(fragments / "numbered_fragment.docx", {"numbered-list-fragment": "Confirm the unauthorized response data."}),
                 ],
                 "poc-fragments-here": [
-                    DocxComponent(fragments / "instance_fragment.docx", {"instance-fragment": "Instance 1: Production"}),
+                    DocxComponent(fragments / "title_fragment.docx", {"instance-fragment": "Instance 1: Production"}),
                     DocxComponent(fragments / "numbered_fragment.docx", {"numbered-list-fragment": "Repeat the original request."}),
                     DocxComponent(fragments / "numbered_fragment.docx", {"numbered-list-fragment": "Observe that access is still allowed."}),
                     DocxComponent(fragments / "numbered_fragment.docx", {"numbered-list-fragment": "Apply the proposed authorization control."}),
@@ -151,7 +151,7 @@ class DocxComponentTests(unittest.TestCase):
         expected_fragments = {
             "paragraph_fragment.docx": "Authorization checks can be bypassed.",
             "note_fragment.docx": "Note: Retest both affected environments.",
-            "instance_fragment.docx": "Instance 1: Production",
+            "title_fragment.docx": "Instance 1: Production",
             "numbered_fragment.docx": "Sign in as a standard user.",
             "bulleted_fragment.docx": "Enforce authorization on the server.",
         }

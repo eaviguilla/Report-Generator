@@ -693,8 +693,15 @@
       if (!response.ok) throw await diagnostics.fromResponse(response, "generate_report_to_folder", "Generation failed");
       const generated = await response.json();
       if (document.querySelector("#app-diagnostics")?.dataset.operation === "generate_report_to_folder") diagnostics.clear();
-      button.textContent = "Generated";
-      button.title = `Saved to ${generated.path}`;
+      button.textContent = "Generate Report";
+      delete button.dataset.busy;
+      button.disabled = false;
+      const status = document.querySelector("#generate-status");
+      if (status) {
+        status.hidden = false;
+        status.textContent = `Your Word report is ready. Look for "${generated.filename}" inside the app's "generated" folder.`;
+        status.title = generated.path;
+      }
     } catch (error) {
       showOperationError(error, "generate_report_to_folder", "Generation failed");
       delete button.dataset.busy;
@@ -836,21 +843,24 @@
     syncConclusion(vulnerability);
     syncEvidenceImageSlots(vulnerability);
   }
-  const scopeTargetIds = finding => {
-    const mode = finding.scope?.mode || "custom";
-    if (mode === "custom") return finding.scope?.target_ids || [];
+  const scopeTargetIds = scope => {
+    const mode = scope?.mode || "custom";
+    if (mode === "custom") return scope?.target_ids || [];
     if (mode === "all") return report.scope_targets.map(target => target.target_id);
     const environment = mode === "all_production" ? "production" : "non_production";
     return report.scope_targets.filter(target => target.environment === environment).map(target => target.target_id);
   };
-  const scopeHasLocation = finding => scopeTargetIds(finding).length > 0 || (finding.scope?.mode === "custom" && Object.values(finding.scope?.custom_locations || {}).flat().some(value => value.trim()));
-  const affectedEnvironments = finding => {
+  const scopeHasLocation = finding => scopeTargetIds(finding.scope).length > 0 || (finding.scope?.mode === "custom" && Object.values(finding.scope?.custom_locations || {}).flat().some(value => value.trim()));
+  const scopeEnvironments = scope => {
     const environments = [];
     const add = environment => { if (environment && !environments.includes(environment)) environments.push(environment); };
-    scopeTargetIds(finding).forEach(targetId => add(report.scope_targets.find(target => target.target_id === targetId)?.environment));
-    if (finding.scope?.mode === "custom") Object.entries(finding.scope?.custom_locations || {}).forEach(([environment, locations]) => { if (locations.some(value => value.trim())) add(environment); });
+    scopeTargetIds(scope).forEach(targetId => add(report.scope_targets.find(target => target.target_id === targetId)?.environment));
+    if ((scope?.mode || "custom") === "custom") Object.entries(scope?.custom_locations || {}).forEach(([environment, locations]) => { if (locations.some(value => value.trim())) add(environment); });
     return environments;
   };
+  const affectedEnvironments = finding => scopeEnvironments(finding.scope);
+  const environmentName = environment => environment === "production" ? "Production" : "Non-Production";
+  const imagesForEnvironment = (finding, environment) => finding.contents.flatMap(content => (content.fragments || []).filter(fragment => fragment.type === "image" && fragment.environment === environment));
   const syncEvidenceImageSlots = finding => {
     const environments = affectedEnvironments(finding);
     const images = finding.contents.flatMap(content => content.fragments.filter(fragment => fragment.type === "image"));
@@ -866,6 +876,7 @@
     const environmentLabels = {production:"Production", non_production:"Non-Production"};
     const channelLabels = {api:"API", web:"Web", mobile:"Mobile"};
     const testTypes = {web:{label:"Web App", channels:["web"]}, api:{label:"API", channels:["api"]}, mobile:{label:"Mobile", channels:["mobile"]}, web_api:{label:"Web App + API", channels:["web", "api"]}};
+    const nonProductionLabels = ["UAT", "TEST/MO", "DEV"];
     const characterNames = new Map([
       [" ","space"], ["\t","tab"], ["\n","line feed"], ["\r","carriage return"], ["!","exclamation mark"], ['"',"double quote"], ["#","number sign"], ["$","dollar sign"], ["%","percent sign"], ["&","ampersand"], ["'","apostrophe"], ["(","left parenthesis"], [")","right parenthesis"], ["*","asterisk"], ["+","plus sign"], [",","comma"], ["-","hyphen"], [".","period"], ["/","slash"], [":","colon"], [";","semicolon"], ["<","less-than sign"], ["=","equals sign"], [">","greater-than sign"], ["?","question mark"], ["@","at sign"], ["[","left bracket"], ["\\","backslash"], ["]","right bracket"], ["^","caret"], ["_","underscore"], ["`","grave accent"], ["{","left brace"], ["|","vertical bar"], ["}","right brace"], ["~","tilde"],
     ]);
@@ -1017,7 +1028,18 @@
         const panel = document.createElement("div");
         panel.className = "environment-window";
         const isSelected = selected(report.engagement.tested_environments, environment);
-        panel.innerHTML = `<label class="coverage-option"><input type="checkbox" value="${environment}" ${isSelected ? "checked" : ""}>${label}</label>${isSelected ? `<div class="date-pair"><label>Start<input type="date" aria-label="${label} start date"></label><label>End<input type="date" aria-label="${label} end date"></label><label>Time<input type="text" aria-label="${label} time"></label></div>` : ""}`;
+        // Non-Production shows its report name as a picker; the checkbox keeps the stable environment name.
+        const name = environment === "non_production"
+          ? `<select class="coverage-name" aria-label="Non-Production name" title="Labels the Proof of Concept evidence in the generated report" ${isSelected ? "" : "disabled"}>${nonProductionLabels.map(value => `<option value="${value}" ${report.engagement.non_production_label === value ? "selected" : ""}>${value}</option>`).join("")}</select>`
+          : label;
+        panel.innerHTML = `<label class="coverage-option"><input type="checkbox" value="${environment}" aria-label="${label}" ${isSelected ? "checked" : ""}>${name}</label>${isSelected ? `<div class="date-pair"><label>Start<input type="date" aria-label="${label} start date"></label><label>End<input type="date" aria-label="${label} end date"></label><label>Time<input type="text" aria-label="${label} time"></label></div>` : ""}`;
+        const coverageName = panel.querySelector(".coverage-name");
+        if (coverageName) {
+          coverageName.onchange = event => {
+            report.engagement.non_production_label = event.target.value;
+            scheduleSave();
+          };
+        }
         panel.querySelector("input[type=checkbox]").onchange = event => {
           const values = report.engagement.tested_environments;
           report.engagement.tested_environments = event.target.checked ? [...values, environment] : values.filter(item => item !== environment);
@@ -1076,7 +1098,7 @@
     const findingBody = document.querySelector("#findings");
     if (findingBody) {
     report.vulnerabilities.forEach(finding => {
-      if (finding.scope?.mode !== "custom") finding.scope.target_ids = scopeTargetIds(finding);
+      if (finding.scope?.mode !== "custom") finding.scope.target_ids = scopeTargetIds(finding.scope);
     });
     const libraryMatches = query => library.filter(entry => entry.title.toLowerCase().includes(query.toLowerCase()) || entry.tags.join(" ").toLowerCase().includes(query.toLowerCase()));
     const locationGroups = {production:[], non_production:[]};
@@ -1142,6 +1164,28 @@
       note.textContent = incomplete.length ? `${incomplete.length} finding${incomplete.length === 1 ? " is" : "s are"} incomplete: ${incomplete[0].join(", ")}.` : "";
     };
     const evidenceIdsIn = finding => new Set((finding.contents || []).flatMap(content => content.fragments || []).filter(fragment => fragment.evidence_id).map(fragment => fragment.evidence_id));
+    // Losing an environment's last location strands that environment's evidence, so confirm before dropping it.
+    const settleScopeChange = (finding, previousScope) => {
+      const remaining = affectedEnvironments(finding);
+      const lost = scopeEnvironments(previousScope).filter(environment => !remaining.includes(environment));
+      if (!lost.length) return true;
+      const stranded = lost.filter(environment => imagesForEnvironment(finding, environment).some(image => image.evidence_id || image.caption?.trim()));
+      if (stranded.length) {
+        const names = stranded.map(environmentName).join(" and ");
+        const question = `Remove the ${names} evidence from this finding?\n\nThis finding no longer has a ${names} affected location, so its ${names} screenshots and captions cannot appear in the report.\n\nOK - remove that evidence\nCancel - keep the affected location`;
+        if (!window.confirm(question)) {
+          finding.scope = previousScope;
+          return false;
+        }
+      }
+      const previousEvidence = evidenceIdsIn(finding);
+      lost.forEach(environment => finding.contents.forEach(content => {
+        content.fragments = (content.fragments || []).filter(fragment => !(fragment.type === "image" && fragment.environment === environment));
+      }));
+      dropUnreferencedEvidence(previousEvidence);
+      syncEvidenceImageSlots(finding);
+      return true;
+    };
     const dropUnreferencedEvidence = previousIds => {
       if (!report.evidence || !previousIds.size) return;
       const stillUsed = new Set(report.vulnerabilities.flatMap(candidate => [...evidenceIdsIn(candidate)]));
@@ -1404,15 +1448,34 @@
         const custom = {};
         locationRow.querySelectorAll("[data-custom-location]").forEach(input => { const environment = input.dataset.customLocation; const values = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); if (values.length) (custom[environment] ||= []).push(...values); });
         locationRow.querySelectorAll("[data-select-all]").forEach(control => { const options = locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`); control.checked = [...options].every(option => option.checked); });
+        const previousScope = finding.scope;
         finding.scope = {mode:"custom", target_ids:targetIds, location_values:values, custom_locations:custom};
+        settleScopeChange(finding, previousScope);
         renderFindings();
         scheduleSave();
       };
       locationRow.querySelectorAll("[data-location]").forEach(control => control.onchange = updateLocations);
       locationRow.querySelectorAll("[data-location-value]").forEach(input => input.oninput = () => { finding.scope.location_values ||= {}; finding.scope.location_values[input.dataset.locationValue] = input.value; scheduleSave(); });
-      locationRow.querySelectorAll("[data-custom-location]").forEach(input => input.oninput = () => { finding.scope.custom_locations ||= {}; const values = finding.scope.custom_locations[input.dataset.customLocation] ||= []; values[Number(input.dataset.customIndex)] = input.value; scheduleSave(); });
+      locationRow.querySelectorAll("[data-custom-location]").forEach(input => {
+        input.onfocus = () => { input.dataset.scopeBeforeEdit = JSON.stringify(finding.scope); };
+        input.oninput = () => { finding.scope.custom_locations ||= {}; const values = finding.scope.custom_locations[input.dataset.customLocation] ||= []; values[Number(input.dataset.customIndex)] = input.value; scheduleSave(); };
+        // Clearing the last custom location for an environment drops it, so settle on commit rather than per keystroke.
+        input.onchange = () => {
+          const snapshot = input.dataset.scopeBeforeEdit;
+          if (!snapshot) return;
+          if (!settleScopeChange(finding, JSON.parse(snapshot))) { renderFindings(); return; }
+          scheduleSave();
+        };
+      });
       locationRow.querySelectorAll("[data-add-location]").forEach(button => button.onclick = () => { const environment = button.dataset.addLocation; finding.scope.custom_locations ||= {}; (finding.scope.custom_locations[environment] ||= []).push(""); renderFindings(); locationRow.querySelector(`[data-custom-location="${environment}"]:last-child`)?.focus(); scheduleSave(); });
-      locationRow.querySelectorAll("[data-remove-location]").forEach(button => button.onclick = () => { const values = finding.scope.custom_locations?.[button.dataset.removeLocation] || []; values.splice(Number(button.dataset.customIndex), 1); renderFindings(); scheduleSave(); });
+      locationRow.querySelectorAll("[data-remove-location]").forEach(button => button.onclick = () => {
+        const previousScope = JSON.parse(JSON.stringify(finding.scope));
+        const values = finding.scope.custom_locations?.[button.dataset.removeLocation] || [];
+        values.splice(Number(button.dataset.customIndex), 1);
+        settleScopeChange(finding, previousScope);
+        renderFindings();
+        scheduleSave();
+      });
       locationRow.querySelectorAll("[data-select-all]").forEach(control => control.onchange = () => { locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`).forEach(option => { option.checked = control.checked; }); updateLocations(); });
       row.querySelector("button").onclick = () => { report.vulnerabilities.splice(index,1); renderFindings(); scheduleSave(); };
       findingBody.append(row, locationRow);
@@ -1862,7 +1925,10 @@
         if (fragment.type === "table") return [...fragment.header, ...fragment.rows.flat()].flatMap(cell => cell.runs).map(run => run.text).join(" ");
         return [fragment.text, fragment.caption].filter(Boolean).join(" ");
       };
-      const fragmentIssues = finding => finding.contents.flatMap(content => content.fragments.flatMap(fragment => {
+      const fragmentIssues = finding => {
+        // An image for an environment this finding does not affect is not the tester's to complete.
+        const relevant = affectedEnvironments(finding);
+        return finding.contents.flatMap(content => content.fragments.flatMap(fragment => {
         const contentLabel = contentNames[content.type];
         const issues = [];
         if (fragment.runs && !hasText(fragment.runs)) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
@@ -1874,7 +1940,7 @@
           const cells = [...fragment.header, ...fragment.rows.flat()];
           if (cells.some(cell => !hasText(cell.runs))) issues.push({contentLabel, fragmentLabel:"table", message:"every cell is required", fragmentId:fragment.frag_id});
         }
-        if (fragment.type === "image") {
+        if (fragment.type === "image" && (!fragment.environment || relevant.includes(fragment.environment))) {
           const environment = fragment.environment === "production" ? "Production" : fragment.environment === "non_production" ? "Non-Production" : "Unassigned";
           const missing = [!fragment.environment && "environment", !fragment.evidence_id && "image", !fragment.caption?.trim() && "caption"].filter(Boolean);
           if (missing.length) issues.push({contentLabel, fragmentLabel:`${environment} image`, message:`${missing.join(" and ")} required`, fragmentId:fragment.frag_id});
@@ -1882,7 +1948,8 @@
         if (!fragment.runs && !fragment.items && fragment.type !== "table" && fragment.type !== "image" && !fragment.text?.trim()) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (placeholderPattern.test(fragmentText(fragment))) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"replace placeholder text", fragmentId:fragment.frag_id, level:"warning"});
         return issues;
-      }));
+        }));
+      };
       const issues = report.vulnerabilities.flatMap(finding => {
         const label = finding.title || "Untitled finding";
         const missing = [];
@@ -1942,6 +2009,8 @@
     };
     document.addEventListener("reportchange", updateReadinessPanel);
     const render = (focusedFindingUid) => {
+      // Rebuilding the pane resets its scroll, which would throw the tester back to the top after an upload.
+      const restoreScroll = pane.scrollTop;
       const findings = ordered();
       if (!findings.some(finding => finding.uid === selectedFindingUid)) {
         selectedFindingUid = findings[0]?.uid;
@@ -2003,7 +2072,7 @@
         box.tabIndex = -1;
         const targetsById = new Map(report.scope_targets.map(target => [target.target_id, target]));
         const locationsByEnvironment = {production: [], non_production: []};
-        scopeTargetIds(finding).forEach(targetId => {
+        scopeTargetIds(finding.scope).forEach(targetId => {
           const target = targetsById.get(targetId);
           if (target) locationsByEnvironment[target.environment].push(finding.scope.location_values?.[targetId] || target.value);
         });
@@ -2110,6 +2179,8 @@
       updateReadinessPanel();
       if (focusedFindingUid) {
         requestAnimationFrame(() => { const focusedFinding = document.getElementById(`finding-${focusedFindingUid}`); focusedFinding?.scrollIntoView({behavior:"smooth", block:"start"}); focusedFinding?.focus({preventScroll:true}); });
+      } else if (restoreScroll) {
+        pane.scrollTop = restoreScroll;
       }
     };
     render();

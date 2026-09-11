@@ -890,7 +890,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ["Bold", "Italic", "Underline"],
         )
 
-    def test_complete_report_saves_generated_docx_and_reveals_it(self) -> None:
+    def test_complete_report_saves_generated_docx_to_generated_folder(self) -> None:
         self.page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
@@ -942,22 +942,24 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.evaluate(
             "window.VulnReportDiagnostics.show(new Error('Keep this warning'), 'unrelated_warning', {title:'Unrelated warning', kind:'warning'})"
         )
-        with patch.object(main, "reveal_generated_report") as reveal:
-            generate.click()
-            page.locator("#generate-report").filter(has_text="Saving...").wait_for()
-            self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT"])
-            page.evaluate("window.releaseGenerateSave()")
-            page.get_by_role("button", name="Generated").wait_for(timeout=60_000)
+        generate.click()
+        page.locator("#generate-report").filter(has_text="Saving...").wait_for()
+        self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT"])
+        page.evaluate("window.releaseGenerateSave()")
+        page.locator("#generate-status").wait_for(state="visible", timeout=60_000)
         self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT", "POST"])
         page.get_by_role("heading", name="Unrelated warning").wait_for()
         persisted_description = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "description")
         self.assertEqual(persisted_description.fragments[0].runs[0].text, "Saved immediately before generation")
-        output_path = draft_path.parent / "JH - Browser QA - Annual Pentest 2026.docx"
-        reveal.assert_called_once_with(output_path)
+        output_path = main.GENERATED / "JH - Browser QA - Annual Pentest 2026.docx"
+        status_text = page.locator("#generate-status").inner_text()
+        self.assertIn(output_path.name, status_text)
+        self.assertIn("generated", status_text)
         rendered = Document(output_path)
         text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
         self.assertIn("Browser finding", text)
         self.assertNotIn("{{", text)
+        output_path.unlink()
 
     def test_list_textareas_show_markers_and_store_non_empty_lines(self) -> None:
         report_id = self.ready_report(include_finding=True)

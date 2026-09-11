@@ -5,8 +5,10 @@ The three authoring routes are views over one `Report`. Dependencies remain expl
 | Source | Source page | Dependent | Dependent page | Direction | Owner | Behavior when source changes |
 |---|---|---|---|---|---|---|
 | `engagement.tested_environments` | Setup | `engagement.test_windows`, visible scope inputs | Setup | One-way | Selected environments | Keep stored window values, but render and validate only selected environments. |
+| `engagement.tested_environments`, `engagement.test_type` | Setup | `scope_targets[]` | Setup | One-way | Selected coverage | Targets outside the selected environments and test surface are dropped on save. Setup names any finding that would be left with no affected location and asks before committing; the save is refused if one is stranded anyway. |
 | `scope_text[environment][channel]` | Setup | `scope_targets[]` | Setup | One-way | Scope text | Backend reconciliation preserves stable target IDs. Removing a target still referenced by a finding blocks the save. |
 | `scope_targets[].target_id/value` | Setup | `vulnerabilities[].scope.target_ids/location_values` | Findings | One-way | Scope target | Existing selections follow stable IDs. A selected target's location starts from its scope value and then becomes finding-owned editable text. |
+| Finding deletion | Findings | `vulnerabilities[]`, `report.evidence` | Findings / Content | One-way | Tester | Confirm first when the finding holds written content or uploaded screenshots, then release its evidence so the images stop travelling in every export. |
 | Finding scope and selected environments | Findings | Proof-of-concept image slots and `fragment.environment` | Content | One-way | Finding scope | Add one missing slot per affected environment and preserve extra or uploaded images. Never delete evidence automatically. |
 | `vulnerabilities[].status` | Findings / Content | Required content blocks | Content | One-way | Status | Re-provision the allowed block set. Ask before discarding blocks or replacing remediation text. |
 | `vulnerabilities[].status` | Findings / Content | Default remediation for resolved findings | Content | One-way | Status | Replace remediation only when the user confirms the destructive status change. |
@@ -19,4 +21,7 @@ The three authoring routes are views over one `Report`. Dependencies remain expl
 - No row is truly bidirectional. Editable seeded values transfer ownership to the user instead of writing back to their source.
 - Backend validation and provisioning remain authoritative.
 - Canonical save responses may add defaults or slots, but must not overwrite edits made after that request's snapshot.
-- Scope-target removal is rejected while any finding references the target; it is never propagated as silent data loss.
+- Scope-target removal is rejected while any finding references the target; it is never propagated as silent data loss. A finding scoped by mode rather than by target ID holds no reference to check, so the guard compares the locations it resolves to before and after the change.
+- CI and BSN numbers are optional. Neither blocks Setup.
+- Two findings may not share a finding number; the save is rejected the same way duplicate target and fragment IDs are.
+- `likelihood`, `impact` and `severity` are independent. No rule derives one from the others, so a contradictory combination is accepted by design.

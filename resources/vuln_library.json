@@ -2634,7 +2634,7 @@
     {
       "library_id": "VDB-036",
       "source_id": 36,
-      "title": "Missing/Misconfigured Security Header: Content Security-Policy (CSP)",
+      "title": "Missing/Misconfigured Security Header: Content-Security-Policy (CSP)",
       "tags": [
         "headers"
       ],
@@ -2783,7 +2783,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-036-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-036-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-036-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-037",
@@ -2936,7 +3025,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-037-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-037-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-037-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-038",
@@ -3036,7 +3214,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-038-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-038-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-038-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-039",
@@ -3154,7 +3421,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-039-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-039-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-039-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-040",
@@ -3468,7 +3824,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-040-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-040-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-040-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-041",
@@ -3586,7 +4031,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-041-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-041-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-041-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-042",
@@ -3723,7 +4257,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-042-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-042-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-042-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-043",
@@ -3922,7 +4545,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-043-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-043-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-043-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-044",
@@ -4125,7 +4837,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-044-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-044-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-044-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-021",

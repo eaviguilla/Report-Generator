@@ -739,7 +739,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         page.get_by_role("button", name="Edit finding name").click()
         title = page.locator(".finding-title-cell input")
-        replacement = "Missing/Misconfigured Security Header: Content Security-Policy (CSP)"
+        replacement = "Missing/Misconfigured Security Header: Content-Security-Policy (CSP)"
         title.fill(replacement)
         page.locator('.row-library-results [role="option"]').filter(has_text=replacement).click()
         page.click('[data-dialog-action="confirm"]')

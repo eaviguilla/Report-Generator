@@ -627,11 +627,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         owner = page.get_by_label("Application Owner")
         owner.fill("Undo this value")
         page.get_by_role("heading", name="Application").click()
+        # Undo sends the change to the server before reloading, so wait for the reloaded value.
+        owner_value = '() => document.querySelector(\'[data-path="engagement.app_owner"]\')?.value'
         page.get_by_role("button", name="Undo last change").click()
-        page.wait_for_load_state()
+        page.wait_for_function(f"{owner_value} === ''", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "")
         page.get_by_role("button", name="Redo last change").click()
-        page.wait_for_load_state()
+        page.wait_for_function(f"{owner_value} === 'Undo this value'", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Undo this value")
 
         def interrupt_put(route) -> None:
@@ -657,7 +659,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
         recovery = page.locator("#app-diagnostics")
         recovery.get_by_role("heading", name="Unsaved changes found").wait_for()
-        self.assertEqual(page.get_by_label("Application Owner").input_value(), "")
+        # Redo persisted before reloading, so the server holds the redone value; only the
+        # aborted "Recovered value" edit is still unsaved.
+        self.assertEqual(page.get_by_label("Application Owner").input_value(), "Undo this value")
         recovery.get_by_role("button", name="Restore", exact=True).click()
         page.wait_for_load_state()
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Recovered value")
@@ -737,8 +741,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         title = page.locator(".finding-title-cell input")
         replacement = "Missing/Misconfigured Security Header: Content Security-Policy (CSP)"
         title.fill(replacement)
-        page.once("dialog", lambda dialog: dialog.accept())
         page.locator('.row-library-results [role="option"]').filter(has_text=replacement).click()
+        page.click('[data-dialog-action="confirm"]')
         page.get_by_role("button", name="Next: Content", exact=False).click()
         page.wait_for_url(f"**/reports/{report_id}/edit")
         self.assertEqual(page.get_by_role("heading", name=replacement).text_content(), replacement)
@@ -777,9 +781,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
         title = "Session Token Remains Valid after Session Expiry Message"
         page.get_by_role("button", name="Edit finding name").click()
-        page.once("dialog", lambda dialog: dialog.dismiss())
         page.locator(".finding-title-cell input").fill(title)
         page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
+        page.click('[data-dialog-action="cancel"]')
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
         finding = main.workspace.load(report_id).vulnerabilities[0]
@@ -795,8 +799,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Edit finding name").click()
         search = page.get_by_role("combobox", name="Finding Name")
         search.fill(title)
-        page.once("dialog", lambda dialog: dialog.accept())
         page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
+        page.click('[data-dialog-action="confirm"]')
         # The autosave is debounced, so wait for it to leave and re-enter "saved" before asserting.
         page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
@@ -980,21 +984,15 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
         page.wait_for_selector("#findings button.danger")
-        prompts = []
-        accept = False
-        def handle(dialog):
-            prompts.append(dialog.message)
-            dialog.accept() if accept else dialog.dismiss()
-        page.on("dialog", handle)
-
         page.locator("#findings button.danger").first.click()
-        page.wait_for_timeout(200)
-        self.assertTrue(prompts, "deleting a finding did not ask for confirmation")
-        self.assertIn("screenshot", prompts[0])
+        page.wait_for_selector("[data-dialog]")
+        self.assertIn("screenshot", page.locator("[data-dialog] .vr-dialog").inner_text())
+        page.click('[data-dialog-action="cancel"]')
+        page.wait_for_selector("[data-dialog]", state="detached")
         self.assertEqual(page.locator("#findings button.danger").count(), 1, "cancelling still deleted the finding")
 
-        accept = True
         page.locator("#findings button.danger").first.click()
+        page.click('[data-dialog-action="confirm"]')
         page.wait_for_selector("#save-button[data-save-state='saved']", timeout=15000)
         self.assertEqual(main.workspace.load(report_id).vulnerabilities, [])
         self.assertEqual(main.workspace.load(report_id).evidence, {}, "deleting the finding left its evidence behind")
@@ -1132,8 +1130,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
 
         persisted = main.workspace.load(report_id).vulnerabilities[0]
-        self.assertEqual(persisted.scope.custom_locations["production"], [long_endpoint, "POST /api/v1/transfers/validate"])
-        self.assertEqual(persisted.scope.custom_locations["non_production"], ["https://test.example.test/debug/error", "GET /api/v1/health/details"])
+        self.assertEqual(persisted.scope.custom_locations["production"]["web"], [long_endpoint, "POST /api/v1/transfers/validate"])
+        self.assertEqual(persisted.scope.custom_locations["non_production"]["web"], ["https://test.example.test/debug/error", "GET /api/v1/health/details"])
         self.assertEqual(persisted.scope.target_ids, ["tgt_browser"])
 
     def test_manager_actions_and_legacy_repair(self) -> None:
@@ -1186,8 +1184,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/")
         page.locator(".app-group").filter(has_text=report_id).locator("summary").click()
         report_row = page.locator(".report-row").filter(has_text=report_id)
-        page.once("dialog", lambda dialog: dialog.accept())
         report_row.get_by_role("button", name="Delete", exact=True).click()
+        page.click('[data-dialog-action="confirm"]')
         page.get_by_text("Report deleted.").wait_for()
         page.locator(".report-row").filter(has_text=report_id).wait_for(state="detached")
 

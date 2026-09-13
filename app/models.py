@@ -91,7 +91,8 @@ class Scope(BaseModel):
     mode: Literal["all", "all_production", "all_non_production", "custom"] = "all"
     target_ids: list[str] = Field(default_factory=list)
     location_values: dict[str, str] = Field(default_factory=dict)
-    custom_locations: dict[Environment, list[str]] = Field(default_factory=dict)
+    # Keyed environment then channel, mirroring scope_text, so a typed-in location still knows its app type.
+    custom_locations: dict[Environment, dict[Channel, list[str]]] = Field(default_factory=dict)
 
 
 class ScopeTarget(BaseModel):
@@ -135,6 +136,10 @@ class Vulnerability(BaseModel):
     status: Status = "open_new"
     scope: Scope = Field(default_factory=Scope)
     library_ref: LibraryRef | None = None
+    # Which app type the current proof-of-concept steps came from, and which offers the tester has refused.
+    # Kept on the finding because both library insert paths rebuild library_ref from scratch.
+    poc_variant: TestType | None = None
+    poc_variant_declined: list[TestType] = Field(default_factory=list)
     contents: list[Content] = Field(default_factory=list)
 
 

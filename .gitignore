@@ -24,3 +24,10 @@ __pycache__/
 
 # runtime backup written next to any JSON the app rewrites
 vuln_library.bak.json
+
+# local master copy of the library; the app only reads resources/vuln_library.json
+/vuln_library.json
+
+# local-only library authoring tool, deliberately not shipped
+app/library_editor.py
+app/web/templates/library_editor.html

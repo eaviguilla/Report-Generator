@@ -6,7 +6,7 @@ import unicodedata
 import uuid
 from datetime import datetime
 
-from app.models import Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Vulnerability
+from app.models import Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TestType, Vulnerability
 
 REPORT_TYPE_LABELS = {
     "annual_pentest": "Annual Pentest",
@@ -220,8 +220,8 @@ def affected_environments(vulnerability: Vulnerability, report: Report) -> list[
             target = target_by_id.get(target_id)
             if target:
                 add(target.environment)
-        for environment, locations in vulnerability.scope.custom_locations.items():
-            if any(location.strip() for location in locations):
+        for environment, by_channel in vulnerability.scope.custom_locations.items():
+            if any(location.strip() for locations in by_channel.values() for location in locations):
                 add(environment)
     elif vulnerability.scope.mode == "all":
         for target in report.scope_targets:
@@ -232,6 +232,46 @@ def affected_environments(vulnerability: Vulnerability, report: Report) -> list[
     elif any(target.environment == "non_production" for target in report.scope_targets):
         add("non_production")
     return ordered
+
+
+def affected_channels(vulnerability: Vulnerability, report: Report) -> list[Channel]:
+    """Resolve the app types a finding actually touches, mirroring affected_environments branch for branch."""
+    ordered: list[Channel] = []
+    target_by_id = {target.target_id: target for target in report.scope_targets}
+
+    def add(channel: Channel) -> None:
+        if channel not in ordered:
+            ordered.append(channel)
+
+    if vulnerability.scope.mode == "custom":
+        for target_id in vulnerability.scope.target_ids:
+            target = target_by_id.get(target_id)
+            if target:
+                add(target.channel)
+        for by_channel in vulnerability.scope.custom_locations.values():
+            for channel, locations in by_channel.items():
+                if any(location.strip() for location in locations):
+                    add(channel)
+    else:
+        environments = affected_environments(vulnerability, report)
+        for target in report.scope_targets:
+            if target.environment in environments:
+                add(target.channel)
+    return ordered
+
+
+def applicable_poc_variant(vulnerability: Vulnerability, report: Report) -> TestType | None:
+    """Map the finding's app types onto a library proof-of-concept key, or None when they do not match one."""
+    channels = set(affected_channels(vulnerability, report))
+    if channels == {"web"}:
+        return "web"
+    if channels == {"api"}:
+        return "api"
+    if channels == {"mobile"}:
+        return "mobile"
+    if channels == {"web", "api"}:
+        return "web_api"
+    return None
 
 
 def fragment_applies(fragment, vulnerability: Vulnerability, report: Report) -> bool:
@@ -286,13 +326,28 @@ def assign_fresh_fragment_ids(vulnerability: Vulnerability) -> None:
             fragment.frag_id = f"f_{uuid.uuid4().hex[:8]}"
 
 
+def apply_poc_variant(vulnerability: Vulnerability, fragments: list, variant: TestType) -> None:
+    """Replace only the written steps of the proof of concept, keeping its uploaded images."""
+    proof = next((content for content in vulnerability.contents if content.type == "proof_of_concept"), None)
+    if proof is None:
+        return
+    images = [fragment for fragment in proof.fragments if isinstance(fragment, ImageFragment)]
+    copied = [fragment.model_copy(deep=True) for fragment in fragments]
+    for fragment in copied:
+        fragment.frag_id = f"f_{uuid.uuid4().hex[:8]}"
+    proof.fragments = copied + images
+    vulnerability.poc_variant = variant
+    # The earlier refusal referred to steps that no longer exist, so it must not suppress the next mismatch.
+    vulnerability.poc_variant_declined = []
+
+
 def _scope_reaches_a_location(scope: dict, targets: list[dict]) -> bool:
     """Answer scope_has_location for a raw payload scope against a raw target list."""
     mode = scope.get("mode", "custom")
     if mode == "custom":
         if set(scope.get("target_ids") or []) & {target["target_id"] for target in targets}:
             return True
-        return any(str(value).strip() for values in (scope.get("custom_locations") or {}).values() for value in values)
+        return any(str(value).strip() for by_channel in (scope.get("custom_locations") or {}).values() for values in (by_channel or {}).values() for value in values)
     if mode == "all":
         return bool(targets)
     environment = "production" if mode == "all_production" else "non_production"
@@ -326,7 +381,16 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             if not isinstance(raw_values, str):
                 raise ValueError("scope target values must be text")
             values = raw_values.splitlines()
-            for order, value in enumerate(value.strip() for value in values if value.strip() and not value.lstrip().startswith("#")):
+            # Target IDs are reused by value, so a repeated line would claim the same ID twice and
+            # make every later save fail validation. One target per distinct value.
+            cleaned: list[str] = []
+            seen: set[str] = set()
+            for value in (line.strip() for line in values):
+                if not value or value.startswith("#") or value in seen:
+                    continue
+                seen.add(value)
+                cleaned.append(value)
+            for order, value in enumerate(cleaned):
                 if channel == "mobile":
                     environment_label = "Production" if environment == "production" else "Non-Production"
                     issue = invalid_character_issue(f"{environment_label} Mobile scope", value, ":'\"/.,-_&")
@@ -346,6 +410,16 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
         scope = vulnerability.get("scope", {})
         if not isinstance(scope, dict):
             raise ValueError("finding scope must be an object")
+        # A typed location outside the tested surface is no longer reachable, so it must not keep
+        # the finding looking complete or make it resolve to an app type the engagement dropped.
+        custom = scope.get("custom_locations")
+        if isinstance(custom, dict):
+            scope["custom_locations"] = {
+                environment: {channel: values for channel, values in (by_channel or {}).items() if channel in channels}
+                for environment, by_channel in custom.items()
+                if environment in environments and isinstance(by_channel, dict)
+            }
+            scope["custom_locations"] = {key: value for key, value in scope["custom_locations"].items() if value}
         title = vulnerability.get("title") or "Untitled finding"
         if scope.get("mode") == "custom":
             if set(scope.get("target_ids", [])) - target_ids:
@@ -390,7 +464,7 @@ def scope_has_location(vulnerability: Vulnerability, report: Report) -> bool:
     """Return whether a finding's scope mode resolves to an affected location."""
     scope = vulnerability.scope
     if scope.mode == "custom":
-        return bool(scope.target_ids) or any(value.strip() for values in scope.custom_locations.values() for value in values)
+        return bool(scope.target_ids) or any(value.strip() for by_channel in scope.custom_locations.values() for values in by_channel.values() for value in values)
     if scope.mode == "all":
         return bool(report.scope_targets)
     environment = "production" if scope.mode == "all_production" else "non_production"

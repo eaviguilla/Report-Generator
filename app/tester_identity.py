@@ -150,6 +150,8 @@ def resolve_identity() -> Identity:
 # =============================================================================
 
 PREFS_SCHEMA = "1.4"
+# The only library the app reads or writes. vuln_library.json at the root is an untracked local backup.
+LIBRARY_PATH = "resources/vuln_library.json"
 
 
 class TesterPreferences(BaseModel):
@@ -168,14 +170,15 @@ class Preferences(BaseModel):
     schema_version: Literal["1.4"] = PREFS_SCHEMA
     tester: TesterPreferences | None = None
     defaults: ReportDefaults = Field(default_factory=ReportDefaults)
-    library_path: str = "vuln_library.json"
+    library_path: str = LIBRARY_PATH
 
     @field_validator("library_path")
     @classmethod
     def validate_library_path(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("library_path cannot be empty")
-        return value.strip()
+        # The root copy is a local backup only; point any prefs file still naming it at the real library.
+        return LIBRARY_PATH if value.strip() == "vuln_library.json" else value.strip()
 
 
 def load_or_bootstrap(prefs_path: Path) -> dict:

@@ -6,7 +6,6 @@ import io
 import json
 import logging
 import os
-import shutil
 import uuid
 import zipfile
 from datetime import datetime
@@ -21,12 +20,12 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import ValidationError
 
-from app.models import EvidenceItem, LibraryRef, Report, Vulnerability
-from app.tester_identity import load_or_bootstrap
+from app.models import Content, EvidenceItem, LibraryRef, Report, Vulnerability
+from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, render_report_docx
 from .library import Library
-from .report_service import assign_fresh_fragment_ids, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots
+from .report_service import applicable_poc_variant, apply_poc_variant, assign_fresh_fragment_ids, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots
 from .storage import atomic_write_bytes
 from .workspace import StaleReportError, Workspace, app_id_for
 
@@ -36,15 +35,11 @@ DATA = ROOT / "data"
 GENERATED = ROOT / "generated"
 prefs = load_or_bootstrap(DATA / "prefs.json")
 workspace = Workspace(DATA, prefs.get("tester", {}).get("display_name", ""))
-# The app reads the editable copy under resources/; vuln_library.json at the root stays the pristine export.
-configured_library = Path(prefs.get("library_path", "resources/vuln_library.json"))
+configured_library = Path(prefs.get("library_path", LIBRARY_PATH))
 configured_library = configured_library if configured_library.is_absolute() else ROOT / configured_library
-if not configured_library.is_file():
-    configured_library = ROOT / "resources" / "vuln_library.json"
-    configured_library.parent.mkdir(parents=True, exist_ok=True)
-    if not configured_library.is_file():
-        shutil.copy2(ROOT / "vuln_library.json", configured_library)
-library = Library(configured_library)
+library = Library.load_or_empty(configured_library)
+if library.load_error:
+    print(f"  vulnerability library unavailable -- {library.load_error}")
 
 app = FastAPI(title="Report Generator")
 app.mount("/static", StaticFiles(directory=ROOT / "app" / "web" / "static"), name="static")
@@ -679,6 +674,11 @@ def insert_library(request: Request, report_id: str, library_id: str):
     provision(vulnerability)
     report.vulnerabilities.append(vulnerability)
     sync_evidence_image_slots(vulnerability, report)
+    variant = applicable_poc_variant(vulnerability, report)
+    steps = (entry.get("proof_of_concept") or {}).get(variant) if variant else None
+    if steps:
+        # The entry is a plain dict, so let Content parse the raw steps back into fragment models.
+        apply_poc_variant(vulnerability, Content(type="proof_of_concept", fragments=steps).fragments, variant)
     save_if_current(report, expected_revision(request, report.saved_at))
     return {
         "saved_at": report.saved_at.isoformat(),
@@ -728,3 +728,14 @@ def get_evidence(report_id: str, evidence_id: str):
     if not file_path.is_file() or file_path.parent != evidence_root:
         raise HTTPException(404, "Evidence file not found")
     return FileResponse(file_path, media_type="image/png")
+
+
+# Authoring tool, deliberately untracked and off by default. Absent in a fresh clone by design.
+if os.environ.get("VULNREPORT_LIBRARY_EDITOR") and (Path(__file__).parent / "library_editor.py").is_file():
+    from .library_editor import register as register_library_editor
+
+    def _rebind_library() -> None:
+        global library
+        library = Library.load_or_empty(configured_library)
+
+    register_library_editor(app, configured_library, _rebind_library)

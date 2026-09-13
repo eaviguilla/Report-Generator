@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models import Content, Severity, StableId
+from app.models import Content, Fragment, Severity, StableId, TestType
 
 
 class LibraryEntry(BaseModel):
@@ -19,12 +19,25 @@ class LibraryEntry(BaseModel):
     requires_tester_input: bool = False
     status: str = "approved"
     contents: list[Content] = Field(default_factory=list)
+    # Ready-made proof-of-concept steps per tested app type. A missing key means no steps for that type.
+    proof_of_concept: dict[TestType, list[Fragment]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_fragment_ids(self) -> "LibraryEntry":
         fragment_ids = [fragment.frag_id for content in self.contents for fragment in content.fragments]
         if len(fragment_ids) != len(set(fragment_ids)):
             raise ValueError("library entry contains duplicate fragment IDs")
+        return self
+
+    @model_validator(mode="after")
+    def validate_proof_of_concept(self) -> "LibraryEntry":
+        # Checked per app type, not across them: only one set is ever copied into a finding.
+        for test_type, fragments in self.proof_of_concept.items():
+            if not fragments:
+                raise ValueError(f"proof of concept for {test_type} has no steps; omit the key instead")
+            ids = [fragment.frag_id for fragment in fragments]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"proof of concept for {test_type} contains duplicate fragment IDs")
         return self
 
 
@@ -52,6 +65,18 @@ class Library:
         document = LibraryDocument.model_validate(json.loads(path.read_text(encoding="utf-8")))
         self.entries = [entry.model_dump(mode="json") for entry in document.entries]
         self._by_id = {entry["library_id"]: entry for entry in self.entries}
+        self.load_error = ""
+
+    @classmethod
+    def load_or_empty(cls, path: Path) -> "Library":
+        """Never let an unreadable library stop the app, which loads it before any route exists."""
+        try:
+            return cls(path)
+        except (OSError, ValueError) as error:
+            empty = cls.__new__(cls)
+            empty.entries, empty._by_id = [], {}
+            empty.load_error = f"{path}: {error}"
+            return empty
 
     def search(self, query: str) -> list[dict]:
         """Return up to twenty entries whose title or tags match the query."""

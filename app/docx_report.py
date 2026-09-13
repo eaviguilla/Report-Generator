@@ -41,6 +41,8 @@ from .docx_components import (
 from .report_service import REPORT_TYPE_LABELS, affected_environments, finding_is_complete, fragment_applies, setup_issues
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
+# Targets number from zero within each channel, so channel rank has to come first when ordering them.
+CHANNEL_ORDER = ["web", "api", "mobile"]
 STATUS_LABELS = {
     "open_new": "Open (New)",
     "open_previously_discovered": "Open (Previously Discovered)",
@@ -210,8 +212,11 @@ def _target_values(report: Report, environment: str, channel: str) -> list[str]:
 
 def _metadata(report: Report) -> dict[str, str]:
     engagement = report.engagement
-    production = engagement.test_windows.get("production")
-    non_production = engagement.test_windows.get("non_production")
+    # Windows are kept for an unchecked environment so re-checking restores them, but an
+    # untested environment must not print dates in the report.
+    tested = lambda environment: engagement.test_windows.get(environment) if environment in engagement.tested_environments else None
+    production = tested("production")
+    non_production = tested("non_production")
     accounts = engagement.test_accounts
     values = {
         "segment": engagement.segment or "N/A",
@@ -998,17 +1003,21 @@ def _finding_locations(report: Report, finding: Vulnerability) -> dict[str, list
             target = targets.get(target_id)
             if target:
                 values[target.environment].append(finding.scope.location_values.get(target_id, target.value))
-        for environment, custom in finding.scope.custom_locations.items():
-            values[environment].extend(value for value in custom if value.strip())
     else:
         environments = {
             "all": {"production", "non_production"},
             "all_production": {"production"},
             "all_non_production": {"non_production"},
         }[finding.scope.mode]
-        for target in sorted(report.scope_targets, key=lambda item: item.order):
+        for target in sorted(report.scope_targets, key=lambda item: (CHANNEL_ORDER.index(item.channel), item.order)):
             if target.environment in environments:
                 values[target.environment].append(target.value)
+    # Typed endpoints are labelled "additional", so they belong to the finding whatever its mode.
+    for environment, by_channel in finding.scope.custom_locations.items():
+        for channel in CHANNEL_ORDER:
+            for value in by_channel.get(channel, []):
+                if value.strip() and value not in values[environment]:
+                    values[environment].append(value)
     return values
 
 

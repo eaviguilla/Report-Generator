@@ -48,7 +48,7 @@
       else openAppFolders.delete(group.dataset.appName);
     }));
     rows.querySelectorAll("[data-delete]").forEach(button => button.onclick = async () => {
-      if (!confirm("Delete this report and its evidence files?")) return;
+      if (!await window.vrDialog.confirm({title: "Delete this report?", message: "This also removes its evidence files.", confirmLabel: "Delete the report", cancelLabel: "Keep it", tone: "danger"})) return;
       try {
         const response = await fetch(`/reports/${button.dataset.delete}`, {method:"DELETE"});
         if (!response.ok) throw await responseError(response, "delete_report", "Unable to delete report");

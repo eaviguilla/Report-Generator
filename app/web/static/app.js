@@ -114,6 +114,8 @@
     RECOVERED: "recovered",
   });
   let validateSetupInputs = () => true;
+  // Assigned by setup(); the server rejects a scope edit that strands a finding, so the save waits for a fix.
+  let strandedByScopeEdit = () => [];
   let validateCurrentPage = () => true;
   let updateFindingSummary = () => {};
   const expandedFindingIds = new Set();
@@ -486,6 +488,7 @@
     previousReport = clone(report);
     activeTextTransaction = null;
     pendingSave = true;
+    saveRevision += 1;
     const rollback = () => {
       applyChanges(report, action.changes, direction === "undo" ? "redo" : "undo");
       previousReport = clone(report);
@@ -501,8 +504,12 @@
       return rollback();
     }
     allowUnsavedUnload = true;
-    window.location.reload();
-    return true;
+    // Reload only once the server has the undone state, so its page gate judges what the tester now has
+    // rather than the state from before the undo.
+    return save().then(() => {
+      window.location.reload();
+      return true;
+    });
   }
   function finalizeTextTransaction() {
     if (!activeTextTransaction) return;
@@ -611,6 +618,11 @@
       setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
       return false;
     }
+    const stranded = root.dataset.step === "setup" ? strandedByScopeEdit() : [];
+    if (stranded.length) {
+      setSaveState(SAVE_STATES.UNSAVED, `Give ${stranded.join(", ")} another affected location`);
+      return false;
+    }
     clearTimeout(autoSaveTimer);
     saveInFlight = (async () => {
       try {
@@ -714,22 +726,22 @@
     }
     if (await save()) window.location.assign(link.dataset.href);
   }));
-  const undo = () => {
+  const undo = async () => {
     finalizeTextTransaction();
     const action = undoHistory.pop();
     if (!action) return;
     redoHistory.push(action);
-    if (!restoreHistory(action, "undo")) {
+    if (!await restoreHistory(action, "undo")) {
       redoHistory.pop();
       undoHistory.push(action);
       storeHistory();
     }
   };
-  const redo = () => {
+  const redo = async () => {
     const action = redoHistory.pop();
     if (!action) return;
     undoHistory.push(action);
-    if (!restoreHistory(action, "redo")) {
+    if (!await restoreHistory(action, "redo")) {
       undoHistory.pop();
       redoHistory.push(action);
       storeHistory();
@@ -808,6 +820,11 @@
   }
   // Ensures a finding has the content blocks and required starter fragments for its status.
   const fragmentHasText = fragment => (fragment.runs || []).some(run => run.text?.trim());
+  // Any tester work at all, not just paragraph text: shared by the delete guard and the proof-of-concept offer.
+  const fragmentHasContent = fragment => fragmentHasText(fragment)
+    || (fragment.items || []).some(item => (item.runs || []).some(run => run.text?.trim()))
+    || [...(fragment.header || []), ...(fragment.rows || []).flat()].some(cell => (cell.runs || []).some(run => run.text?.trim()))
+    || Boolean(fragment.text?.trim() || fragment.caption?.trim() || fragment.evidence_id);
   const isDefaultStatusConclusion = fragment => fragment.type === "paragraph" && /^The finding ".*" is(?: still)? (?:Open|Resolved)\.$/.test((fragment.runs || []).map(run => run.text).join(""));
   function syncConclusion(vulnerability) {
     const conclusion = vulnerability.contents?.find(content => content.type === "in_conclusion");
@@ -847,15 +864,40 @@
     const environment = mode === "all_production" ? "production" : "non_production";
     return report.scope_targets.filter(target => target.environment === environment).map(target => target.target_id);
   };
-  const scopeHasLocation = finding => scopeTargetIds(finding.scope).length > 0 || (finding.scope?.mode === "custom" && Object.values(finding.scope?.custom_locations || {}).flat().some(value => value.trim()));
+  const customLocationValues = scope => Object.values(scope?.custom_locations || {}).flatMap(byChannel => Object.values(byChannel || {}).flat());
+  const scopeHasLocation = finding => scopeTargetIds(finding.scope).length > 0 || (finding.scope?.mode === "custom" && customLocationValues(finding.scope).some(value => value.trim()));
   const scopeEnvironments = scope => {
     const environments = [];
     const add = environment => { if (environment && !environments.includes(environment)) environments.push(environment); };
     scopeTargetIds(scope).forEach(targetId => add(report.scope_targets.find(target => target.target_id === targetId)?.environment));
-    if ((scope?.mode || "custom") === "custom") Object.entries(scope?.custom_locations || {}).forEach(([environment, locations]) => { if (locations.some(value => value.trim())) add(environment); });
+    if ((scope?.mode || "custom") === "custom") Object.entries(scope?.custom_locations || {}).forEach(([environment, byChannel]) => { if (Object.values(byChannel || {}).flat().some(value => value.trim())) add(environment); });
     return environments;
   };
   const affectedEnvironments = finding => scopeEnvironments(finding.scope);
+  // Shared by the setup page's scope controls and the editor's proof-of-concept offer.
+  const testTypes = {web:{label:"Web App", channels:["web"]}, api:{label:"API", channels:["api"]}, mobile:{label:"Mobile", channels:["mobile"]}, web_api:{label:"Web App + API", channels:["web", "api"]}};
+  // Twin of report_service.affected_channels; keep both in step.
+  const affectedChannels = finding => {
+    const scope = finding.scope;
+    const channels = [];
+    const add = channel => { if (channel && !channels.includes(channel)) channels.push(channel); };
+    if ((scope?.mode || "custom") === "custom") {
+      (scope?.target_ids || []).forEach(targetId => add(report.scope_targets.find(target => target.target_id === targetId)?.channel));
+      Object.values(scope?.custom_locations || {}).forEach(byChannel => Object.entries(byChannel || {}).forEach(([channel, locations]) => { if ((locations || []).some(value => value.trim())) add(channel); }));
+    } else {
+      const environments = scopeEnvironments(scope);
+      report.scope_targets.filter(target => environments.includes(target.environment)).forEach(target => add(target.channel));
+    }
+    return channels;
+  };
+  // Twin of report_service.applicable_poc_variant.
+  const applicablePocVariant = finding => {
+    const channels = affectedChannels(finding);
+    const has = channel => channels.includes(channel);
+    if (channels.length === 1) return has("web") ? "web" : has("api") ? "api" : has("mobile") ? "mobile" : null;
+    if (channels.length === 2 && has("web") && has("api")) return "web_api";
+    return null;
+  };
   const environmentName = environment => environment === "production" ? "Production" : "Non-Production";
   const imagesForEnvironment = (finding, environment) => finding.contents.flatMap(content => (content.fragments || []).filter(fragment => fragment.type === "image" && fragment.environment === environment));
   const syncEvidenceImageSlots = finding => {
@@ -868,11 +910,27 @@
     const proof = finding.contents.find(content => content.type === "proof_of_concept");
     missing.forEach(environment => { const image = newFragment("image"); image.environment = environment; proof?.fragments.push(image); });
   };
+  // Twin of report_service.apply_poc_variant; keep both in step.
+  const applyPocVariant = (finding, steps, variant) => {
+    const proof = finding.contents.find(content => content.type === "proof_of_concept");
+    if (!proof) return;
+    const images = proof.fragments.filter(fragment => fragment.type === "image");
+    const copied = JSON.parse(JSON.stringify(steps));
+    copied.forEach(fragment => { fragment.frag_id = id("f"); });
+    proof.fragments = [...copied, ...images];
+    finding.poc_variant = variant;
+    // The earlier refusal referred to steps that no longer exist, so it must not suppress the next mismatch.
+    finding.poc_variant_declined = [];
+  };
+  const pocStepsFor = (finding, variant) => {
+    if (!variant || !finding.library_ref?.library_id) return null;
+    const entry = library.find(candidate => candidate.library_id === finding.library_ref.library_id);
+    return entry?.proof_of_concept?.[variant] || null;
+  };
   // Initializes the setup page's engagement metadata, coverage, and scope controls.
   function setup() {
     const environmentLabels = {production:"Production", non_production:"Non-Production"};
     const channelLabels = {api:"API", web:"Web", mobile:"Mobile"};
-    const testTypes = {web:{label:"Web App", channels:["web"]}, api:{label:"API", channels:["api"]}, mobile:{label:"Mobile", channels:["mobile"]}, web_api:{label:"Web App + API", channels:["web", "api"]}};
     const nonProductionLabels = ["UAT", "TEST/MO", "DEV"];
     const characterNames = new Map([
       [" ","space"], ["\t","tab"], ["\n","line feed"], ["\r","carriage return"], ["!","exclamation mark"], ['"',"double quote"], ["#","number sign"], ["$","dollar sign"], ["%","percent sign"], ["&","ampersand"], ["'","apostrophe"], ["(","left parenthesis"], [")","right parenthesis"], ["*","asterisk"], ["+","plus sign"], [",","comma"], ["-","hyphen"], [".","period"], ["/","slash"], [":","colon"], [";","semicolon"], ["<","less-than sign"], ["=","equals sign"], [">","greater-than sign"], ["?","question mark"], ["@","at sign"], ["[","left bracket"], ["\\","backslash"], ["]","right bracket"], ["^","caret"], ["_","underscore"], ["`","grave accent"], ["{","left brace"], ["|","vertical bar"], ["}","right brace"], ["~","tilde"],
@@ -1013,7 +1071,7 @@
       const mode = scope?.mode || "custom";
       if (mode === "custom") {
         if ((scope?.target_ids || []).some(targetId => targets.some(target => target.target_id === targetId))) return true;
-        return Object.values(scope?.custom_locations || {}).flat().some(value => value.trim());
+        return customLocationValues(scope).some(value => value.trim());
       }
       if (mode === "all") return targets.length > 0;
       const environment = mode === "all_production" ? "production" : "non_production";
@@ -1026,18 +1084,52 @@
         .filter(finding => scopeReaches(finding.scope, report.scope_targets || []) && !scopeReaches(finding.scope, surviving))
         .map(finding => finding.title || "Untitled finding");
     };
-    const confirmScopeLoss = (environments, testType, change) => {
+    const confirmScopeLoss = async (environments, testType, change) => {
       const stranded = findingsStrandedBy(environments, testType);
       if (!stranded.length) return true;
-      return window.confirm(`${change} will leave ${stranded.length} finding${stranded.length === 1 ? "" : "s"} with no affected location:\n\n${stranded.join("\n")}\n\nThose findings become incomplete and will block the Content page until you give them a location.\n\nOK - make the change anyway\nCancel - keep the current coverage`);
+      return window.vrDialog.confirm({
+        title: `${change}?`,
+        message: `${stranded.length} finding${stranded.length === 1 ? "" : "s"} will be left with no affected location, and the report cannot be saved until you give ${stranded.length === 1 ? "it" : "them"} one.`,
+        list: stranded,
+        confirmLabel: "Make the change anyway",
+        cancelLabel: "Keep the current coverage",
+        tone: "danger",
+      });
+    };
+    // Mirrors reconcile_targets: a target only survives an edit if its exact text is still listed.
+    const survivingAfterScopeText = () => report.scope_targets.filter(target => {
+      const text = report.scope_text?.[target.environment]?.[target.channel];
+      if (text === undefined) return true;
+      return text.split(/\r?\n/).map(value => value.trim()).filter(value => value && !value.startsWith("#")).includes(target.value);
+    });
+    // The server refuses to strand a finding, so catch it here rather than letting the save fail.
+    const scopeTextStrandedFindings = () => {
+      const surviving = survivingAfterScopeText();
+      if (surviving.length === report.scope_targets.length) return [];
+      return report.vulnerabilities
+        .filter(finding => scopeReaches(finding.scope, report.scope_targets) && !scopeReaches(finding.scope, surviving))
+        .map(finding => finding.title || "Untitled finding");
+    };
+    strandedByScopeEdit = scopeTextStrandedFindings;
+    const confirmScopeTextLoss = async () => {
+      const stranded = scopeTextStrandedFindings();
+      if (!stranded.length) return true;
+      return window.vrDialog.confirm({
+        title: "Change these scope targets?",
+        message: `${stranded.length} finding${stranded.length === 1 ? "" : "s"} still point${stranded.length === 1 ? "s" : ""} at a target you are removing or renaming, and the report cannot be saved until ${stranded.length === 1 ? "it gets" : "they get"} another location.`,
+        list: stranded,
+        confirmLabel: "Change them anyway",
+        cancelLabel: "Keep the current targets",
+        tone: "danger",
+      });
     };
     const renderCoverage = () => {
       configuration.innerHTML = "";
       const typeGroup = document.createElement("label");
       typeGroup.className = "test-type-select";
       typeGroup.innerHTML = `<span>Test Surface</span><select>${Object.entries(testTypes).map(([value, type]) => `<option value="${value}" ${report.engagement.test_type === value ? "selected" : ""}>${type.label}</option>`).join("")}</select>`;
-      typeGroup.querySelector("select").onchange = event => {
-        if (!confirmScopeLoss(report.engagement.tested_environments, event.target.value, "Changing the test surface")) {
+      typeGroup.querySelector("select").onchange = async event => {
+        if (!await confirmScopeLoss(report.engagement.tested_environments, event.target.value, "Change the test surface")) {
           event.target.value = report.engagement.test_type;
           return;
         }
@@ -1064,10 +1156,10 @@
             scheduleSave();
           };
         }
-        panel.querySelector("input[type=checkbox]").onchange = event => {
+        panel.querySelector("input[type=checkbox]").onchange = async event => {
           const values = report.engagement.tested_environments;
           const next = event.target.checked ? [...values, environment] : values.filter(item => item !== environment);
-          if (!event.target.checked && !confirmScopeLoss(next, report.engagement.test_type, `Removing ${label}`)) {
+          if (!event.target.checked && !await confirmScopeLoss(next, report.engagement.test_type, `Remove ${label}`)) {
             event.target.checked = true;
             return;
           }
@@ -1121,6 +1213,16 @@
             textarea.style.height = `${textarea.scrollHeight}px`;
           };
           textarea.oninput = () => { report.scope_text[environment][channel] = textarea.value; grow(); if ([...root.querySelectorAll("#scope-grid textarea")].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) root.querySelectorAll("#scope-grid textarea.validation-error").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
+          textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
+          // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
+          textarea.onchange = async () => {
+            if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) return;
+            if (await confirmScopeTextLoss()) { textarea.dataset.scopeTextBefore = textarea.value; return; }
+            textarea.value = textarea.dataset.scopeTextBefore;
+            report.scope_text[environment][channel] = textarea.value;
+            grow();
+            scheduleSave();
+          };
           if (channel === "mobile") wireSetupRule(textarea, mobileScopeRule, `${environmentLabels[environment]} Mobile scope`);
           label.append(textarea);
           panel.append(label);
@@ -1203,15 +1305,21 @@
     };
     const evidenceIdsIn = finding => new Set((finding.contents || []).flatMap(content => content.fragments || []).filter(fragment => fragment.evidence_id).map(fragment => fragment.evidence_id));
     // Losing an environment's last location strands that environment's evidence, so confirm before dropping it.
-    const settleScopeChange = (finding, previousScope) => {
+    const settleScopeChange = async (finding, previousScope) => {
       const remaining = affectedEnvironments(finding);
       const lost = scopeEnvironments(previousScope).filter(environment => !remaining.includes(environment));
       if (!lost.length) return true;
       const stranded = lost.filter(environment => imagesForEnvironment(finding, environment).some(image => image.evidence_id || image.caption?.trim()));
       if (stranded.length) {
         const names = stranded.map(environmentName).join(" and ");
-        const question = `Remove the ${names} evidence from this finding?\n\nThis finding no longer has a ${names} affected location, so its ${names} screenshots and captions cannot appear in the report.\n\nOK - remove that evidence\nCancel - keep the affected location`;
-        if (!window.confirm(question)) {
+        const agreed = await window.vrDialog.confirm({
+          title: `Remove the ${names} evidence from this finding?`,
+          message: `This finding no longer has a ${names} affected location, so its ${names} screenshots and captions cannot appear in the report.`,
+          confirmLabel: "Remove that evidence",
+          cancelLabel: "Keep the affected location",
+          tone: "danger",
+        });
+        if (!agreed) {
           finding.scope = previousScope;
           return false;
         }
@@ -1230,9 +1338,15 @@
       previousIds.forEach(evidenceId => { if (!stillUsed.has(evidenceId)) delete report.evidence[evidenceId]; });
     };
     // Pulling in a library entry swaps the whole body, so tester work in that finding cannot survive.
-    const replaceFromLibrary = (finding, entry, previousTitle) => {
-      const warning = `Replace this finding with the library version?\n\n"${entry.title}" is saved in the vulnerability library.\n\nUsing it will erase everything written for this finding on the Content page, including any screenshots that were uploaded.\n\nOK - use the library version\nCancel - keep the current content and finding name`;
-      if (!window.confirm(warning)) {
+    const replaceFromLibrary = async (finding, entry, previousTitle) => {
+      const agreed = await window.vrDialog.confirm({
+        title: "Replace this finding with the library version?",
+        message: `"${entry.title}" is saved in the vulnerability library.\n\nUsing it will erase everything written for this finding on the Content page, including any screenshots that were uploaded.`,
+        confirmLabel: "Use the library version",
+        cancelLabel: "Keep the current content",
+        tone: "danger",
+      });
+      if (!agreed) {
         finding.title = previousTitle ?? finding.title;
         syncConclusion(finding);
         renderFindings();
@@ -1247,7 +1361,14 @@
     const applyLibraryEntry = (finding, entry) => {
       Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || "informational", library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}, contents:JSON.parse(JSON.stringify(entry.contents || []))});
       finding.contents.forEach(content => content.fragments.forEach(fragment => { fragment.frag_id = id("f"); }));
+      // A whole-body replace discards the old steps, so forget where they came from before reprovisioning.
+      finding.poc_variant = null;
+      finding.poc_variant_declined = [];
       provision(finding);
+      syncEvidenceImageSlots(finding);
+      const variant = applicablePocVariant(finding);
+      const steps = entry.proof_of_concept?.[variant];
+      if (steps) applyPocVariant(finding, steps, variant);
     };
     const enhanceFindingRows = () => {
       const targetById = new Map(report.scope_targets.map(target => [target.target_id, target]));
@@ -1371,22 +1492,26 @@
           checklist.querySelectorAll(".custom-location").forEach(option => option.remove());
           group.querySelector(".add-location")?.remove();
           const environment = group.dataset.locationGroup;
+          const channels = testTypes[report.engagement.test_type]?.channels || ["web"];
+          // Split the endpoint boxes by app type only when there is more than one; otherwise the channel is implied.
+          channels.forEach(channel => {
           const customEditor = document.createElement("label");
           const customInputWrapper = document.createElement("div");
           const customGutter = document.createElement("div");
           const customInput = document.createElement("textarea");
           const customMeasure = document.createElement("div");
           customEditor.className = "location-lines-editor";
-          customEditor.append(document.createTextNode("Additional affected endpoints"));
+          customEditor.append(document.createTextNode(channels.length > 1 ? `Additional affected ${channel.toUpperCase()} endpoints` : "Additional affected endpoints"));
           customInputWrapper.className = "location-lines-input";
           customGutter.className = "location-lines-gutter";
           customGutter.setAttribute("aria-hidden", "true");
           customInput.className = "location-lines-textarea";
           customInput.dataset.customLocation = environment;
+          customInput.dataset.customChannel = channel;
           customInput.rows = 1;
           customInput.placeholder = "One endpoint per line";
-          customInput.setAttribute("aria-label", `${locationLabels[environment]} affected endpoints`);
-          customInput.value = (finding.scope.custom_locations?.[environment] || []).join("\n");
+          customInput.setAttribute("aria-label", channels.length > 1 ? `${locationLabels[environment]} ${channel.toUpperCase()} affected endpoints` : `${locationLabels[environment]} affected endpoints`);
+          customInput.value = (finding.scope.custom_locations?.[environment]?.[channel] || []).join("\n");
           customMeasure.className = "location-lines-measure";
           customInputWrapper.append(customGutter, customInput, customMeasure);
           const renderCustomGutter = () => renderLineMarkers(customInput, customGutter, customMeasure, line => line.trim() ? "\u2022" : "", "affected-endpoint-marker");
@@ -1398,8 +1523,10 @@
           customInput.oninput = () => {
             const values = customInput.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
             finding.scope.custom_locations ||= {};
-            if (values.length) finding.scope.custom_locations[environment] = values;
-            else delete finding.scope.custom_locations[environment];
+            const byChannel = finding.scope.custom_locations[environment] ||= {};
+            if (values.length) byChannel[channel] = values;
+            else delete byChannel[channel];
+            if (!Object.keys(byChannel).length) delete finding.scope.custom_locations[environment];
             resizeCustomLocations();
             scheduleSave();
           };
@@ -1413,6 +1540,7 @@
           customEditor.append(customInputWrapper);
           group.append(customEditor);
           requestAnimationFrame(resizeCustomLocations);
+          });
         });
         locationRow.querySelectorAll("input.location-value").forEach(input => {
           const textarea = document.createElement("textarea");
@@ -1420,14 +1548,8 @@
           textarea.rows = 1;
           textarea.value = input.value;
           textarea.oninput = () => {
-            if (textarea.dataset.locationValue) {
-              finding.scope.location_values ||= {};
-              finding.scope.location_values[textarea.dataset.locationValue] = textarea.value;
-            } else {
-              finding.scope.custom_locations ||= {};
-              const values = finding.scope.custom_locations[textarea.dataset.customLocation] ||= [];
-              values[Number(textarea.dataset.customIndex)] = textarea.value;
-            }
+            finding.scope.location_values ||= {};
+            finding.scope.location_values[textarea.dataset.locationValue] = textarea.value;
             scheduleSave();
           };
           input.replaceWith(textarea);
@@ -1439,9 +1561,9 @@
         });
       });
     };
-    const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.mode === "custom" ? finding.scope.target_ids : []; const locationValues = finding.scope.location_values || {}; const customLocations = finding.scope.custom_locations || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}${(customLocations[environment] || []).map((value, customIndex) => `<div class="location-option custom-location"><button class="remove-location" type="button" data-remove-location="${environment}" data-custom-index="${customIndex}" aria-label="Remove custom ${locationLabels[environment]} location" title="Remove location">x</button><input class="location-value" data-custom-location="${environment}" data-custom-index="${customIndex}" value="${escape(value)}" aria-label="Custom ${locationLabels[environment]} location"></div>`).join("")}</div><button class="subtle add-location" type="button" data-add-location="${environment}">Add location</button></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
+    const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.mode === "custom" ? finding.scope.target_ids : []; const locationValues = finding.scope.location_values || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
       let titleBeforeEdit = finding.title || "";
-      const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (!entry || finding.library_ref?.library_id === entry.library_id) { clearResults(); return; } if (replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); } }); };
+      const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = async () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (!entry || finding.library_ref?.library_id === entry.library_id) { clearResults(); return; } if (await replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); } }); };
       titleInput.oninput = event => { finding.title = event.target.value; syncConclusion(finding); renderRowResults(); scheduleSave(); }; titleInput.onfocus = () => { titleBeforeEdit = finding.title || ""; renderRowResults(); }; titleInput.onkeydown = event => { if (event.key === "Escape") clearResults(); };
       // A committed title that names a library entry pulls that entry in; any other title is just a rename.
       titleInput.onchange = () => {
@@ -1465,12 +1587,12 @@
         finding.display_id = digits || null;
         scheduleSave();
       };
-      controls[5].onchange = event => {
+      controls[5].onchange = async event => {
         const nextStatus = event.target.value;
         const nextTypes = nextStatus === "open_new" ? ["description", "recommended_remediation", "proof_of_concept"] : ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"];
         const discarded = finding.contents.filter(content => !nextTypes.includes(content.type)).map(content => optionLabel(content.type));
         const replacesRemediation = nextStatus === "resolved" && finding.status !== "resolved";
-        if ((discarded.length || replacesRemediation) && !window.confirm(`Changing status will ${discarded.length ? `discard ${discarded.join(", ")}` : "replace the recommended remediation"}. Continue?`)) {
+        if ((discarded.length || replacesRemediation) && !await window.vrDialog.confirm({title: "Change the status of this finding?", message: `This will ${discarded.length ? `discard ${discarded.join(", ")}` : "replace the recommended remediation"}.`, confirmLabel: "Change the status", cancelLabel: "Keep the current status", tone: "danger"})) {
           event.target.value = finding.status;
           return;
         }
@@ -1478,17 +1600,17 @@
         provision(finding);
         scheduleSave();
       };
-      const updateLocations = () => {
+      const updateLocations = async () => {
         const targetIds = [...locationRow.querySelectorAll("[data-location]:checked")].map(input => input.value);
         const values = {...(finding.scope.location_values || {})};
         targetIds.forEach(targetId => { if (values[targetId] === undefined) values[targetId] = report.scope_targets.find(target => target.target_id === targetId).value; });
         Object.keys(values).forEach(targetId => { if (!targetIds.includes(targetId)) delete values[targetId]; });
         const custom = {};
-        locationRow.querySelectorAll("[data-custom-location]").forEach(input => { const environment = input.dataset.customLocation; const values = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); if (values.length) (custom[environment] ||= []).push(...values); });
+        locationRow.querySelectorAll("[data-custom-location]").forEach(input => { const environment = input.dataset.customLocation; const channel = input.dataset.customChannel; const values = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); if (values.length) ((custom[environment] ||= {})[channel] ||= []).push(...values); });
         locationRow.querySelectorAll("[data-select-all]").forEach(control => { const options = locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`); control.checked = [...options].every(option => option.checked); });
         const previousScope = finding.scope;
         finding.scope = {mode:"custom", target_ids:targetIds, location_values:values, custom_locations:custom};
-        settleScopeChange(finding, previousScope);
+        await settleScopeChange(finding, previousScope);
         renderFindings();
         scheduleSave();
       };
@@ -1496,36 +1618,22 @@
       locationRow.querySelectorAll("[data-location-value]").forEach(input => input.oninput = () => { finding.scope.location_values ||= {}; finding.scope.location_values[input.dataset.locationValue] = input.value; scheduleSave(); });
       locationRow.querySelectorAll("[data-custom-location]").forEach(input => {
         input.onfocus = () => { input.dataset.scopeBeforeEdit = JSON.stringify(finding.scope); };
-        input.oninput = () => { finding.scope.custom_locations ||= {}; const values = finding.scope.custom_locations[input.dataset.customLocation] ||= []; values[Number(input.dataset.customIndex)] = input.value; scheduleSave(); };
         // Clearing the last custom location for an environment drops it, so settle on commit rather than per keystroke.
-        input.onchange = () => {
+        input.onchange = async () => {
           const snapshot = input.dataset.scopeBeforeEdit;
           if (!snapshot) return;
-          if (!settleScopeChange(finding, JSON.parse(snapshot))) { renderFindings(); return; }
+          if (!await settleScopeChange(finding, JSON.parse(snapshot))) { renderFindings(); return; }
           scheduleSave();
         };
       });
-      locationRow.querySelectorAll("[data-add-location]").forEach(button => button.onclick = () => { const environment = button.dataset.addLocation; finding.scope.custom_locations ||= {}; (finding.scope.custom_locations[environment] ||= []).push(""); renderFindings(); locationRow.querySelector(`[data-custom-location="${environment}"]:last-child`)?.focus(); scheduleSave(); });
-      locationRow.querySelectorAll("[data-remove-location]").forEach(button => button.onclick = () => {
-        const previousScope = JSON.parse(JSON.stringify(finding.scope));
-        const values = finding.scope.custom_locations?.[button.dataset.removeLocation] || [];
-        values.splice(Number(button.dataset.customIndex), 1);
-        settleScopeChange(finding, previousScope);
-        renderFindings();
-        scheduleSave();
-      });
       locationRow.querySelectorAll("[data-select-all]").forEach(control => control.onchange = () => { locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`).forEach(option => { option.checked = control.checked; }); updateLocations(); });
       // Deleting a finding takes its content and screenshots with it, so it needs the same guard as a library replace.
-      row.querySelector("button").onclick = () => {
+      row.querySelector("button").onclick = async () => {
         const evidenceCount = evidenceIdsIn(finding).size;
-        const hasContent = fragment => fragmentHasText(fragment)
-          || (fragment.items || []).some(item => (item.runs || []).some(run => run.text?.trim()))
-          || [...(fragment.header || []), ...(fragment.rows || []).flat()].some(cell => (cell.runs || []).some(run => run.text?.trim()))
-          || fragment.text?.trim() || fragment.caption?.trim() || fragment.evidence_id;
-        const written = finding.contents?.some(content => (content.fragments || []).some(hasContent));
+        const written = finding.contents?.some(content => (content.fragments || []).some(fragmentHasContent));
         const label = finding.title?.trim() || "this untitled finding";
         const losses = [written && "everything written on the Content page", evidenceCount && `${evidenceCount} uploaded screenshot${evidenceCount === 1 ? "" : "s"}`].filter(Boolean);
-        if (losses.length && !window.confirm(`Delete ${label}?\n\nThis also removes ${losses.join(" and ")}.\n\nOK - delete the finding\nCancel - keep it`)) return;
+        if (losses.length && !await window.vrDialog.confirm({title: `Delete ${label}?`, message: `This also removes ${losses.join(" and ")}.`, confirmLabel: "Delete the finding", cancelLabel: "Keep it", tone: "danger"})) return;
         const previousEvidence = evidenceIdsIn(finding);
         report.vulnerabilities.splice(index, 1);
         dropUnreferencedEvidence(previousEvidence);
@@ -1958,11 +2066,6 @@
     let expandedContentTypes;
     let engagementContextOpen = false;
     const libraryMatches = query => library.filter(entry => entry.title.toLowerCase().includes(query.toLowerCase()) || entry.tags.join(" ").toLowerCase().includes(query.toLowerCase()));
-    const applyLibraryEntry = (finding, entry) => {
-      Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || "informational", library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}, contents:JSON.parse(JSON.stringify(entry.contents || []))});
-      finding.contents.forEach(content => content.fragments.forEach(fragment => { fragment.frag_id = id("f"); }));
-      provision(finding);
-    };
     const ordered = () => report.vulnerabilities.slice().sort((left, right) => severity.indexOf(left.severity) - severity.indexOf(right.severity) || left.title.localeCompare(right.title));
     const updateReadinessPanel = () => {
       const panel = document.querySelector("#editor-notifications");
@@ -2127,7 +2230,7 @@
           const target = targetsById.get(targetId);
           if (target) locationsByEnvironment[target.environment].push(finding.scope.location_values?.[targetId] || target.value);
         });
-        if (finding.scope?.mode === "custom") Object.entries(finding.scope?.custom_locations || {}).forEach(([environment, locations]) => locationsByEnvironment[environment]?.push(...locations.filter(value => value.trim())));
+        if (finding.scope?.mode === "custom") Object.entries(finding.scope?.custom_locations || {}).forEach(([environment, byChannel]) => locationsByEnvironment[environment]?.push(...Object.values(byChannel || {}).flat().filter(value => value.trim())));
         const locationGroups = [["production", "Production"], ["non_production", "Non-Production"]]
           .filter(([environment]) => locationsByEnvironment[environment].length)
           .map(([environment, label]) => `<span><em>${label}</em><b>${locationsByEnvironment[environment].map(escape).join(", ")}</b></span>`)
@@ -2197,6 +2300,31 @@
             guidance.className = "content-guidance";
             guidance.textContent = "Include a brief justification or explanation.";
             block.append(guidance);
+          }
+          if (content.type === "proof_of_concept") {
+            const variant = applicablePocVariant(finding);
+            const steps = pocStepsFor(finding, variant);
+            // Derived from current state, so it survives a reload and can never double-fire or leak a missed event.
+            if (steps && finding.poc_variant !== variant && !(finding.poc_variant_declined || []).includes(variant)) {
+              const written = content.fragments.some(fragment => fragment.type !== "image" && fragmentHasContent(fragment));
+              const banner = document.createElement("div");
+              banner.className = "poc-offer";
+              banner.dataset.pocOffer = variant;
+              const message = document.createElement("p");
+              message.textContent = `Saved ${testTypes[variant].label} steps are available for this finding.`;
+              const accept = document.createElement("button");
+              accept.type = "button";
+              accept.className = "primary";
+              accept.textContent = written ? "Use saved steps" : "Fill from library";
+              accept.onclick = () => { applyPocVariant(finding, steps, variant); render(); scheduleSave(); };
+              const refuse = document.createElement("button");
+              refuse.type = "button";
+              refuse.className = "subtle";
+              refuse.textContent = written ? "Keep mine" : "Dismiss";
+              refuse.onclick = () => { (finding.poc_variant_declined ||= []).push(variant); render(); scheduleSave(); };
+              banner.append(message, accept, refuse);
+              block.append(banner);
+            }
           }
           const appendFragmentMenu = () => {
             const menu = document.createElement("select");

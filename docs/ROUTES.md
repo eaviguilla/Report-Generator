@@ -47,9 +47,13 @@ same change.
 | POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder |
 | POST | `/reports/import` | Validate/import a ZIP or evidence-free legacy JSON with a new report ID |
 | GET | `/library/search?q=` | Search the offline vulnerability library |
-| POST | `/reports/{id}/library/{library_id}` | Insert a library finding |
+| POST | `/reports/{id}/library/{library_id}` | Insert a library finding, with the proof-of-concept steps matching the finding's app types |
 | POST | `/reports/{id}/evidence` | Validate, normalize, and store an image |
 | GET | `/reports/{id}/evidence/{evidence_id}` | Serve stored evidence |
+
+The vulnerability library is `resources/vuln_library.json`, resolved from `prefs.library_path`. It is loaded once at import, **before the app object exists**, so `Library.load_or_empty` is used: an unreadable or invalid library leaves search empty and records why in `library.load_error` rather than stopping the app from starting.
+
+A local-only library editor mounts at `/library-editor` when `VULNREPORT_LIBRARY_EDITOR` is set **and** `app/library_editor.py` is present. Both that module and its template are deliberately untracked, so the routes do not exist in a fresh clone and nothing in tracked code links to them. Every write is validated by loading the exact bytes through `Library` in a temporary file before it replaces the real one.
 
 DOCX generation uses `resources/MAIN_TEST.docx` as the canonical template, then
 composes severity-title, finding-type, and fragment documents. A template

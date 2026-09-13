@@ -66,9 +66,9 @@ Two browser-side values are read off `window` rather than the environment:
 `VULNREPORT_AUTOSAVE_INTERVAL_MS` (default 5000 ms, floor 100 ms).
 
 The vulnerability library path comes from `prefs.library_path`. A relative value
-resolves against the project root, and the single legacy value
-`library/vuln_library.json` falls back to `vuln_library.json` when the original
-path is missing.
+resolves against the project root. When that path is not a file the loader falls
+back to `resources/vuln_library.json`, creating the directory and seeding the
+file if it is missing.
 
 ## Implemented Features
 
@@ -240,13 +240,12 @@ app/web/static/manager.js    Report manager interactions
 app/web/static/app.css       Legacy base styles
 app/web/static/overrides.css Active workflow styling overrides
 app/web/static/manager.css   Report manager styling
-vuln_library.json            Offline vulnerability library
+resources/vuln_library.json  Offline vulnerability library
 resources/MAIN_TEST.docx     Canonical Word report template
 resources/severity_titles/   Severity grouping components
 resources/finding_types/     Status-specific finding components
 resources/fragments/         Content fragment components
 scripts/generate_report.py   Command-line DOCX generator
-scripts/html_to_fragments.py Offline vulnerability-library converter
 scripts/postprocess_captions.py DOCX caption post-processor
 scripts/compose_component_test.py DOCX component proof generator
 docs/                        Architecture, routes, form-state, and DOCX notes

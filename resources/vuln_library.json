@@ -50,7 +50,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Reference: https://genai.owasp.org/llmrisk/llm092025-misinformation/"
+                  "text": "Reference:\nhttps://genai.owasp.org/llmrisk/llm092025-misinformation/"
                 }
               ]
             }
@@ -1395,7 +1395,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Reference: https://genai.owasp.org/llmrisk/llm072025-system-prompt-leakage/"
+                  "text": "Reference:\nhttps://genai.owasp.org/llmrisk/llm072025-system-prompt-leakage/"
                 }
               ]
             }
@@ -1929,7 +1929,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Reference: https://genai.owasp.org/llmrisk/llm072025-system-prompt-leakage/"
+                  "text": "Reference:\nhttps://genai.owasp.org/llmrisk/llm072025-system-prompt-leakage/"
                 }
               ]
             }

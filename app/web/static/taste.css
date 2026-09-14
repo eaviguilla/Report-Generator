@@ -136,7 +136,7 @@ body::before {
   left: 8px;
   padding: 8px 12px;
   border: 1px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: #fff;
   background: var(--accent-strong);
   transform: translateY(-150%);
@@ -157,7 +157,7 @@ body::before {
   padding: 16px;
   border: 1px solid #e4b8bd;
   border-left: 4px solid var(--danger);
-  border-radius: 5px;
+  border-radius: var(--radius);
   color: var(--ink);
   background: var(--surface-raised);
   box-shadow: 0 18px 48px rgba(66, 27, 32, 0.18);
@@ -211,7 +211,7 @@ body::before {
   margin: 0;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--canvas);
   font-size: 10px;
 }
@@ -283,7 +283,6 @@ body > header.app-header {
   width: 27px;
   height: 27px;
   border: 1px solid #0c5752;
-  border-radius: 5px;
   background: var(--accent);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
   font-family: "Bahnschrift", sans-serif !important;
@@ -321,7 +320,7 @@ img.brand-mark {
   width: 30px;
   min-height: 30px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--ink-soft);
   font-size: 18px;
   transition: color 150ms ease, background 150ms ease, border-color 150ms ease, transform 100ms ease;
@@ -337,7 +336,7 @@ img.brand-mark {
   height: 30px;
   padding: 0 12px;
   border-color: var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   font-size: 11px;
 }
@@ -393,7 +392,7 @@ img.brand-mark {
   width: 20px;
   height: 20px;
   border-color: var(--line-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   background: transparent;
   font-family: "Cascadia Code", Consolas, monospace !important;
@@ -504,7 +503,6 @@ select,
 textarea,
 .rich {
   border-color: var(--line-strong);
-  border-radius: 3px;
   color: var(--ink);
   background: var(--surface-field);
   font-size: 13px;
@@ -724,7 +722,7 @@ label,
 #setup .scope-panel {
   padding: 16px;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius);
   background: var(--surface-raised);
 }
 
@@ -783,7 +781,7 @@ label,
 #library-results,
 .row-library-results {
   border-color: var(--line-strong);
-  border-radius: 4px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 
@@ -887,7 +885,7 @@ button.finding-title-display:hover:not(:disabled) span {
 
 #finding-summary b {
   padding: 3px 7px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
 }
 
@@ -973,7 +971,6 @@ button.finding-title-display:hover:not(:disabled) span {
   margin: 0 0 5px;
   padding: 11px 10px !important;
   border-left-width: 3px;
-  border-radius: 3px;
   color: var(--ink) !important;
   background: transparent;
 }
@@ -1021,7 +1018,7 @@ button.finding-nav.active:not(:disabled)::after {
   right: 0;
   bottom: 0;
   width: 3px;
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--accent);
   content: "";
 }
@@ -1057,7 +1054,6 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   /* clip, not hidden: hidden would make the card a scroll container and kill the sticky headers. */
   overflow: clip;
   border: 1px solid var(--line-strong);
-  border-radius: 5px;
   background: var(--surface-raised);
   box-shadow: var(--shadow);
 }
@@ -1094,7 +1090,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 
 .finding-assessment b {
   padding: 4px 7px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
 }
 
@@ -1174,7 +1170,6 @@ button.content-toggle:hover:not(:disabled) small {
   padding: 18px;
   border: 1px solid var(--line);
   border-left: 3px solid var(--line-strong);
-  border-radius: 4px;
   background: var(--surface-raised);
 }
 
@@ -1189,7 +1184,7 @@ button.content-toggle:hover:not(:disabled) small {
 
 .tag {
   padding: 3px 7px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   color: var(--ink-soft);
   background: var(--canvas-deep);
   font-size: 11px;
@@ -1206,7 +1201,6 @@ button.content-toggle:hover:not(:disabled) small {
 .add-fragment {
   min-height: 42px;
   border-color: var(--line-strong);
-  border-radius: 3px;
   color: var(--accent-strong);
   background: var(--accent-faint);
 }
@@ -1220,16 +1214,17 @@ button.content-toggle:hover:not(:disabled) small {
 
 .evidence-set {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
+  gap: 10px;
 }
 
+/* Screenshots read as a numbered register rather than a card grid: the caption is the widest
+   thing in the row because the caption is the part the tester still has to write. */
 .evidence-tile {
   display: grid;
-  grid-template-rows: auto auto;
+  grid-template-columns: 34px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-raised);
   box-shadow: var(--shadow-small);
 }
@@ -1243,79 +1238,25 @@ button.content-toggle:hover:not(:disabled) small {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-.evidence-stage {
-  position: relative;
+/* The number is both the position and the drag grip, with the two nudges under it. */
+.evidence-spine {
   display: grid;
-  height: 190px;
   align-content: center;
   justify-items: center;
-  gap: 8px;
-  padding: 12px;
+  gap: 2px;
+  padding: 8px 0;
+  border-right: 1px solid var(--line);
   background: var(--canvas-deep);
 }
 
-.evidence-stage .image-preview {
-  /* Overrides the legacy fixed 88x66 thumbnail so the whole screenshot is shown, not a crop of it. */
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 166px;
-  border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  background: var(--surface-raised);
-  object-fit: contain;
-}
-
-.evidence-drop {
-  display: grid;
-  justify-items: center;
-  gap: 3px;
-  color: var(--muted);
-  cursor: pointer;
-  text-align: center;
-}
-
-.evidence-drop b {
-  color: var(--ink);
-  font-size: 12px;
-}
-
-.evidence-drop small {
-  font-size: 10px;
-}
-
-.evidence-paste-hint {
-  margin: 0;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.3;
-  text-align: center;
-  cursor: pointer;
-}
-
-/* The position control is the one thing a tester reaches for repeatedly, so it stays visible. */
-.evidence-order {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-small);
-}
-
 .evidence-order-number {
-  min-width: 22px;
-  padding: 0 2px;
+  min-width: 20px;
   color: var(--ink);
   cursor: grab;
   font-family: "Cascadia Code", Consolas, monospace !important;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 24px;
+  line-height: 20px;
   text-align: center;
 }
 
@@ -1323,107 +1264,186 @@ button.content-toggle:hover:not(:disabled) small {
   cursor: grabbing;
 }
 
-.evidence-order button {
+.evidence-spine button {
   width: 22px;
   min-width: 22px;
-  min-height: 24px;
+  min-height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 0;
-  color: var(--ink-soft);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
   background: transparent;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1;
 }
 
-.evidence-order button:hover:not(:disabled) {
+.evidence-spine button:hover:not(:disabled) {
   color: var(--accent-strong);
   background: var(--accent-soft);
 }
 
-.evidence-order button:disabled {
+.evidence-spine button:disabled {
   color: var(--muted-light);
   opacity: 1;
 }
 
-.evidence-tools {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.12s ease-out;
+.evidence-main {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  min-width: 0;
 }
 
-.evidence-tile:hover .evidence-tools,
-.evidence-tile:focus-within .evidence-tools {
-  opacity: 1;
-}
-
-.evidence-tools > * {
-  display: inline-flex;
-  min-height: 24px;
-  align-items: center;
-  padding: 0 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  background: var(--surface-raised);
+.evidence-thumb {
+  display: grid;
+  min-height: 100px;
+  place-content: center;
+  justify-items: center;
+  gap: 5px;
+  padding: 10px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--muted);
+  background: var(--canvas-deep);
   cursor: pointer;
-  font-size: 10px;
-  font-weight: 600;
+  text-align: center;
 }
 
-.evidence-tools .evidence-replace {
+.evidence-thumb:hover {
   color: var(--accent-strong);
-}
-
-.evidence-tools .evidence-replace:hover {
-  border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.evidence-tile-body {
+.evidence-thumb svg {
+  color: var(--muted-light);
+}
+
+.evidence-thumb:hover svg {
+  color: var(--accent);
+}
+
+.evidence-thumb span {
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.evidence-thumb .image-preview {
+  /* Overrides the legacy fixed 88x66 thumbnail so the whole screenshot is shown, not a crop of it. */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 92px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: var(--surface-raised);
+  object-fit: contain;
+}
+
+.evidence-meta {
   display: grid;
-  gap: 8px;
-  padding: 10px 12px 12px;
+  align-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 11px;
 }
 
-.evidence-tile-body .evidence-caption {
+.evidence-caption {
   width: 100%;
-  font-size: 12px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 500;
 }
 
-.evidence-tile-foot {
+.evidence-caption:hover {
+  border-color: var(--line);
+}
+
+.evidence-caption:focus {
+  border-color: var(--accent);
+  background: var(--surface-field);
+}
+
+.evidence-caption::placeholder {
+  color: var(--muted-light);
+  font-weight: 400;
+}
+
+.evidence-facts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
-.evidence-tile-foot .evidence-environment {
-  min-height: 26px;
-  padding: 2px 6px;
-  font-size: 11px;
+.evidence-facts .evidence-environment {
+  min-height: 24px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
 }
 
 .evidence-size {
-  margin-left: auto;
   color: var(--muted);
   font-family: "Cascadia Code", Consolas, monospace !important;
-  font-size: 9px;
+  font-size: 10px;
   white-space: nowrap;
 }
 
-.evidence-add {
+.evidence-acts {
+  display: flex;
+  margin-left: auto;
+  gap: 2px;
+}
+
+.evidence-acts > * {
   display: grid;
-  min-height: 190px;
-  align-content: center;
-  justify-items: center;
-  gap: 3px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   background: transparent;
-  text-align: center;
+  cursor: pointer;
+}
+
+.evidence-acts > *:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--canvas-deep);
+}
+
+.evidence-acts .danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.evidence-acts .danger:disabled {
+  color: var(--muted-light);
+  cursor: default;
+  opacity: 1;
+}
+
+.evidence-add {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 600;
 }
 
 .evidence-add:hover:not(:disabled) {
@@ -1432,23 +1452,40 @@ button.content-toggle:hover:not(:disabled) small {
   background: var(--accent-soft);
 }
 
-.evidence-add b {
-  color: inherit;
-  font-size: 12px;
-}
-
-.evidence-add small {
-  font-size: 10px;
-  font-weight: 400;
-}
-
 .evidence-fragment {
   border-left-color: var(--line-strong);
 }
 
+/* A review jump can land among several identical cards, so the one it meant stays ringed until
+   the tester clicks into it. The ring says where; the red borders below say what. */
+.is-review-target {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 0 3px var(--accent);
+  animation: review-target-arrive 420ms ease-out;
+}
+
+/* Every field the readiness panel is still waiting on, not just the one last jumped to.
+   :placeholder-shown drops the red the moment a character is typed, without waiting for a save. */
+.is-incomplete input:placeholder-shown,
+.is-incomplete textarea:placeholder-shown,
+.is-incomplete .rich:empty,
+.is-incomplete .evidence-environment.is-unset {
+  border-color: var(--danger);
+}
+
+.evidence-tile.is-incomplete:not(.has-evidence) .evidence-thumb {
+  box-shadow: inset 0 0 0 1px var(--danger);
+}
+
+@keyframes review-target-arrive {
+  from {
+    box-shadow: 0 0 0 11px var(--accent-soft), 0 0 0 3px var(--accent);
+  }
+}
+
 .evidence-environment-value {
   border-color: var(--line);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: var(--ink-soft);
   background: var(--canvas-deep);
 }
@@ -1483,9 +1520,13 @@ button.content-toggle:hover:not(:disabled) small {
 }
 
 .review-heading b {
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--muted);
   font-size: 11px;
+}
+
+#issue-count[data-state="issues"] {
+  background: var(--danger);
 }
 
 #issue-count[data-state="ready"] {
@@ -1512,21 +1553,19 @@ button.content-toggle:hover:not(:disabled) small {
   color: var(--muted);
 }
 
-/* An unchecked marker, not an alert: these are details the tester has yet to supply. */
 .review-group .review-icon {
   width: 13px;
   height: 13px;
   margin-top: 1px;
-  border: 1.5px solid var(--line-strong);
-  color: transparent;
-  background: transparent;
+  border: 0;
+  color: #fff;
+  background: var(--danger);
   font-size: 9px;
 }
 
 .review-group .review-item[data-level="warning"] .review-icon {
-  border-color: var(--warning);
-  color: var(--warning);
-  background: transparent;
+  color: #fff;
+  background: var(--warning);
 }
 
 .review-group .review-item button {
@@ -1541,12 +1580,12 @@ button.content-toggle:hover:not(:disabled) small {
   background: transparent;
 }
 
-/* A quiet rail marks the card as unfinished; red would read as something the app got wrong. */
+/* Red earns a scannable rail down the left edge instead of flooding the card. */
 .review-group {
   overflow: hidden;
   margin-bottom: 8px;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--line-strong);
+  border-left: 3px solid var(--danger);
   border-radius: var(--radius);
   background: var(--surface-raised);
 }
@@ -1594,6 +1633,15 @@ button.content-toggle:hover:not(:disabled) small {
   color: var(--muted);
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Each half of the count carries its own verdict, so neither hides behind a neutral grey. */
+.review-group-count b[data-level="error"] {
+  color: var(--danger);
+}
+
+.review-group-count b[data-level="warning"] {
+  color: var(--warning);
 }
 
 .review-empty {
@@ -1707,7 +1755,7 @@ button.content-toggle:hover:not(:disabled) small {
 .report-list {
   overflow: hidden;
   border-color: var(--line-strong);
-  border-radius: 5px;
+  border-radius: var(--radius);
   background: var(--surface-raised);
   box-shadow: var(--shadow);
 }
@@ -1985,8 +2033,13 @@ body > main {
     padding-inline: 14px;
   }
 
-  .evidence-set {
+  .evidence-main {
     grid-template-columns: 1fr;
+  }
+
+  .evidence-thumb {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 
   .evidence-caption {
@@ -2033,8 +2086,9 @@ body > main {
   }
 }
 
-/* GitHub radius scale, applied once at the component layer.
-   Legacy 3/4/5px values scattered through overrides.css are superseded here. */
+/* GitHub radius scale, applied once at the component layer. Two steps only:
+   var(--radius-sm) for controls, chips and inline affordances, var(--radius) for containers.
+   Legacy 2/3/4/5px values scattered through overrides.css are superseded here. */
 button,
 .primary,
 .back-link,
@@ -2213,7 +2267,7 @@ textarea,
   min-height: 0;
   padding: 0 2px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
   font-size: inherit;
@@ -2252,7 +2306,7 @@ textarea,
   gap: 10px;
   padding: 64px 24px;
   border: 1px dashed var(--line-strong);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--accent-faint);
   text-align: center;
 }
@@ -2287,7 +2341,7 @@ textarea,
   align-items: center;
   gap: 2px;
   padding: 4px 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;

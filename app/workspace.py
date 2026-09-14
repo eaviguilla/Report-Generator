@@ -14,7 +14,7 @@ from typing import Iterator
 from pydantic import ValidationError
 
 from app.models import Engagement, FolderHint, Report
-from .report_service import REPORT_TYPE_LABELS
+from .report_service import REPORT_TYPE_LABELS, RESOLVED_REMEDIATION
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 
 INVALID_NAME = re.compile(r'[<>:"/\\|?*]+')
@@ -275,6 +275,22 @@ class Workspace:
                 for fragment in content.get("fragments", []):
                     if fragment.get("type") in {"numbered_list", "bulleted_list"} and not fragment.get("items"):
                         fragment["items"] = [{"runs": []}]
+                        repaired = True
+                # Boilerplate written before the marker existed. While resolved it can only be ours,
+                # since the editor locks that section; on a reopened finding it is damage from the
+                # era when nothing removed it, and it would ship claiming a fix that never happened.
+                if content.get("type") == "recommended_remediation":
+                    fragments = content.get("fragments", [])
+                    stale = (
+                        len(fragments) == 1
+                        and not fragments[0].get("generated")
+                        and "".join(run.get("text", "") for run in fragments[0].get("runs", [])).strip() == RESOLVED_REMEDIATION
+                    )
+                    if stale and vulnerability.get("status") == "resolved":
+                        fragments[0]["generated"] = "resolved_remediation"
+                        repaired = True
+                    elif stale:
+                        fragments[0]["runs"] = []
                         repaired = True
         if repaired:
             atomic_write_json(path, draft)

@@ -70,7 +70,7 @@ class ParagraphFragment(BaseModel):
     frag_id: StableId
     type: Literal["paragraph"]
     runs: list[Run] = Field(default_factory=list)
-    generated: Literal["status_conclusion"] | None = None
+    generated: Literal["status_conclusion", "resolved_remediation"] | None = None
 
 
 class ListItem(BaseModel):

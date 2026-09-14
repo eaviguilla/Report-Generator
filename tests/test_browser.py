@@ -545,14 +545,14 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.locator(".evidence-tile").first.wait_for(timeout=5_000)
-        self.assertTrue(page.locator(".evidence-paste-hint").first.is_visible(), "an empty slot must say how to paste")
+        self.assertIn("paste", page.locator(".evidence-thumb").first.inner_text().lower(), "an empty slot must say how to paste")
         self.paste_png(".evidence-tile")
         page.locator(".image-preview").first.wait_for(timeout=5_000)
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
 
         page.reload()
         self.assertEqual(page.locator(".image-preview").count(), 1)
-        self.assertEqual(page.locator(".evidence-paste-hint").count(), 0, "the hint stayed on a filled slot")
+        self.assertEqual(page.locator(".evidence-thumb span").count(), 0, "the prompt stayed on a filled slot")
 
     def test_pasting_with_nothing_focused_fills_the_first_empty_slot(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -566,6 +566,38 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
         self.assertEqual(proof.locator(".image-preview").count(), 1)
+
+    def test_leaving_a_page_mid_upload_keeps_the_screenshot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=8_000)
+        # Holds the upload open so Previous is clicked while the POST is still in flight.
+        page.evaluate(
+            """() => {
+                const original = window.fetch;
+                window.fetch = (url, options) => String(url).endsWith("/evidence") && options?.method === "POST"
+                    ? new Promise(resolve => setTimeout(() => resolve(original(url, options)), 1500))
+                    : original(url, options);
+            }"""
+        )
+        image_data = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        page.locator('input[type="file"]').first.set_input_files({"name": "proof.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
+        page.wait_for_selector("#save-button[data-save-state='saving']", timeout=5_000)
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url(f"{self.base_url}/reports/{report_id}/findings", timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        referenced = [
+            fragment.evidence_id
+            for finding in saved.vulnerabilities
+            for content in finding.contents
+            for fragment in content.fragments
+            if getattr(fragment, "evidence_id", None)
+        ]
+        self.assertEqual(len(saved.evidence), 1, "navigating away dropped the upload")
+        self.assertEqual(referenced, list(saved.evidence), "the uploaded image is referenced by no fragment")
 
     def test_each_affected_environment_requires_an_image_and_allows_more(self) -> None:
         report_id = self.ready_report(include_finding=True)

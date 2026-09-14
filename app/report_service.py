@@ -17,6 +17,7 @@ REPORT_TYPE_LABELS = {
 }
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._@\\-]*[A-Za-z0-9])?$")
+RESOLVED_REMEDIATION = "None, the vulnerability has been remediated."
 CHARACTER_NAMES = {
     " ": "space", "\t": "tab", "\n": "line feed", "\r": "carriage return",
     "!": "exclamation mark", '"': "double quote", "#": "number sign", "$": "dollar sign",
@@ -190,9 +191,18 @@ def provision(vulnerability: Vulnerability) -> None:
     for content in vulnerability.contents:
         if content.type.endswith("proof_of_concept"):
             ensure_proof_steps(content)
+    remediation = next(content for content in vulnerability.contents if content.type == "recommended_remediation")
     if vulnerability.status == "resolved":
-        remediation = next(content for content in vulnerability.contents if content.type == "recommended_remediation")
-        remediation.fragments = [ParagraphFragment.model_validate({"frag_id": f"f_{uuid.uuid4().hex[:8]}", "type": "paragraph", "runs": [{"text": "None, the vulnerability has been remediated."}]})]
+        remediation.fragments = [ParagraphFragment(
+            frag_id=f"f_{uuid.uuid4().hex[:8]}",
+            type="paragraph",
+            runs=[Run(text=RESOLVED_REMEDIATION)],
+            generated="resolved_remediation",
+        )]
+    else:
+        # Reopening a finding leaves boilerplate describing a remediation that no longer happened.
+        kept = [fragment for fragment in remediation.fragments if getattr(fragment, "generated", None) != "resolved_remediation"]
+        remediation.fragments = kept or [ParagraphFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="paragraph", runs=[])]
     conclusion = next((content for content in vulnerability.contents if content.type == "in_conclusion"), None)
     if conclusion is not None:
         status = "Resolved" if vulnerability.status == "resolved" else "Open"

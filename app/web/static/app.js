@@ -94,6 +94,8 @@
   const allowed = {description:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], recommended_remediation:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], previous_proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], in_conclusion:["paragraph","note"]};
   // Twin of docx_report.generation_issues; these two carry the finding, so neither is ever left empty.
   const requiresFragment = ["description", "recommended_remediation"];
+  // Twin of report_service.RESOLVED_REMEDIATION.
+  const RESOLVED_REMEDIATION = "None, the vulnerability has been remediated.";
   let autoSaveTimer;
   const autoSaveDelay = Math.max(100, Number(window.VULNREPORT_AUTOSAVE_IDLE_MS ?? window.VULNREPORT_AUTOSAVE_INTERVAL_MS) || 5000);
   let localDraftTimer;
@@ -676,6 +678,16 @@
     })();
     return saveInFlight;
   }
+  // Uploads and library inserts reach the server outside the ordinary save, so `save()` reports
+  // nothing pending while one is in flight. Navigation waits on this instead of stranding it.
+  let pendingMutation = null;
+  function trackMutation(start) {
+    const task = start();
+    const settled = task.catch(() => {});
+    pendingMutation = settled;
+    settled.then(() => { if (pendingMutation === settled) pendingMutation = null; });
+    return task;
+  }
   document.querySelector("#save-button")?.addEventListener("click", () => {
     if (document.querySelector("#save-button")?.dataset.action === "resolve") {
       document.querySelector("#app-diagnostics")?.focus({preventScroll:true});
@@ -729,6 +741,7 @@
     if (!document.querySelector("#editor") && !validateCurrentPage(true)) {
       return;
     }
+    if (pendingMutation) await pendingMutation;
     if (await save()) window.location.assign(link.dataset.href);
   }));
   const undo = async () => {
@@ -859,7 +872,13 @@
       required[content.type].forEach(type => { if (!present.has(type)) content.fragments.push(newFragment(type)); });
     });
     vulnerability.contents.forEach(content => { if (content.type.endsWith("proof_of_concept")) ensureProofSteps(content); });
-    if (vulnerability.status === "resolved") { const remediation = vulnerability.contents.find(content => content.type === "recommended_remediation"); remediation.fragments = [{frag_id:id("f"),type:"paragraph",runs:[{text:"None, the vulnerability has been remediated."}]}]; }
+    const remediation = vulnerability.contents.find(content => content.type === "recommended_remediation");
+    if (vulnerability.status === "resolved") remediation.fragments = [{frag_id:id("f"), type:"paragraph", generated:"resolved_remediation", runs:[{text:RESOLVED_REMEDIATION}]}];
+    else {
+      // Reopening a finding leaves boilerplate describing a remediation that no longer happened.
+      const kept = remediation.fragments.filter(fragment => fragment.generated !== "resolved_remediation");
+      remediation.fragments = kept.length ? kept : [newFragment("paragraph")];
+    }
     syncConclusion(vulnerability);
     syncEvidenceImageSlots(vulnerability);
   }
@@ -971,6 +990,21 @@
   const pocStepsFor = (finding, variant) => libraryEntryFor(finding)?.proof_of_concept?.[variant] || null;
   // A library entry's description/recommended_remediation fragments, for the Content-page offer.
   const libraryContentFor = (entry, type) => entry?.contents?.find(content => content.type === type)?.fragments || [];
+  // Single owner of "which sections still have an unanswered library offer", so the Content-page
+  // banners and the review panel can never disagree about what is outstanding.
+  const pendingLibraryOffers = finding => {
+    const entry = libraryEntryFor(finding);
+    if (!entry) return [];
+    const offers = ["description", "recommended_remediation"]
+      .filter(type => !(finding.status === "resolved" && type === "recommended_remediation"))
+      .filter(type => finding.content_offer_resolved?.[type] !== entry.library_id)
+      .filter(type => libraryContentFor(entry, type).length)
+      .map(type => ({type, entry}));
+    const variants = applicablePocVariants(finding)
+      .filter(variant => !(finding.poc_variants || []).includes(variant) && !(finding.poc_variant_declined || []).includes(variant));
+    if (variants.length) offers.push({type:"proof_of_concept", entry, variants});
+    return offers;
+  };
   // Initializes the setup page's engagement metadata, coverage, and scope controls.
   function setup() {
     const environmentLabels = {production:"Production", non_production:"Non-Production"};
@@ -1762,7 +1796,7 @@
       const matches = libraryMatches(query);
       results.innerHTML = matches.map(entry => libraryOptionMarkup(entry, true)).join("");
       search.setAttribute("aria-expanded", String(matches.length > 0));
-      results.querySelectorAll("[data-id]").forEach(item => item.onclick = async () => {
+      results.querySelectorAll("[data-id]").forEach(item => item.onclick = () => trackMutation(async () => {
         try {
           setSaveState(SAVE_STATES.SAVING, "Adding...");
           if (!(await save("Adding..."))) return;
@@ -1785,7 +1819,7 @@
           if (error.status === 409) markSaveConflict(error, "insert_library");
           else showOperationError(error, "insert_library", "Unable to add finding");
         }
-      });
+      }));
     };
     search.oninput = renderLibraryResults;
     search.onfocus = renderLibraryResults;
@@ -1859,6 +1893,7 @@
     document.querySelector("#next").onclick = async event => {
       event.preventDefault();
       if (!validateCurrentPage(true)) return;
+      if (pendingMutation) await pendingMutation;
       const saved = await save();
       if (saved && document.querySelector("#save-button").dataset.saveState === SAVE_STATES.SAVED) {
         const nextPage = root.dataset.step === "setup" ? "findings" : "edit";
@@ -1868,6 +1903,14 @@
   }
   // Creates the minimum valid data structure for a requested fragment type.
   function newFragment(type) { const fragment = {frag_id:id("f"),type}; if (type === "paragraph" || type === "note") fragment.runs = []; else if (type.endsWith("list")) fragment.items = [{runs:[]}]; else if (type === "table") Object.assign(fragment,{header:[{runs:[]}],rows:[[{runs:[]}]]}); else if (type === "image") Object.assign(fragment,{evidence_id:null,caption:"",width_mm:null}); else if (type === "code_block") Object.assign(fragment,{caption:null,text:""}); else fragment.text=""; return fragment; }
+  const EVIDENCE_ICONS = {
+    image: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m3 15 4.5-4.5a2 2 0 0 1 2.8 0L15 15"/><circle cx="15.5" cy="8.5" r="1.2"/></svg>',
+    earlier: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
+    later: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+    replace: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',
+    browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
+    remove: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M9 6V4h6v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
+  };
   // One screenshot in an evidence set. Order is the fragment order, so the position control writes
   // straight into content.fragments and the report comes out in the order the tiles are shown.
   function renderEvidenceTile(fragment, content, rerender, finding, position) {
@@ -1883,7 +1926,7 @@
     upload.id = `${fragment.frag_id}-upload`;
     upload.hidden = true;
 
-    const uploadImage = async selectedFile => {
+    const uploadImage = selectedFile => trackMutation(async () => {
       if (!selectedFile) return;
       const formData = new FormData();
       formData.append("file", selectedFile);
@@ -1905,7 +1948,7 @@
         if (error.status === 409) markSaveConflict(error, "upload_evidence");
         else showOperationError(error, "upload_evidence", "Upload failed");
       }
-    };
+    });
     upload.onchange = () => uploadImage(upload.files?.[0]);
     tile.onpaste = event => {
       const pasted = [...(event.clipboardData?.files || [])].find(item => item.type.startsWith("image/"));
@@ -1914,32 +1957,10 @@
       uploadImage(pasted);
     };
 
-    const stage = document.createElement("div");
-    stage.className = "evidence-stage";
-    if (evidence) {
-      const preview = document.createElement("img");
-      preview.className = "image-preview";
-      preview.src = `/reports/${reportId}/evidence/${fragment.evidence_id}`;
-      preview.alt = evidence.original_name || "Uploaded evidence";
-      preview.title = evidence.original_name || "";
-      preview.draggable = false;
-      stage.append(preview);
-    } else {
-      const drop = document.createElement("label");
-      drop.className = "evidence-drop";
-      drop.htmlFor = upload.id;
-      drop.innerHTML = "<b>Add a screenshot</b><small>Drop a file here, or click to browse</small>";
-      const pasteHint = document.createElement("p");
-      pasteHint.className = "evidence-paste-hint";
-      // Clicking the hint focuses the tile, which is what makes the next Ctrl+V land on this slot.
-      pasteHint.textContent = "Click here, then press Ctrl+V to paste";
-      stage.append(drop, pasteHint);
-    }
-
     // Position is the one control a tester reaches for most, so it sits on the tile and takes
     // either a click or a drag.
-    const order = document.createElement("div");
-    order.className = "evidence-order";
+    const spine = document.createElement("div");
+    spine.className = "evidence-spine";
     const moveTile = offset => {
       const from = content.fragments.indexOf(fragment);
       const to = from + offset;
@@ -1968,18 +1989,23 @@
     number.title = "Drag to reposition";
     number.ondragstart = event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", fragment.frag_id); tile.classList.add("is-dragging"); };
     number.ondragend = () => tile.classList.remove("is-dragging");
-    order.append(orderButton(-1, "Move earlier", "&#8592;"), number, orderButton(1, "Move later", "&#8594;"));
-    stage.append(order);
+    spine.append(number, orderButton(-1, "Move earlier", EVIDENCE_ICONS.earlier), orderButton(1, "Move later", EVIDENCE_ICONS.later));
 
-    const tools = document.createElement("div");
-    tools.className = "evidence-tools";
+    // Filled, the thumbnail is the way to inspect the screenshot at full size; empty, it is the
+    // file picker. Either way it is the largest thing to aim at.
+    const thumb = document.createElement(evidence ? "button" : "label");
+    thumb.className = "evidence-thumb";
     if (evidence) {
-      const open = document.createElement("button");
-      open.type = "button";
-      open.className = "subtle";
-      open.textContent = "Open";
-      open.setAttribute("aria-label", `Open screenshot ${position}`);
-      open.onclick = () => {
+      thumb.type = "button";
+      thumb.title = evidence.original_name || "Open screenshot";
+      thumb.setAttribute("aria-label", `Open screenshot ${position}`);
+      const preview = document.createElement("img");
+      preview.className = "image-preview";
+      preview.src = `/reports/${reportId}/evidence/${fragment.evidence_id}`;
+      preview.alt = evidence.original_name || "Uploaded evidence";
+      preview.draggable = false;
+      thumb.append(preview);
+      thumb.onclick = () => {
         const dialog = document.createElement("dialog");
         dialog.className = "image-dialog";
         dialog.innerHTML = `<button class="subtle" type="button" aria-label="Close image">Close</button><img src="/reports/${reportId}/evidence/${fragment.evidence_id}" alt="${escape(evidence.original_name || "Uploaded evidence")}">`;
@@ -1989,37 +2015,21 @@
         document.body.append(dialog);
         dialog.showModal();
       };
-      tools.append(open);
-    }
-    const replace = document.createElement("label");
-    replace.className = "evidence-replace subtle";
-    replace.htmlFor = upload.id;
-    replace.textContent = evidence ? "Replace" : "Browse";
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "danger";
-    remove.textContent = "Delete";
-    remove.setAttribute("aria-label", `Delete screenshot ${position}`);
-    const blockedReason = deletionBlockedReason(fragment, content, finding);
-    if (blockedReason) {
-      remove.disabled = true;
-      remove.title = blockedReason;
     } else {
-      remove.onclick = () => { content.fragments.splice(content.fragments.indexOf(fragment), 1); rerender(); scheduleSave(); };
+      thumb.htmlFor = upload.id;
+      thumb.innerHTML = `${EVIDENCE_ICONS.image}<span>Drop, paste<br>or click</span>`;
     }
-    tools.append(replace, remove);
-    stage.append(tools);
 
-    const body = document.createElement("div");
-    body.className = "evidence-tile-body";
+    const meta = document.createElement("div");
+    meta.className = "evidence-meta";
     const caption = document.createElement("input");
     caption.className = "evidence-caption";
     caption.value = fragment.caption || "";
     caption.placeholder = "Caption, printed under the figure";
     caption.setAttribute("aria-label", `Screenshot ${position} caption`);
     caption.oninput = () => { fragment.caption = caption.value; scheduleSave(); };
-    const foot = document.createElement("div");
-    foot.className = "evidence-tile-foot";
+    const facts = document.createElement("div");
+    facts.className = "evidence-facts";
     // A historical image is labelled with where it was found, so the current scope neither
     // narrows the choice nor answers it for the tester.
     const historical = content.type === "previous_proof_of_concept";
@@ -2029,22 +2039,47 @@
       const environmentValue = document.createElement("span");
       environmentValue.className = "evidence-environment-value";
       environmentValue.textContent = imageEnvironments[0] === "production" ? "Production" : "Non-Production";
-      foot.append(environmentValue);
+      facts.append(environmentValue);
     } else {
       if (!historical && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
       const environmentSelect = document.createElement("select");
-      environmentSelect.className = "evidence-environment";
+      environmentSelect.className = `evidence-environment${fragment.environment ? "" : " is-unset"}`;
       environmentSelect.setAttribute("aria-label", `${contentNames[content.type]} image environment`);
       const unset = historical && !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
       environmentSelect.innerHTML = unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
       environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; rerender(); scheduleSave(); };
-      foot.append(environmentSelect);
+      facts.append(environmentSelect);
     }
     const size = document.createElement("small");
     size.className = "evidence-size";
     size.textContent = evidence ? `${evidence.width_px} x ${evidence.height_px}` : "No image yet";
-    foot.append(size);
-    body.append(caption, foot);
+    const acts = document.createElement("div");
+    acts.className = "evidence-acts";
+    const replace = document.createElement("label");
+    replace.className = "evidence-replace";
+    replace.htmlFor = upload.id;
+    replace.innerHTML = evidence ? EVIDENCE_ICONS.replace : EVIDENCE_ICONS.browse;
+    replace.title = evidence ? "Replace image" : "Browse for an image";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger";
+    remove.innerHTML = EVIDENCE_ICONS.remove;
+    remove.title = "Delete screenshot";
+    remove.setAttribute("aria-label", `Delete screenshot ${position}`);
+    const blockedReason = deletionBlockedReason(fragment, content, finding);
+    if (blockedReason) {
+      remove.disabled = true;
+      remove.title = blockedReason;
+    } else {
+      remove.onclick = () => { content.fragments.splice(content.fragments.indexOf(fragment), 1); rerender(); scheduleSave(); };
+    }
+    acts.append(replace, remove);
+    facts.append(size, acts);
+    meta.append(caption, facts);
+
+    const main = document.createElement("div");
+    main.className = "evidence-main";
+    main.append(thumb, meta);
 
     tile.ondragover = event => { event.preventDefault(); event.dataTransfer.dropEffect = event.dataTransfer.types.includes("Files") ? "copy" : "move"; tile.classList.add("is-drop-target"); };
     tile.ondragleave = () => tile.classList.remove("is-drop-target");
@@ -2062,7 +2097,7 @@
       rerender();
       scheduleSave();
     };
-    tile.append(stage, body, upload);
+    tile.append(spine, main, upload);
     return tile;
   }
   // A run of adjacent image fragments, shown as one set so the screenshots read and reorder together.
@@ -2095,7 +2130,7 @@
     const add = document.createElement("button");
     add.type = "button";
     add.className = "evidence-add";
-    add.innerHTML = "<b>Add a screenshot</b><small>Adds an empty slot to this set</small>";
+    add.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add another screenshot';
     add.onclick = () => {
       const image = newFragment("image");
       const environments = affectedEnvironments(finding);
@@ -2324,6 +2359,16 @@
     let selectedFindingUid = report.vulnerabilities[0]?.uid;
     let expandedContentTypes;
     let engagementContextOpen = false;
+    let reviewTargetId = null;
+    // Held as state rather than left behind as a class, so a re-render cannot drop the highlight
+    // before the tester has dealt with the field.
+    const showReviewTarget = () => {
+      pane.querySelectorAll(".is-review-target").forEach(node => node.classList.remove("is-review-target"));
+      const target = reviewTargetId && pane.querySelector(`[data-fragment-id="${reviewTargetId}"]`);
+      if (!target) return;
+      target.classList.add("is-review-target");
+      target.addEventListener("click", () => { reviewTargetId = null; showReviewTarget(); }, {once: true});
+    };
     const libraryMatches = query => library.filter(entry => entry.title.toLowerCase().includes(query.toLowerCase()) || entry.tags.join(" ").toLowerCase().includes(query.toLowerCase()));
     const ordered = () => report.vulnerabilities.slice().sort((left, right) => severity.indexOf(left.severity) - severity.indexOf(right.severity) || left.title.localeCompare(right.title));
     const updateReadinessPanel = () => {
@@ -2384,35 +2429,68 @@
       });
       count.textContent = issues.length ? `${issues.length} to fill in` : "Ready";
       count.dataset.state = issues.length ? "issues" : "ready";
+      // The panel lists what is missing; marking the fragment lets the empty field say it too, so a
+      // tester scrolling the page does not have to read the panel to find the gaps.
+      const incomplete = new Set(issues.filter(issue => issue.fragmentId && (issue.level || "error") === "error").map(issue => issue.fragmentId));
+      pane.querySelectorAll("[data-fragment-id]").forEach(node => node.classList.toggle("is-incomplete", incomplete.has(node.dataset.fragmentId)));
       const generateButton = document.querySelector("#generate-report");
       if (generateButton) {
         generateButton.disabled = Boolean(issues.length) || generateButton.dataset.busy === "true";
         generateButton.title = issues.length ? "Fill in the remaining details before generating" : "Generate Word report";
       }
       // One card per finding, so a finding with five gaps reads as one row rather than five.
+      // Library offers ride along as warnings: they are suggestions, so they are listed but never
+      // counted, or the verdict and the Generate button would disagree with the server.
+      const offers = report.vulnerabilities.flatMap(finding => pendingLibraryOffers(finding).map(offer => ({
+        finding,
+        level: "warning",
+        contentType: offer.type,
+        contentLabel: contentNames[offer.type],
+        fragmentLabel: offer.variants ? `saved ${offer.variants.map(variant => channelLabels[variant]).join(" and ")} steps` : "saved library content",
+        message: "can be used or dismissed",
+      })));
+      const rows = [...issues, ...offers];
       const groups = [];
-      issues.forEach(issue => {
-        const group = groups.find(candidate => candidate.finding === issue.finding);
-        if (group) group.issues.push(issue);
-        else groups.push({finding:issue.finding, issues:[issue]});
+      rows.forEach(row => {
+        const group = groups.find(candidate => candidate.finding === row.finding);
+        if (group) group.issues.push(row);
+        else groups.push({finding:row.finding, issues:[row]});
       });
-      const renderGroup = group => `<details class="review-group" data-level="${group.issues.some(issue => (issue.level || "error") === "error") ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${group.issues.length} to fill in</span></summary>${group.issues.map(({finding, message, fragmentId, contentLabel, fragmentLabel, level}) => `<div class="review-item" data-level="${level || "error"}"><span class="review-icon" aria-hidden="true">${level === "warning" ? "!" : ""}</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
-      panel.innerHTML = issues.length
+      const renderGroup = group => {
+        const errors = group.issues.filter(issue => (issue.level || "error") === "error").length;
+        const suggestions = group.issues.length - errors;
+        // Counted apart so the card cannot claim seven things to fill in when three are suggestions.
+        const counts = [errors && `<b data-level="error">${errors} to fill in</b>`, suggestions && `<b data-level="warning">${suggestions} to review</b>`].filter(Boolean).join(" &middot; ");
+        return `<details class="review-group" data-level="${errors ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${counts}</span></summary>${group.issues.map(({finding, message, fragmentId, contentType, contentLabel, fragmentLabel, level:rowLevel}) => `<div class="review-item" data-level="${rowLevel || "error"}"><span class="review-icon" aria-hidden="true">!</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}${contentType ? ` data-review-content="${escape(contentType)}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
+      };
+      panel.innerHTML = rows.length
         ? groups.map(renderGroup).join("")
-        : '<div class="review-empty">All existing finding details are complete.</div>';
+        : '<div class="review-empty">Every finding is complete. The report is ready to generate.</div>';
       panel.querySelectorAll("[data-review-finding]").forEach(button => button.onclick = () => {
         const findingUid = button.dataset.reviewFinding;
         const fragmentId = button.dataset.reviewFragment;
+        const contentType = button.dataset.reviewContent;
+        reviewTargetId = fragmentId || null;
+        let rerender = false;
         if (selectedFindingUid !== findingUid) {
           selectedFindingUid = findingUid;
           expandedContentTypes = undefined;
-          render();
+          rerender = true;
         }
+        // A collapsed section hides the banner the tester was just sent to.
+        if (contentType && expandedContentTypes && !expandedContentTypes.has(contentType)) {
+          expandedContentTypes.add(contentType);
+          rerender = true;
+        }
+        if (rerender) render();
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            const target = fragmentId ? pane.querySelector(`[data-fragment-id="${fragmentId}"]`) : document.getElementById(`finding-${findingUid}`);
+            const target = fragmentId ? pane.querySelector(`[data-fragment-id="${fragmentId}"]`)
+              : contentType ? pane.querySelector(`[data-offer-for="${contentType}"]`)
+              : document.getElementById(`finding-${findingUid}`);
             target?.scrollIntoView({behavior:"smooth", block:"center"});
             target?.focus?.({preventScroll:true});
+            showReviewTarget();
           });
         });
       });
@@ -2584,14 +2662,14 @@
           }
           if (content.type === "proof_of_concept") {
             // Derived from current state, so it survives a reload and can never double-fire or leak a missed event.
-            const offered = applicablePocVariants(finding)
-              .filter(variant => !(finding.poc_variants || []).includes(variant) && !(finding.poc_variant_declined || []).includes(variant));
+            const offered = pendingLibraryOffers(finding).find(offer => offer.type === "proof_of_concept")?.variants || [];
             if (offered.length) {
               const written = content.fragments.some(fragment => fragment.type !== "image" && fragmentHasContent(fragment));
               const chosen = new Set(offered);
               const banner = document.createElement("div");
               banner.className = "poc-offer";
               banner.dataset.pocOffer = offered.join(" ");
+              banner.dataset.offerFor = content.type;
               const message = document.createElement("p");
               message.textContent = offered.length === 1
                 ? `Saved ${channelLabels[offered[0]]} steps are available for this finding.`
@@ -2641,15 +2719,16 @@
             }
           }
           if (content.type === "description" || content.type === "recommended_remediation") {
-            const entry = library.find(candidate => candidate.library_id === finding.library_ref?.library_id);
-            const libraryFragments = libraryContentFor(entry, content.type);
-            const locked = finding.status === "resolved" && content.type === "recommended_remediation";
             // Derived from current state, like the proof-of-concept offer: survives a reload, never double-fires.
-            if (entry && libraryFragments.length && !locked && finding.content_offer_resolved?.[content.type] !== entry.library_id) {
+            const offer = pendingLibraryOffers(finding).find(candidate => candidate.type === content.type);
+            if (offer) {
+              const entry = offer.entry;
+              const libraryFragments = libraryContentFor(entry, content.type);
               const written = content.fragments.some(fragment => fragmentHasContent(fragment));
               const banner = document.createElement("div");
               banner.className = "content-offer";
               banner.dataset.contentOffer = content.type;
+              banner.dataset.offerFor = content.type;
               const message = document.createElement("p");
               message.textContent = `"${entry.title}" has saved ${contentNames[content.type].toLowerCase()} content.`;
               const resolve = mode => {
@@ -2716,6 +2795,7 @@
         pane.append(box);
       });
       updateReadinessPanel();
+      showReviewTarget();
       if (focusedFindingUid) {
         requestAnimationFrame(() => { const focusedFinding = document.getElementById(`finding-${focusedFindingUid}`); focusedFinding?.scrollIntoView({behavior:"smooth", block:"start"}); focusedFinding?.focus({preventScroll:true}); });
       } else if (restoreScroll) {

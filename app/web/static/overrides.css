@@ -346,7 +346,7 @@ input[data-path*="scope"],
   #finding-nav .finding-nav { flex: 0 0 150px; border-left: 0; border-bottom: 3px solid transparent; }
   #finding-nav .finding-nav:hover, #finding-nav .finding-nav.active { border-left-color: transparent; border-bottom-color: var(--accent); }
   #finding-editor { padding: 14px 12px; }
-  .evidence-set { grid-template-columns: 1fr; }
+  .evidence-main { grid-template-columns: 1fr; }
   .finding-header { grid-template-columns: 1fr; }
   .finding-assessment { justify-content: flex-start; border-top: 1px solid var(--line); border-left: 0; text-align: left; }
   .finding-locations { grid-template-columns: 1fr; gap: 3px; }

@@ -21,6 +21,7 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
+from .models import CHANNELS
 from .report_service import REPORT_TYPE_LABELS
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
@@ -534,7 +535,7 @@ def parse_report_docx(data: bytes) -> tuple[dict, dict[str, bytes], dict]:
             "segment": segment,
             "report_type": None,
             "tested_environments": environments or ["production"],
-            "test_type": "web_api" if channels == {"web", "api"} else (channels.pop() if len(channels) == 1 else "web"),
+            "tested_channels": [channel for channel in CHANNELS if channel in channels] or ["web"],
             "non_production_label": non_production_label,
             "test_windows": {},
             "report_date": None,

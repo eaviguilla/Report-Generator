@@ -41,16 +41,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The model, while responding to specific topic queries, was found to generate inaccurate or misleading information. Despite being trained to process and evaluate specific tasks, it produced response misinterpreted data or made wrong assumptions. This could lead to poor decision making, potentially resulting in incorrect assessments, underwriting decisions or financial miscalculations. This dissemination of inaccurate information could expose the system to operational, compliance, and reputational risks, as users may rely on the model’s output for critical financial decisions without verifying the data."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-015-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "The model, while responding to specific topic queries, was found to generate inaccurate or misleading information. Despite being trained to process and evaluate specific tasks, it produced response misinterpreted data or made wrong assumptions. This could lead to poor decision making, potentially resulting in incorrect assessments, underwriting decisions or financial miscalculations. This dissemination of inaccurate information could expose the system to operational, compliance, and reputational risks, as users may rely on the model’s output for critical financial decisions without verifying the data.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             },
@@ -301,16 +292,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application is vulnerable due to a broken authentication mechanism. The application was unable to perform the verification on the requests. During testing, authentication bearer or authentication token can be omitted, and users will receive a similar response as if they are authenticated. This vulnerability allows unauthorized users to update or tamper fields without proper authentication or authorization checks. This can lead to unauthorized modifications of policy details, resulting in potential data breaches, fraud, and financial loss. Attackers often target outdated components with publicly available exploits, which could lead to data breaches, privilege escalation, or complete system compromise depending on the role of the outdated technology."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-001-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "The application is vulnerable due to a broken authentication mechanism. The application was unable to perform the verification on the requests. During testing, authentication bearer or authentication token can be omitted, and users will receive a similar response as if they are authenticated. This vulnerability allows unauthorized users to update or tamper fields without proper authentication or authorization checks. This can lead to unauthorized modifications of policy details, resulting in potential data breaches, fraud, and financial loss. Attackers often target outdated components with publicly available exploits, which could lead to data breaches, privilege escalation, or complete system compromise depending on the role of the outdated technology.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             }
@@ -455,16 +437,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Clickjacking, also known as a UI redress attack, is a malicious technique where an attacker tricks a user into clicking on something different from what the user perceives. This can lead to revealing confidential information or allowing the attacker to take control of the user’s compute."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-017-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Attackers typically use multiple transparent or opaque layers to deceive users. For example, they might overlay a transparent button over a legitimate button on a webpage. When the user clicks the visible button, they are clicking the hidden button, which could perform an unintended action like changing security settings or making a purchase."
+                  "text": "Clickjacking, also known as a UI redress attack, is a malicious technique where an attacker tricks a user into clicking on something different from what the user perceives. This can lead to revealing confidential information or allowing the attacker to take control of the user’s compute.\n\nAttackers typically use multiple transparent or opaque layers to deceive users. For example, they might overlay a transparent button over a legitimate button on a webpage. When the user clicks the visible button, they are clicking the hidden button, which could perform an unintended action like changing security settings or making a purchase."
                 }
               ]
             }
@@ -609,16 +582,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "There is usually no good reason not to set the HttpOnly flag on all cookies. Unless you specifically require legitimate client-side scripts within your application to read or set a cookie's value, you should set the HttpOnly flag by including this attribute within the relevant Set-cookie directive."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-026-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "You should be aware that the restrictions imposed by the HttpOnly flag can potentially be circumvented in some circumstances, and that numerous other serious attacks can be delivered by client-side script injection, aside from simple cookie stealing."
+                  "text": "There is usually no good reason not to set the HttpOnly flag on all cookies. Unless you specifically require legitimate client-side scripts within your application to read or set a cookie's value, you should set the HttpOnly flag by including this attribute within the relevant Set-cookie directive.\n\nYou should be aware that the restrictions imposed by the HttpOnly flag can potentially be circumvented in some circumstances, and that numerous other serious attacks can be delivered by client-side script injection, aside from simple cookie stealing."
                 }
               ]
             },
@@ -627,16 +591,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information can be found at:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-026-r4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/kb/issues/00500600_cookie-without-httponly-flag-set"
+                  "text": "More information can be found at:\nhttps://portswigger.net/kb/issues/00500600_cookie-without-httponly-flag-set"
                 }
               ]
             },
@@ -781,16 +736,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "If the secure flag is set on a cookie, then browsers will not submit the cookie in any requests that use an unencrypted HTTP connection, thereby preventing the cookie from being trivially intercepted by an attacker monitoring network traffic. If the secure flag is not set, then the cookie will be transmitted in clear-text if the user visits any HTTP URLs within the cookie's scope. An attacker may be able to induce this event by feeding a user suitable links, either directly or via another web site. Even if the domain that issued the cookie does not host any content that is accessed over HTTP, an attacker may be able to use links of the form http://example.com:443/ to perform the same attack."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-028-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "To exploit this vulnerability, an attacker must be suitably positioned to eavesdrop on the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure."
+                  "text": "If the secure flag is set on a cookie, then browsers will not submit the cookie in any requests that use an unencrypted HTTP connection, thereby preventing the cookie from being trivially intercepted by an attacker monitoring network traffic. If the secure flag is not set, then the cookie will be transmitted in clear-text if the user visits any HTTP URLs within the cookie's scope. An attacker may be able to induce this event by feeding a user suitable links, either directly or via another web site. Even if the domain that issued the cookie does not host any content that is accessed over HTTP, an attacker may be able to use links of the form http://example.com:443/ to perform the same attack.\n\nTo exploit this vulnerability, an attacker must be suitably positioned to eavesdrop on the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure."
                 }
               ]
             }
@@ -813,16 +759,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information can be found at:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-028-r3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/kb/issues/00500200_tls-cookie-without-secure-flag-set"
+                  "text": "More information can be found at:\nhttps://portswigger.net/kb/issues/00500200_tls-cookie-without-secure-flag-set"
                 }
               ]
             },
@@ -860,16 +797,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "A cookie's domain attribute determines which domains can access the cookie. If a cookie is scoped to a parent domain, then that cookie will be accessible by the parent domain and by any other subdomains of the parent domain. If the cookie contains sensitive data (such as a session token) then this data may be accessible by less trusted or less secure applications residing at those domains, leading to a security compromise."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-029-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "In this application, the domain attribute is set to parent domain. In addition to the domain, the URL path that the cookie is valid for can be specified. If the domain and path match, then the cookie will be sent in the request. Just as with the domain attribute, if the path attribute is set too loosely, then it could leave the application vulnerable to attacks by other applications on the same server. In this application, the path attribute was set to the web server root \"/\", then the application cookies will be sent to every application within the same domain."
+                  "text": "A cookie's domain attribute determines which domains can access the cookie. If a cookie is scoped to a parent domain, then that cookie will be accessible by the parent domain and by any other subdomains of the parent domain. If the cookie contains sensitive data (such as a session token) then this data may be accessible by less trusted or less secure applications residing at those domains, leading to a security compromise.\n\nIn this application, the domain attribute is set to parent domain. In addition to the domain, the URL path that the cookie is valid for can be specified. If the domain and path match, then the cookie will be sent in the request. Just as with the domain attribute, if the path attribute is set too loosely, then it could leave the application vulnerable to attacks by other applications on the same server. In this application, the path attribute was set to the web server root \"/\", then the application cookies will be sent to every application within the same domain."
                 }
               ]
             }
@@ -883,16 +811,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Domain attribute should only be set for the server that needs to receive the cookie. For example if the application resides on server app.mysite.com, then it should be set to \"; domain=app.mysite.com\" and NOT \"; domain=.mysite.com\" as this would allow other potentially vulnerable servers to receive the cookie."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-029-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Verify that the path attribute, just as the Domain attribute, has not been set too loosely. Even if the Domain attribute has been configured as tight as possible, if the path is set to the root directory \"/\" then it can be vulnerable to less secure applications on the same server. For example, if the application resides at /myapp/, then verify that the cookies path is set to \"; path=/myapp/\" and NOT \"; path=/\" or \"; path=/myapp\"."
+                  "text": "Domain attribute should only be set for the server that needs to receive the cookie. For example if the application resides on server app.mysite.com, then it should be set to \"; domain=app.mysite.com\" and NOT \"; domain=.mysite.com\" as this would allow other potentially vulnerable servers to receive the cookie.\n\nVerify that the path attribute, just as the Domain attribute, has not been set too loosely. Even if the Domain attribute has been configured as tight as possible, if the path is set to the root directory \"/\" then it can be vulnerable to less secure applications on the same server. For example, if the application resides at /myapp/, then verify that the cookies path is set to \"; path=/myapp/\" and NOT \"; path=/\" or \"; path=/myapp\"."
                 }
               ]
             },
@@ -982,16 +901,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Cross-site Request Forgery (CSRF) is an attack which forces an end user to execute unwanted actions on a web application to which he/she is currently authenticated. With a little help of social engineering (like sending a link via email / chat), an attacker may trick the users of a web application into executing actions of the attacker's choosing. A successful CSRF exploit can compromise end user data and may allow an attacker to perform an account hijack. If the targeted end user is the administrator account, this can compromise the entire web application."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-002-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "Cross-site Request Forgery (CSRF) is an attack which forces an end user to execute unwanted actions on a web application to which he/she is currently authenticated. With a little help of social engineering (like sending a link via email / chat), an attacker may trick the users of a web application into executing actions of the attacker's choosing. A successful CSRF exploit can compromise end user data and may allow an attacker to perform an account hijack. If the targeted end user is the administrator account, this can compromise the entire web application.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             }
@@ -1058,16 +968,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Applications should return caching directives instructing browsers not to store local copies of any sensitive data. Often, this can be achieved by configuring the web server to prevent caching for relevant paths within the web root. Alternatively, most web development platforms allow you to control the server's caching directives from within individual scripts. Ideally, the web server should return the following HTTP headers in all responses containing sensitive content."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-050-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Remove Pragma and replace with:"
+                  "text": "Applications should return caching directives instructing browsers not to store local copies of any sensitive data. Often, this can be achieved by configuring the web server to prevent caching for relevant paths within the web root. Alternatively, most web development platforms allow you to control the server's caching directives from within individual scripts. Ideally, the web server should return the following HTTP headers in all responses containing sensitive content.\n\nRemove Pragma and replace with:"
                 }
               ]
             },
@@ -1180,35 +1081,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-050-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"Pragma\" is Present/not set."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -1249,16 +1121,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "It is recommended to use the HTTP Content-Security-Policy header instead, which provides better protection against XSS attacks."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-051-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Remove X-XSS-Protection and replace with:"
+                  "text": "It is recommended to use the HTTP Content-Security-Policy header instead, which provides better protection against XSS attacks.\n\nRemove X-XSS-Protection and replace with:"
                 }
               ]
             },
@@ -1371,35 +1234,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-051-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"X-XSS-Protection\" is Present/not set."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -1424,16 +1258,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application is using technology that has reached its End-of-Life (EOL), meaning the vendor no longer provides updates, patches, or security fixes. This exposes the system to known and future vulnerabilities that will remain unpatched, significantly increasing the risk of exploitation. Attackers often target outdated components with publicly available exploits, which could lead to data breaches, privilege escalation, or complete system compromise depending on the role of the outdated technology."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-003-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "End-of-Life Technology:"
+                  "text": "The application is using technology that has reached its End-of-Life (EOL), meaning the vendor no longer provides updates, patches, or security fixes. This exposes the system to known and future vulnerabilities that will remain unpatched, significantly increasing the risk of exploitation. Attackers often target outdated components with publicly available exploits, which could lead to data breaches, privilege escalation, or complete system compromise depending on the role of the outdated technology.\n\nEnd-of-Life Technology:"
                 }
               ]
             },
@@ -1561,16 +1386,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "When an LLM provides initial instructions, it may inadvertently disclose critical information set by its creators, which could be exploited by malicious actors. This could involve revealing excessive technical details about the system’s functionality, such as how to interact with the model, format inputs or access specific features."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-014-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "If the model exposes operational instructions or system specific configurations, an attacker could potentially use this information to bypass security mechanisms, escalate privileges, or exploit vulnerabilities within the system."
+                  "text": "When an LLM provides initial instructions, it may inadvertently disclose critical information set by its creators, which could be exploited by malicious actors. This could involve revealing excessive technical details about the system’s functionality, such as how to interact with the model, format inputs or access specific features.\n\nIf the model exposes operational instructions or system specific configurations, an attacker could potentially use this information to bypass security mechanisms, escalate privileges, or exploit vulnerabilities within the system."
                 }
               ]
             },
@@ -1622,16 +1438,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "HTML Injection occurs when an attacker can inject arbitrary HTML code into a web application's output. This can lead to a variety of malicious outcomes, including defacement of the website, redirection of users to malicious sites, and execution of client-side scripts (potentially leading to Cross-Site Scripting, or XSS). The vulnerability typically arises due to improper validation or sanitization of user-supplied input before it is included in the web page's HTML content."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-018-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "An example scenario might involve a search feature on a website where user input is embedded directly into the HTML without proper escaping. An attacker could exploit this by injecting HTML tags or JavaScript, potentially compromising the security of the site and its users."
+                  "text": "HTML Injection occurs when an attacker can inject arbitrary HTML code into a web application's output. This can lead to a variety of malicious outcomes, including defacement of the website, redirection of users to malicious sites, and execution of client-side scripts (potentially leading to Cross-Site Scripting, or XSS). The vulnerability typically arises due to improper validation or sanitization of user-supplied input before it is included in the web page's HTML content.\n\nAn example scenario might involve a search feature on a website where user input is embedded directly into the HTML without proper escaping. An attacker could exploit this by injecting HTML tags or JavaScript, potentially compromising the security of the site and its users."
                 }
               ]
             }
@@ -1771,16 +1578,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The dangers of leaking sensitive user or business data is obvious, but leaking technical data can be just as serious. It can act as a starting point for exposing a potential attack surface, which can contain other interesting vulnerabilities. Occasionally, sensitive information might be carelessly leaked to users who are simply browsing the website in a normal fashion. More commonly, an attacker needs to elicit this information by interacting with the website in unexpected or malicious ways."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-032-d4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Examples include:"
+                  "text": "The dangers of leaking sensitive user or business data is obvious, but leaking technical data can be just as serious. It can act as a starting point for exposing a potential attack surface, which can contain other interesting vulnerabilities. Occasionally, sensitive information might be carelessly leaked to users who are simply browsing the website in a normal fashion. More commonly, an attacker needs to elicit this information by interacting with the website in unexpected or malicious ways.\n\nExamples include:"
                 }
               ]
             },
@@ -1901,16 +1699,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information can be found at:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-032-r4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/web-security/information-disclosure#what-is-information-disclosure"
+                  "text": "More information can be found at:\nhttps://portswigger.net/web-security/information-disclosure#what-is-information-disclosure"
                 }
               ]
             },
@@ -1948,16 +1737,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application allows direct access to objects (such as records, files, or resources) using identifiers provided in the request without properly validating whether the requesting user is authorized to access those objects. This can enable attackers to manipulate identifiers and gain unauthorized access to sensitive data, modify or delete resources belonging to other users, and potentially compromise the integrity and confidentiality of the application’s data."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-004-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "The application allows direct access to objects (such as records, files, or resources) using identifiers provided in the request without properly validating whether the requesting user is authorized to access those objects. This can enable attackers to manipulate identifiers and gain unauthorized access to sensitive data, modify or delete resources belonging to other users, and potentially compromise the integrity and confidentiality of the application’s data.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             }
@@ -2097,16 +1877,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The AI does not adequately restrict user instructions, allowing attackers to manipulate the model’s behavior beyond its intended function."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-013-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "The AI does not adequately restrict user instructions, allowing attackers to manipulate the model’s behavior beyond its intended function.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             }
@@ -2149,16 +1920,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The ability to modify the configuration rules of the AI Assistant presents a significant security risk. Unauthorized changes to these rules could allow attackers to alter system behavior, bypass security controls, manipulate outputs, or expose sensitive information. This vulnerability could lead to privilege escalation, unauthorized access, and potential exploitation of the system."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-012-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "The ability to modify the configuration rules of the AI Assistant presents a significant security risk. Unauthorized changes to these rules could allow attackers to alter system behavior, bypass security controls, manipulate outputs, or expose sensitive information. This vulnerability could lead to privilege escalation, unauthorized access, and potential exploitation of the system.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             },
@@ -2405,34 +2167,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application failed to perform its checks on uploading files. Best practice violations in file upload functionality allow attackers to upload malware to the server. In this scenario, we had uploaded a various file such a PDF containing EICAR file (which is a test file for triggering an antivirus solution), and a plain EICAR file. The application failed to remove these files in the server and was stored successfully."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-005-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The application does not prevent users from uploading any files including malicious files or files containing executable files and makes these uploads accessible to other users. There is no evidence of antivirus scanning being in place to remove such files after they have been uploaded and is saved in pending tasks portion to be viewed and downloaded by a user. Users are more likely to click on a link and download a file if it appears to be from a trusted source. While in the last potion of the workflow, the system validates the actual file to process whether such file is a legitimate excel sheet used to insert data of users, a user in charge of approving and validating files can still be a victim since any files including malicious ones can be uploaded in the application and is accessible to the victim user."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-005-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "This trust that users (who approve them) have for the affected web application can be used in phishing campaigns and can successfully trick the victim user into thinking these are harmless files."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-005-d4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "The application failed to perform its checks on uploading files. Best practice violations in file upload functionality allow attackers to upload malware to the server. In this scenario, we had uploaded a various file such a PDF containing EICAR file (which is a test file for triggering an antivirus solution), and a plain EICAR file. The application failed to remove these files in the server and was stored successfully.\n\nThe application does not prevent users from uploading any files including malicious files or files containing executable files and makes these uploads accessible to other users. There is no evidence of antivirus scanning being in place to remove such files after they have been uploaded and is saved in pending tasks portion to be viewed and downloaded by a user. Users are more likely to click on a link and download a file if it appears to be from a trusted source. While in the last potion of the workflow, the system validates the actual file to process whether such file is a legitimate excel sheet used to insert data of users, a user in charge of approving and validating files can still be a victim since any files including malicious ones can be uploaded in the application and is accessible to the victim user.\n\nThis trust that users (who approve them) have for the affected web application can be used in phishing campaigns and can successfully trick the victim user into thinking these are harmless files.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             }
@@ -2493,16 +2228,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "This header is used to help defend against Cross-origin Resource Sharing (CORS)-based attacks. The Access-Control-Allow-Origin header is included in the response from one website to a request originating from another website, and identifies the permitted origin of the request. A web browser compares the Access-Control-Allow-Origin with the requesting website's origin and permits access to the response if they match."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-035-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The Access-Control-Allow-Origin header allows wildcards, but not with any other value."
+                  "text": "This header is used to help defend against Cross-origin Resource Sharing (CORS)-based attacks. The Access-Control-Allow-Origin header is included in the response from one website to a request originating from another website, and identifies the permitted origin of the request. A web browser compares the Access-Control-Allow-Origin with the requesting website's origin and permits access to the response if they match.\n\nThe Access-Control-Allow-Origin header allows wildcards, but not with any other value."
                 }
               ]
             },
@@ -2511,16 +2237,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information about CORS can be found here:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-035-d4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/web-security/cors"
+                  "text": "More information about CORS can be found here:\nhttps://portswigger.net/web-security/cors"
                 }
               ]
             }
@@ -2774,25 +2491,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information can be found at:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-035-r8",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/web-security/cors/access-control-allow-origin"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-035-r9",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://owasp.org/www-project-secure-headers/#prevent-cors-misconfiguration-issues"
+                  "text": "More information can be found at:\nhttps://portswigger.net/web-security/cors/access-control-allow-origin\nhttps://owasp.org/www-project-secure-headers/#prevent-cors-misconfiguration-issues"
                 }
               ]
             },
@@ -2830,16 +2529,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "CSP is a browser security mechanism that aims to mitigate XSS and some other attacks. It works by restricting the resources (such as scripts and images) that a page can load and restricting whether a page can be framed by other pages."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-036-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "To enable CSP, a response needs to include an HTTP response header called Content-Security-Policy with a value containing the policy. The policy itself consists of one or more directives, separated by semicolons."
+                  "text": "CSP is a browser security mechanism that aims to mitigate XSS and some other attacks. It works by restricting the resources (such as scripts and images) that a page can load and restricting whether a page can be framed by other pages.\n\nTo enable CSP, a response needs to include an HTTP response header called Content-Security-Policy with a value containing the policy. The policy itself consists of one or more directives, separated by semicolons."
                 }
               ]
             }
@@ -2853,43 +2543,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Content security policy (CSP) is the last line of defense against cross-site scripting. If your XSS prevention fails, you can use CSP to mitigate XSS by restricting what an attacker can do."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-036-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "CSP lets you control various things, such as whether external scripts can be loaded and whether inline scripts will be executed. To deploy CSP you need to include an HTTP response header called Content-Security-Policy with a value containing your policy."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-036-r3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "This policy specifies that resources such as images and scripts can only be loaded from the same origin as the main page. So even if an attacker can successfully inject an XSS payload they can only load resources from the current origin. This greatly reduces the chance that an attacker can exploit the XSS vulnerability."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-036-r4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "If you require loading of external resources, ensure you only allow scripts that do not aid an attacker to exploit your site. For example, if you whitelist certain domains then an attacker can load any script from those domains. Where possible, try to host resources on your own domain."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-036-r5",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "If that is not possible then you can use hash- or nonce-based policy to allow scripts on different domains. A nonce is a random string that is added as an attribute of a script or resource, which will only be executed if the random string matches the server-generated one. An attacker is unable to guess the randomized string and therefore cannot invoke a script or resource with a valid nonce and so the resource will not be executed."
+                  "text": "Content security policy (CSP) is the last line of defense against cross-site scripting. If your XSS prevention fails, you can use CSP to mitigate XSS by restricting what an attacker can do.\n\nCSP lets you control various things, such as whether external scripts can be loaded and whether inline scripts will be executed. To deploy CSP you need to include an HTTP response header called Content-Security-Policy with a value containing your policy.\n\nThis policy specifies that resources such as images and scripts can only be loaded from the same origin as the main page. So even if an attacker can successfully inject an XSS payload they can only load resources from the current origin. This greatly reduces the chance that an attacker can exploit the XSS vulnerability.\n\nIf you require loading of external resources, ensure you only allow scripts that do not aid an attacker to exploit your site. For example, if you whitelist certain domains then an attacker can load any script from those domains. Where possible, try to host resources on your own domain.\n\nIf that is not possible then you can use hash- or nonce-based policy to allow scripts on different domains. A nonce is a random string that is added as an attribute of a script or resource, which will only be executed if the random string matches the server-generated one. An attacker is unable to guess the randomized string and therefore cannot invoke a script or resource with a valid nonce and so the resource will not be executed."
                 }
               ]
             },
@@ -2937,16 +2591,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information can be found at:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-036-r8",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/web-security/cross-site-scripting/preventing#mitigating-xss-using-content-security-policy-csp"
+                  "text": "More information can be found at:\nhttps://portswigger.net/web-security/cross-site-scripting/preventing#mitigating-xss-using-content-security-policy-csp"
                 }
               ]
             },
@@ -2995,35 +2640,6 @@
         "web": [
           {
             "frag_id": "VDB-036-web-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-036-web_api-poc",
             "type": "numbered_list",
             "items": [
               {
@@ -3262,35 +2878,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-037-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -3315,25 +2902,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Cross-Origin Resource Policy is a policy set by the Cross-Origin-Resource-Policy HTTP header that lets websites and applications opt in to protection against certain requests from other origins (such as those issued with elements like [script] and [img]), to mitigate speculative side-channel attacks, like Spectre, as well as Cross-Site Script Inclusion attacks."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-038-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "CORP is an additional layer of protection beyond the default same-origin policy. Cross-Origin Resource Policy complements Cross-Origin Read Blocking (CORB), which is a mechanism to prevent some cross-origin reads by default."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-038-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "As this policy is expressed via a response header, the actual request is not prevented—rather, the browser prevents the result from being leaked by stripping the response body."
+                  "text": "Cross-Origin Resource Policy is a policy set by the Cross-Origin-Resource-Policy HTTP header that lets websites and applications opt in to protection against certain requests from other origins (such as those issued with elements like [script] and [img]), to mitigate speculative side-channel attacks, like Spectre, as well as Cross-Site Script Inclusion attacks.\n\nCORP is an additional layer of protection beyond the default same-origin policy. Cross-Origin Resource Policy complements Cross-Origin Read Blocking (CORB), which is a mechanism to prevent some cross-origin reads by default.\n\nAs this policy is expressed via a response header, the actual request is not prevented—rather, the browser prevents the result from being leaked by stripping the response body."
                 }
               ]
             }
@@ -3451,35 +3020,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-038-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -3504,25 +3044,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Permissions Policy provides mechanisms for web developers to explicitly declare what functionality can and cannot be used on a website. You define a set of \"policies\" that restrict what APIs the site's code can access or modify the browser's default behavior for certain features. This allows you to enforce best practices, even as the codebase evolves — as well as more safely compose third-party content."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-039-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Permissions Policy is similar to Content Security Policy but controls features instead of security behavior."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-039-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The web provides functionality and APIs that may have privacy or security risks if abused. In such cases, you may wish to strictly limit how functionality is used on a website. In each case, there should be an intuitive or non-breaking way for web developers to detect and handle cases where a feature is disabled."
+                  "text": "Permissions Policy provides mechanisms for web developers to explicitly declare what functionality can and cannot be used on a website. You define a set of \"policies\" that restrict what APIs the site's code can access or modify the browser's default behavior for certain features. This allows you to enforce best practices, even as the codebase evolves — as well as more safely compose third-party content.\n\nPermissions Policy is similar to Content Security Policy but controls features instead of security behavior.\n\nThe web provides functionality and APIs that may have privacy or security risks if abused. In such cases, you may wish to strictly limit how functionality is used on a website. In each case, there should be an intuitive or non-breaking way for web developers to detect and handle cases where a feature is disabled."
                 }
               ]
             }
@@ -3658,35 +3180,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-039-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -3711,43 +3204,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "This header protects against Cross-domain Referrer leakage. When a web browser makes a request for a resource, it typically adds an HTTP header, called the \"Referer\" header, indicating the URL of the resource from which the request originated. This occurs in numerous situations, for example when a web page loads an image or script, or when a user clicks on a link or submits a form."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-040-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "If the resource being requested resides on a different domain, then the Referer header is still generally included in the cross-domain request. If the originating URL contains any sensitive information within its query string, such as a session token, then this information will be transmitted to the other domain. If the other domain is not fully trusted by the application, then this may lead to a security compromise."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-040-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "You should review the contents of the information being transmitted to other domains, and also determine whether those domains are fully trusted by the originating application."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-040-d4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Today's browsers may withhold the Referer header in some situations (for example, when loading a non-HTTPS resource from a page that was loaded over HTTPS, or when a Refresh directive is issued), but this behavior should not be relied upon to protect the originating URL from disclosure."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-040-d5",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Note also that if users can author content within the application then an attacker may be able to inject links referring to a domain they control in order to capture data from URLs used within the application."
+                  "text": "This header protects against Cross-domain Referrer leakage. When a web browser makes a request for a resource, it typically adds an HTTP header, called the \"Referer\" header, indicating the URL of the resource from which the request originated. This occurs in numerous situations, for example when a web page loads an image or script, or when a user clicks on a link or submits a form.\n\nIf the resource being requested resides on a different domain, then the Referer header is still generally included in the cross-domain request. If the originating URL contains any sensitive information within its query string, such as a session token, then this information will be transmitted to the other domain. If the other domain is not fully trusted by the application, then this may lead to a security compromise.\n\nYou should review the contents of the information being transmitted to other domains, and also determine whether those domains are fully trusted by the originating application.\n\nToday's browsers may withhold the Referer header in some situations (for example, when loading a non-HTTPS resource from a page that was loaded over HTTPS, or when a Refresh directive is issued), but this behavior should not be relied upon to protect the originating URL from disclosure.\n\nNote also that if users can author content within the application then an attacker may be able to inject links referring to a domain they control in order to capture data from URLs used within the application."
                 }
               ]
             }
@@ -3960,34 +3417,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information found at:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-040-r5",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/kb/issues/00500400_cross-domain-referer-leakage"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-040-r6",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referer"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-040-r7",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy"
+                  "text": "More information found at:\nhttps://portswigger.net/kb/issues/00500400_cross-domain-referer-leakage\nhttps://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referer\nhttps://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy"
                 }
               ]
             },
@@ -4061,35 +3491,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-040-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -4114,16 +3515,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application fails to prevent users from connecting to it over unencrypted connections. An attacker able to modify a legitimate user's network traffic could bypass the application's use of SSL/TLS encryption, and use the application as a platform for attacks against its users. This attack is performed by rewriting HTTPS links as HTTP, so that if a targeted user follows a link to the site from an HTTP page, their browser never attempts to use an encrypted connection. The sslstrip tool automates this process."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-041-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "To exploit this vulnerability, an attacker must be suitably positioned to intercept and modify the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure."
+                  "text": "The application fails to prevent users from connecting to it over unencrypted connections. An attacker able to modify a legitimate user's network traffic could bypass the application's use of SSL/TLS encryption, and use the application as a platform for attacks against its users. This attack is performed by rewriting HTTPS links as HTTP, so that if a targeted user follows a link to the site from an HTTP page, their browser never attempts to use an encrypted connection. The sslstrip tool automates this process.\n\nTo exploit this vulnerability, an attacker must be suitably positioned to intercept and modify the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure."
                 }
               ]
             }
@@ -4137,16 +3529,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application should instruct web browsers to only access the application using HTTPS. To do this, enable HTTP Strict Transport Security (HSTS) by adding a response header with the name 'Strict-Transport-Security' and the value 'max-age=expireTime', where expireTime is the time in seconds that browsers should remember that the site should only be accessed using HTTPS. Consider adding the 'includeSubDomains' flag if appropriate."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-041-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Note that because HSTS is a 'trust on first use' (TOFU) protocol, a user who has never accessed the application will never have seen the HSTS header, and will therefore still be vulnerable to SSL stripping attacks. To mitigate this risk, you can optionally add the 'preload' flag to the HSTS header, and submit the domain for review by browser vendors."
+                  "text": "The application should instruct web browsers to only access the application using HTTPS. To do this, enable HTTP Strict Transport Security (HSTS) by adding a response header with the name 'Strict-Transport-Security' and the value 'max-age=expireTime', where expireTime is the time in seconds that browsers should remember that the site should only be accessed using HTTPS. Consider adding the 'includeSubDomains' flag if appropriate.\n\nNote that because HSTS is a 'trust on first use' (TOFU) protocol, a user who has never accessed the application will never have seen the HSTS header, and will therefore still be vulnerable to SSL stripping attacks. To mitigate this risk, you can optionally add the 'preload' flag to the HSTS header, and submit the domain for review by browser vendors."
                 }
               ]
             },
@@ -4268,35 +3651,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-041-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -4322,43 +3676,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "If a response does not specify a content type, then the browser will usually analyze the response and attempt to determine the MIME type of its content. This can have unexpected results, and if the content contains any user-controllable data may lead to cross-site scripting or other client-side vulnerabilities."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-042-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "In most cases, the absence of a content type statement does not constitute a security flaw, particularly if the response contains static content. You should review the contents of affected responses, and the context in which they appear, to determine whether any vulnerability exists."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-042-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The X-Content-Type-Options response HTTP header is a marker used by the server to indicate that the MIME types advertised in the Content-Type headers should be followed and not be changed. The header allows you to avoid MIME type sniffing by saying that the MIME types are deliberately configured."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-042-d4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "This header was introduced by Microsoft in IE 8 as a way for webmasters to block content sniffing that was happening and could transform non-executable MIME types into executable MIME types. Since then, other browsers have introduced it, even if their MIME sniffing algorithms were less aggressive."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-042-d5",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Starting with Firefox 72, top-level documents also avoid MIME sniffing (if Content-type is provided). This can cause HTML web pages to be downloaded instead of being rendered when they are served with a MIME type other than text/html. Make sure to set both headers correctly."
+                  "text": "If a response does not specify a content type, then the browser will usually analyze the response and attempt to determine the MIME type of its content. This can have unexpected results, and if the content contains any user-controllable data may lead to cross-site scripting or other client-side vulnerabilities.\n\nIn most cases, the absence of a content type statement does not constitute a security flaw, particularly if the response contains static content. You should review the contents of affected responses, and the context in which they appear, to determine whether any vulnerability exists.\n\nThe X-Content-Type-Options response HTTP header is a marker used by the server to indicate that the MIME types advertised in the Content-Type headers should be followed and not be changed. The header allows you to avoid MIME type sniffing by saying that the MIME types are deliberately configured.\n\nThis header was introduced by Microsoft in IE 8 as a way for webmasters to block content sniffing that was happening and could transform non-executable MIME types into executable MIME types. Since then, other browsers have introduced it, even if their MIME sniffing algorithms were less aggressive.\n\nStarting with Firefox 72, top-level documents also avoid MIME sniffing (if Content-type is provided). This can cause HTML web pages to be downloaded instead of being rendered when they are served with a MIME type other than text/html. Make sure to set both headers correctly."
                 }
               ]
             }
@@ -4494,35 +3812,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-042-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -4548,25 +3837,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The X-Frame-Options HTTP header is used to define whether an application can be loaded in an iFrame within a third-party application. HTML iFrames are often used by malicious actors to create a fraudulent website, which mimics a legitimate application in an attempt to harvest user credentials. This is known as a “clickjacking” attack. This header is specified in RFC-7034."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-043-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "X-Frame-Options is easily implemented to deny a third-party application from loading your web application within iFrames. This can be achieved with the Content-Security-Policy (CSP) header, which we will discuss later. When this CSP directive has been implemented, the X-Frame-Options header becomes obsolete."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-043-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Deny ensures no rendering within a frame."
+                  "text": "The X-Frame-Options HTTP header is used to define whether an application can be loaded in an iFrame within a third-party application. HTML iFrames are often used by malicious actors to create a fraudulent website, which mimics a legitimate application in an attempt to harvest user credentials. This is known as a “clickjacking” attack. This header is specified in RFC-7034.\n\nX-Frame-Options is easily implemented to deny a third-party application from loading your web application within iFrames. This can be achieved with the Content-Security-Policy (CSP) header, which we will discuss later. When this CSP directive has been implemented, the X-Frame-Options header becomes obsolete.\n\nDeny ensures no rendering within a frame."
                 }
               ]
             }
@@ -4699,16 +3970,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "More information found at:"
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-043-r5",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://portswigger.net/kb/issues/005009a0_frameable-response-potential-clickjacking"
+                  "text": "More information found at:\nhttps://portswigger.net/kb/issues/005009a0_frameable-response-potential-clickjacking"
                 }
               ]
             },
@@ -4782,35 +4044,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-043-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -4835,16 +4068,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "This header is used to limit which data external resources, such as Adobe Flash and PDF documents, can access on the domain. Failure to set the X-Permitted-Cross-Domain-Policies header to 'none' value allows other domains to embed the application’s data in their content."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-044-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "If there is no requirement to load application data within web clients such as Adobe Flash Player or Adobe Acrobat (not limited to these), then the header should be configured according to the Remediation guideline below."
+                  "text": "This header is used to limit which data external resources, such as Adobe Flash and PDF documents, can access on the domain. Failure to set the X-Permitted-Cross-Domain-Policies header to 'none' value allows other domains to embed the application’s data in their content.\n\nIf there is no requirement to load application data within web clients such as Adobe Flash Player or Adobe Acrobat (not limited to these), then the header should be configured according to the Remediation guideline below."
                 }
               ]
             }
@@ -5074,35 +4298,6 @@
               }
             ]
           }
-        ],
-        "web_api": [
-          {
-            "frag_id": "VDB-044-web_api-poc",
-            "type": "numbered_list",
-            "items": [
-              {
-                "runs": [
-                  {
-                    "text": "Run the application in a browser configured to proxy with Burp Suite."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
-                  }
-                ]
-              },
-              {
-                "runs": [
-                  {
-                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured/Present."
-                  }
-                ]
-              }
-            ]
-          }
         ]
       }
     },
@@ -5188,16 +4383,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application’s multi-factor authentication (MFA) mechanism can be bypassed, allowing attackers to gain unauthorized access without providing the required second factor. This significantly weakens the authentication process and undermines the security benefits of MFA. Exploiting this vulnerability could lead to account takeover, exposure of sensitive data, and potential lateral movement within the environment, depending on the privileges of the compromised account."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-006-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "(insert additional description for the vulnerability)"
+                  "text": "The application’s multi-factor authentication (MFA) mechanism can be bypassed, allowing attackers to gain unauthorized access without providing the required second factor. This significantly weakens the authentication process and undermines the security benefits of MFA. Exploiting this vulnerability could lead to account takeover, exposure of sensitive data, and potential lateral movement within the environment, depending on the privileges of the compromised account.\n\n(insert additional description for the vulnerability)"
                 }
               ]
             }
@@ -5310,25 +4496,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Reflected cross-site scripting vulnerabilities arise when data is copied from a request and echoed into the application's immediate response in an unsafe way. An attacker can use the vulnerability to construct a request that, if issued by another application user, will cause JavaScript code supplied by the attacker to execute within the user's browser in the context of that user's session with the application."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-007-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The attacker-supplied code can perform a wide variety of actions, such as stealing the victim's session token or login credentials, performing arbitrary actions on the victim's behalf, and logging their keystrokes."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-007-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Users can be induced to issue the attacker's crafted request in various ways. For example, the attacker can send a victim a link containing a malicious URL in an email or instant message. They can submit the link to popular web sites that allow content authoring, for example in blog comments. And they can create an innocuous looking web site that causes anyone viewing it to make arbitrary cross-domain requests to the vulnerable application (using either the GET or the POST method)."
+                  "text": "Reflected cross-site scripting vulnerabilities arise when data is copied from a request and echoed into the application's immediate response in an unsafe way. An attacker can use the vulnerability to construct a request that, if issued by another application user, will cause JavaScript code supplied by the attacker to execute within the user's browser in the context of that user's session with the application.\n\nThe attacker-supplied code can perform a wide variety of actions, such as stealing the victim's session token or login credentials, performing arbitrary actions on the victim's behalf, and logging their keystrokes.\n\nUsers can be induced to issue the attacker's crafted request in various ways. For example, the attacker can send a victim a link containing a malicious URL in an email or instant message. They can submit the link to popular web sites that allow content authoring, for example in blog comments. And they can create an innocuous looking web site that causes anyone viewing it to make arbitrary cross-domain requests to the vulnerable application (using either the GET or the POST method)."
                 }
               ]
             }
@@ -5629,16 +4797,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Most instances of SQL injection can be prevented using parameterized queries instead of string concatenation within the query. These parameterized queries are also known as \"prepared statements\"."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-008-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Parameterized queries can be used for any situation where untrusted input appears as data within the query, including the WHERE clause and values in an INSERT or UPDATE statement. They can't be used to handle untrusted input in other parts of the query, such as table or column names, or the ORDER BY clause. Application functionality that places untrusted data into these parts of the query needs to take a different approach, such as:"
+                  "text": "Most instances of SQL injection can be prevented using parameterized queries instead of string concatenation within the query. These parameterized queries are also known as \"prepared statements\".\n\nParameterized queries can be used for any situation where untrusted input appears as data within the query, including the WHERE clause and values in an INSERT or UPDATE statement. They can't be used to handle untrusted input in other parts of the query, such as table or column names, or the ORDER BY clause. Application functionality that places untrusted data into these parts of the query needs to take a different approach, such as:"
                 }
               ]
             },
@@ -5766,25 +4925,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Unrestricted file upload is a significant security vulnerability that occurs when an application does not properly validate or restrict the types of files users can upload. This can lead to various security risks."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-010-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The consequences of unrestricted file upload can vary, including complete system takeover, an overloaded file system or database, forwarding attacks to back-end systems, client-side attacks, or simple defacement. It depends on what the application does with the uploaded file and especially where it is stored."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-010-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The application does only validate file uploads through the website interface but not after the upload request is intercepted and manipulated using tools like Burp Suite. This can be a serious vulnerability because attackers can bypass client-side validations and upload malicious files."
+                  "text": "Unrestricted file upload is a significant security vulnerability that occurs when an application does not properly validate or restrict the types of files users can upload. This can lead to various security risks.\n\nThe consequences of unrestricted file upload can vary, including complete system takeover, an overloaded file system or database, forwarding attacks to back-end systems, client-side attacks, or simple defacement. It depends on what the application does with the uploaded file and especially where it is stored.\n\nThe application does only validate file uploads through the website interface but not after the upload request is intercepted and manipulated using tools like Burp Suite. This can be a serious vulnerability because attackers can bypass client-side validations and upload malicious files."
                 }
               ]
             }
@@ -5852,16 +4993,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Handling errors correctly is essential to the security of an application. Verbose Error Messages are due to improper error handling and could reveal unnecessary detailed information about the server versions, framework versions, server code etc. which could help attacker escalate the attacks further."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-048-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Attackers can leverage the additional information provided by a default error page to mount attacks targeted on the specific framework, database, or other resources used by the application."
+                  "text": "Handling errors correctly is essential to the security of an application. Verbose Error Messages are due to improper error handling and could reveal unnecessary detailed information about the server versions, framework versions, server code etc. which could help attacker escalate the attacks further.\n\nAttackers can leverage the additional information provided by a default error page to mount attacks targeted on the specific framework, database, or other resources used by the application."
                 }
               ]
             }
@@ -5875,16 +5007,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Ensure that only generic, customized error messages, which do not reveal any sensitive information, are displayed to the user."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-048-r2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "https://owasp.org/www-community/Improper_Error_Handling"
+                  "text": "Ensure that only generic, customized error messages, which do not reveal any sensitive information, are displayed to the user.\n\nhttps://owasp.org/www-community/Improper_Error_Handling"
                 }
               ]
             },
@@ -5922,16 +5045,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "The application or system is using a technology (such as a framework, library, or component) that contains known security vulnerabilities. Attackers can exploit these weaknesses to perform actions such as remote code execution, privilege escalation, data leakage, or denial of service. Using vulnerable components significantly increases the attack surface and can lead to full compromise of the application or underlying infrastructure."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-049-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "Vulnerable Technology:"
+                  "text": "The application or system is using a technology (such as a framework, library, or component) that contains known security vulnerabilities. Attackers can exploit these weaknesses to perform actions such as remote code execution, privilege escalation, data leakage, or denial of service. Using vulnerable components significantly increases the attack surface and can lead to full compromise of the application or underlying infrastructure.\n\nVulnerable Technology:"
                 }
               ]
             },
@@ -6066,34 +5180,7 @@
               "type": "paragraph",
               "runs": [
                 {
-                  "text": "Weak SSL/TLS configuration allows attacker to leverage outdated or insecure encryption protocols or ciphers. A weak SSL/TLS configuration can result in various security vulnerabilities, such as man-in-the-middle, eavesdropping, tampering, and session hijacking. The application was found to support weak TLS configuration that are vulnerable to attacks that may increase in the exposure of the transmitted data."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-016-d2",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "The remote service accepts connections encrypted using TLS 1.0 and TLS 1.1. TLS 1.0 and TLS 1.1 has a number of cryptographic design flaws. Modern implementations of TLS 1.0 and TLS 1.1 mitigate these problems, but newer versions of TLS like 1.2 and 1.3 are designed against these flaws and should be used whenever possible."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-016-d3",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "As of March 31, 2020, Endpoints that aren’t enabled for TLS 1.2 and higher will no longer function properly with major web browsers and major vendors."
-                }
-              ]
-            },
-            {
-              "frag_id": "VDB-016-d4",
-              "type": "paragraph",
-              "runs": [
-                {
-                  "text": "In addition, weak ciphers such as CBC block algorithm is used and this would subject to LUCKY13 attacks."
+                  "text": "Weak SSL/TLS configuration allows attacker to leverage outdated or insecure encryption protocols or ciphers. A weak SSL/TLS configuration can result in various security vulnerabilities, such as man-in-the-middle, eavesdropping, tampering, and session hijacking. The application was found to support weak TLS configuration that are vulnerable to attacks that may increase in the exposure of the transmitted data.\n\nThe remote service accepts connections encrypted using TLS 1.0 and TLS 1.1. TLS 1.0 and TLS 1.1 has a number of cryptographic design flaws. Modern implementations of TLS 1.0 and TLS 1.1 mitigate these problems, but newer versions of TLS like 1.2 and 1.3 are designed against these flaws and should be used whenever possible.\n\nAs of March 31, 2020, Endpoints that aren’t enabled for TLS 1.2 and higher will no longer function properly with major web browsers and major vendors.\n\nIn addition, weak ciphers such as CBC block algorithm is used and this would subject to LUCKY13 attacks."
                 }
               ]
             }

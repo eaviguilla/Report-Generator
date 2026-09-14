@@ -17,14 +17,15 @@ from fastapi.testclient import TestClient
 from docx import Document
 from docx.oxml.ns import qn
 from PIL import Image
+from pydantic import ValidationError
 
 from app import main
 from app.docx_report import _finding_locations, _metadata
 from app.library import Library
-from app.report_service import affected_channels, applicable_poc_variant, apply_poc_variant, provision
+from app.report_service import affected_channels, applicable_poc_variants, apply_poc_variant, provision
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
-from app.models import ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, Vulnerability
+from app.models import ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, Vulnerability, resolve_tested_channels
 from app.tester_identity import Identity, load_or_bootstrap
 
 
@@ -272,12 +273,12 @@ class ReportApiTests(unittest.TestCase):
         fragments = [fragment.frag_id for content in main.workspace.load(report_id).vulnerabilities[0].contents for fragment in content.fragments]
         self.assertEqual(len(fragments), len(set(fragments)))
 
-    def test_workspace_migrates_legacy_test_type_and_empty_lists(self) -> None:
+    def test_workspace_restores_legacy_app_types_and_repairs_empty_lists(self) -> None:
         report_id = self.new_report()
         path = main.workspace.find_path(report_id)
         draft = read_json(path)
-        draft["engagement"].pop("test_type")
-        draft["engagement"]["tested_channels"] = ["web", "api"]
+        draft["engagement"].pop("tested_channels")
+        draft["engagement"]["tested_channels"] = ["web", "mobile"]
         draft["vulnerabilities"] = [{
             "uid": "v_legacy",
             "contents": [{"type": "description", "fragments": [{"frag_id": "f_list", "type": "numbered_list", "items": []}]}],
@@ -286,8 +287,57 @@ class ReportApiTests(unittest.TestCase):
 
         migrated = main.workspace.load(report_id)
 
-        self.assertEqual(migrated.engagement.test_type, "web_api")
+        # The retired token could not express web+mobile at all; the list restores it losslessly.
+        self.assertEqual(migrated.engagement.tested_channels, ["web", "mobile"])
         self.assertEqual(len(migrated.vulnerabilities[0].contents[0].fragments[0].items), 1)
+
+    def test_the_retired_test_type_token_migrates_on_every_entry_path(self) -> None:
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        draft["engagement"].pop("tested_channels")
+        draft["engagement"]["test_type"] = "web_api"
+        draft["vulnerabilities"] = [{"uid": "v_poc", "poc_variant": "web_api", "poc_variant_declined": ["mobile"]}]
+        atomic_write_json(path, draft)
+
+        loaded = main.workspace.load(report_id)
+        self.assertEqual(loaded.engagement.tested_channels, ["web", "api"])
+        self.assertEqual(loaded.vulnerabilities[0].poc_variants, ["web", "api"])
+        self.assertEqual(loaded.vulnerabilities[0].poc_variant_declined, ["mobile"])
+
+        # import_report never goes through load_path, so the model validator is what has to cover it.
+        payload = loaded.model_dump(mode="json", by_alias=True)
+        payload["engagement"].pop("tested_channels")
+        payload["engagement"]["test_type"] = "mobile"
+        payload["report_id"] = "r_importedtypes"
+        imported = main.workspace.import_report(payload)
+        self.assertEqual(imported.engagement.tested_channels, ["mobile"])
+
+    def test_a_report_cannot_cover_no_app_type_at_all(self) -> None:
+        report_id = self.new_report()
+        payload = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        payload["engagement"]["tested_channels"] = []
+        payload["report_id"] = "r_nochannels"
+        with self.assertRaises(ValidationError):
+            main.workspace.import_report(payload)
+
+    def test_app_types_fall_back_to_the_reports_own_targets_not_to_web(self) -> None:
+        """A payload carrying no app-type information at all must not narrow the report to web and
+        delete every API target it already holds."""
+        resolved = resolve_tested_channels({
+            "scope_targets": [
+                {"target_id": "tgt_a", "environment": "production", "channel": "api", "value": "POST /v1/pay"},
+                {"target_id": "tgt_m", "environment": "production", "channel": "mobile", "value": "Wallet app"},
+            ],
+        })
+        self.assertEqual(resolved, ["api", "mobile"])
+        self.assertEqual(resolve_tested_channels({}), ["web"])
+        # Present-but-empty is a deliberate choice and must stay empty for the field's floor to catch it.
+        self.assertEqual(resolve_tested_channels({"engagement": {"tested_channels": []}}), [])
+        # A bare string is the one malformed shape the retired migration produced.
+        self.assertEqual(resolve_tested_channels({"engagement": {"tested_channels": "web"}}), ["web"])
+        # Both keys can only coexist in a hand-edited file; union is the only rule that drops nothing.
+        self.assertEqual(resolve_tested_channels({"engagement": {"tested_channels": ["mobile"], "test_type": "web_api"}}), ["web", "api", "mobile"])
 
     def test_workflow_routes_enforce_setup_and_finding_gates(self) -> None:
         report_id = self.new_report()
@@ -326,32 +376,37 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(engagement.limitations, "N/A")
         self.assertEqual([(account.user_role, account.username) for account in engagement.test_accounts], [("N/A", "N/A")])
 
-    def test_affected_channels_resolve_the_proof_of_concept_variant(self) -> None:
+    def test_affected_channels_resolve_the_proof_of_concept_variants(self) -> None:
         report = main.workspace.create_report()
-        report.engagement.test_type = "web_api"
+        report.engagement.tested_channels = ["web", "api"]
         report.scope_targets = [
             ScopeTarget(target_id="tgt_web", environment="production", channel="web", value="https://prod.example.test"),
             ScopeTarget(target_id="tgt_api", environment="production", channel="api", value="POST /v1/pay"),
         ]
         finding = Vulnerability(uid="v_chan", title="Finding")
         report.vulnerabilities = [finding]
+        entry = {"web": [1], "api": [1]}
 
         finding.scope = Scope(mode="custom", target_ids=["tgt_api"])
-        self.assertEqual(applicable_poc_variant(finding, report), "api")
+        self.assertEqual(applicable_poc_variants(finding, report, entry), ["api"])
 
+        # A mixed finding now offers every app type it touches, in canonical order, instead of nothing.
         finding.scope = Scope(mode="custom", target_ids=["tgt_api", "tgt_web"])
-        self.assertEqual(applicable_poc_variant(finding, report), "web_api")
+        self.assertEqual(applicable_poc_variants(finding, report, entry), ["web", "api"])
 
         # A typed-in endpoint now carries its own app type, so it resolves like a selected target.
         finding.scope = Scope(mode="custom", custom_locations={"production": {"web": ["https://typed.example.test"]}})
-        self.assertEqual(applicable_poc_variant(finding, report), "web")
+        self.assertEqual(applicable_poc_variants(finding, report, entry), ["web"])
 
         # No draft on disk exercises the non-custom modes, so they are covered here deliberately.
         finding.scope = Scope(mode="all")
-        self.assertEqual(applicable_poc_variant(finding, report), "web_api")
+        self.assertEqual(applicable_poc_variants(finding, report, entry), ["web", "api"])
+
+        # An app type the entry has no steps for is never offered.
+        self.assertEqual(applicable_poc_variants(finding, report, {"api": [1]}), ["api"])
 
         finding.scope = Scope(mode="custom")
-        self.assertIsNone(applicable_poc_variant(finding, report))
+        self.assertEqual(applicable_poc_variants(finding, report, entry), [])
 
     def test_applying_a_proof_of_concept_keeps_images_and_leaves_the_previous_one_alone(self) -> None:
         finding = Vulnerability(uid="v_poc", title="Finding", status="open_previously_discovered")
@@ -365,7 +420,7 @@ class ReportApiTests(unittest.TestCase):
         ]
         steps = [ListFragment(frag_id="f_lib", type="numbered_list", items=[ListItem(runs=[Run(text="Library step")])])]
 
-        apply_poc_variant(finding, steps, "web")
+        apply_poc_variant(finding, steps, ["web"])
 
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         self.assertEqual([fragment.type for fragment in proof.fragments], ["numbered_list", "image"])
@@ -373,7 +428,25 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(proof.fragments[1].evidence_id, "ev_keepme")
         self.assertNotEqual(proof.fragments[0].frag_id, "f_lib")
         self.assertEqual(previous.fragments[0].items[0].runs[0].text, "Old evidence")
-        self.assertEqual(finding.poc_variant, "web")
+        self.assertEqual(finding.poc_variants, ["web"])
+
+    def test_installing_several_app_types_yields_one_continuously_numbered_list(self) -> None:
+        """Two list fragments each restart at 1 in the generated document, so appended steps have to
+        collapse into a single list to read as one procedure."""
+        finding = Vulnerability(uid="v_multi", title="Finding")
+        provision(finding)
+        steps = [
+            ListFragment(frag_id="f_web", type="numbered_list", items=[ListItem(runs=[Run(text="Open the browser")]), ListItem(runs=[Run(text="Proxy it")])]),
+            ListFragment(frag_id="f_api", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request")])]),
+        ]
+
+        apply_poc_variant(finding, steps, ["web", "api"], "merge")
+
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        lists = [fragment for fragment in proof.fragments if fragment.type == "numbered_list"]
+        self.assertEqual(len(lists), 1)
+        self.assertEqual([item.runs[0].text for item in lists[0].items], ["Open the browser", "Proxy it", "Send the request"])
+        self.assertEqual(finding.poc_variants, ["web", "api"])
 
     def test_a_proof_of_concept_always_keeps_a_steps_list(self) -> None:
         """Steps are the substance of a proof of concept, so neither deleting the list nor replacing
@@ -389,7 +462,7 @@ class ReportApiTests(unittest.TestCase):
             if content.type.endswith("proof_of_concept"):
                 self.assertEqual(content.fragments[0].type, "numbered_list", f"{content.type} was left with no steps")
 
-        apply_poc_variant(finding, [ParagraphFragment(frag_id="f_prose", type="paragraph", runs=[Run(text="Prose only")])], "web")
+        apply_poc_variant(finding, [ParagraphFragment(frag_id="f_prose", type="paragraph", runs=[Run(text="Prose only")])], ["web"])
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         self.assertEqual([fragment.type for fragment in proof.fragments], ["numbered_list", "paragraph", "image"])
 
@@ -409,13 +482,13 @@ class ReportApiTests(unittest.TestCase):
             os.utime(script, (stamps.st_atime, stamps.st_mtime))
         self.assertNotEqual(before, after)
 
-    def test_replacing_the_steps_clears_an_earlier_refusal(self) -> None:
-        finding = Vulnerability(uid="v_memory", title="Finding", poc_variant_declined=["api"])
+    def test_installing_one_app_type_leaves_another_refusal_standing(self) -> None:
+        finding = Vulnerability(uid="v_memory", title="Finding", poc_variant_declined=["api", "web"])
         provision(finding)
-        apply_poc_variant(finding, [ListFragment(frag_id="f_new", type="numbered_list", items=[ListItem(runs=[Run(text="Step")])])], "web_api")
-        # The refusal referred to steps that no longer exist, so returning to api must offer again.
-        self.assertEqual(finding.poc_variant_declined, [])
-        self.assertEqual(finding.poc_variant, "web_api")
+        apply_poc_variant(finding, [ListFragment(frag_id="f_new", type="numbered_list", items=[ListItem(runs=[Run(text="Step")])])], ["web"])
+        # Declining API and accepting Web are independent decisions now that variants are per app type.
+        self.assertEqual(finding.poc_variant_declined, ["api"])
+        self.assertEqual(finding.poc_variants, ["web"])
 
     def test_report_filename_uses_segment_type_and_report_year(self) -> None:
         report = main.workspace.create_report()
@@ -469,7 +542,7 @@ class ReportApiTests(unittest.TestCase):
             "ci_number": "CI-MOBILE",
             "segment": "JH",
             "report_type": "annual_pentest",
-            "test_type": "mobile",
+            "tested_channels": ["mobile"],
             "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-01"}},
         })
@@ -488,9 +561,12 @@ class ReportApiTests(unittest.TestCase):
         self.assertIn('Production Mobile scope contains invalid character: "!" (exclamation mark)', rejected.json()["error"]["message"])
 
         web = saved.json()["report"]
-        web["engagement"]["test_type"] = "web"
+        web["engagement"]["tested_channels"] = ["web"]
         web["scope_text"] = {"production": {"web": "https://example.test/path?x=1&y=2"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=web).status_code, 200)
+        # Narrowing with no finding to strand is allowed and silent server-side; warning the tester
+        # before it happens is the Setup page's job.
+        self.assertEqual([target.channel for target in main.workspace.load(report_id).scope_targets], ["web"])
 
     def test_image_slots_follow_affected_environments_and_allow_multiple(self) -> None:
         report_id = self.new_report()
@@ -618,7 +694,7 @@ class ReportApiTests(unittest.TestCase):
         """A typed API endpoint left on a web-only engagement would print a location that is out of scope."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["engagement"].update({"app_name": "Typed Scope", "ci_number": "CI-TYPED", "test_type": "web_api", "tested_environments": ["production"]})
+        report["engagement"].update({"app_name": "Typed Scope", "ci_number": "CI-TYPED", "tested_channels": ["web", "api"], "tested_environments": ["production"]})
         report["scope_text"] = {"production": {"web": "https://web.example.test", "api": "POST /v1/pay"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
 
@@ -631,7 +707,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
 
         narrowed = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        narrowed["engagement"]["test_type"] = "web"
+        narrowed["engagement"]["tested_channels"] = ["web"]
         narrowed["scope_text"] = {"production": {"web": "https://web.example.test"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=narrowed).status_code, 200)
 
@@ -644,7 +720,7 @@ class ReportApiTests(unittest.TestCase):
         instead of the endpoints, and per-channel ordering would interleave the two lists."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["engagement"].update({"app_name": "Locations", "ci_number": "CI-LOC", "test_type": "web_api", "tested_environments": ["production"]})
+        report["engagement"].update({"app_name": "Locations", "ci_number": "CI-LOC", "tested_channels": ["web", "api"], "tested_environments": ["production"]})
         report["scope_text"] = {"production": {"web": "https://a.example.test\nhttps://b.example.test", "api": "POST /v1/one"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
 
@@ -699,7 +775,7 @@ class ReportApiTests(unittest.TestCase):
         scope to custom, so an all-scoped finding must still print what the tester typed."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["engagement"].update({"app_name": "Additional", "ci_number": "CI-ADD", "test_type": "web", "tested_environments": ["production"]})
+        report["engagement"].update({"app_name": "Additional", "ci_number": "CI-ADD", "tested_channels": ["web"], "tested_environments": ["production"]})
         report["scope_text"] = {"production": {"web": "https://main.example.test"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
 

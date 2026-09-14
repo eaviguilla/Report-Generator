@@ -204,55 +204,29 @@ body::before {
   line-height: 1.45;
 }
 
-.diagnostic-summary {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 4px 10px;
-  margin: 0 0 12px;
-  padding: 10px;
+.diagnostic-code {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: var(--canvas);
   font-size: 10px;
 }
 
-.diagnostic-summary dt {
+.diagnostic-code span {
   color: var(--muted);
   font-weight: 600;
 }
 
-.diagnostic-summary dd {
+.diagnostic-code code {
   min-width: 0;
-  margin: 0;
   overflow-wrap: anywhere;
   color: var(--ink-soft);
   font-family: "Cascadia Code", Consolas, monospace !important;
-}
-
-.diagnostic-details {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.diagnostic-details summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--accent-strong);
-  font-weight: 600;
-}
-
-.diagnostic-details pre {
-  max-height: 220px;
-  overflow: auto;
-  margin: 8px 0 0;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  color: var(--ink-soft);
-  background: var(--canvas-deep);
-  font: 10px/1.5 "Cascadia Code", Consolas, monospace !important;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  user-select: all;
 }
 
 .diagnostic-actions {
@@ -507,6 +481,12 @@ button.danger:hover:not(:disabled) {
   border-color: var(--danger);
 }
 
+/* Red on a dead button reads as "click me"; grey says the fragment is required. */
+button.danger:disabled {
+  color: var(--muted-light);
+  background: transparent;
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -570,7 +550,7 @@ input[data-path*="scope"],
 .report-name small,
 .finding-nav-meta,
 .content-toggle small,
-.evidence-file {
+.evidence-size {
   font-family: "Cascadia Code", Consolas, monospace !important;
   font-variant-numeric: tabular-nums;
 }
@@ -695,8 +675,17 @@ label,
   flex-direction: column;
 }
 
-.test-configuration .test-type-select select {
-  width: 170px;
+.test-configuration .test-type-options {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.test-configuration .test-type-options .coverage-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
 }
 
 .environment-window {
@@ -978,6 +967,7 @@ button.finding-title-display:hover:not(:disabled) span {
 }
 
 .finding-nav {
+  --rail: var(--informational);
   gap: 7px;
   min-height: 64px;
   margin: 0 0 5px;
@@ -988,30 +978,62 @@ button.finding-title-display:hover:not(:disabled) span {
   background: transparent;
 }
 
-.finding-nav:hover {
+.finding-nav.severity-critical { --rail: var(--critical); }
+.finding-nav.severity-high { --rail: var(--high); }
+.finding-nav.severity-medium { --rail: var(--medium); }
+.finding-nav.severity-low { --rail: var(--low); }
+
+/* One owner for the severity rail, so no state can drop the colour that encodes it. */
+button.finding-nav,
+button.finding-nav:hover:not(:disabled),
+button.finding-nav.active:not(:disabled) {
+  border-color: transparent;
+  border-left-color: var(--rail);
+}
+
+/* Hover only previews a move, so it stays quieter than the finding actually open. */
+button.finding-nav:hover:not(:disabled) {
+  color: var(--ink) !important;
   background: var(--surface-raised);
 }
 
-button.finding-nav:hover:not(:disabled) {
-  border-color: transparent;
-  border-left-color: currentColor;
-  color: #173f3a !important;
-  background: #dcece8;
-}
-
 button.finding-nav:hover:not(:disabled) .finding-nav-title {
-  color: #173f3a !important;
+  color: var(--ink) !important;
 }
 
 button.finding-nav:hover:not(:disabled) .finding-nav-meta,
 button.finding-nav:hover:not(:disabled) .finding-nav-meta span {
-  color: #315f59 !important;
+  color: var(--muted) !important;
 }
 
-.finding-nav.active {
-  color: var(--ink) !important;
-  background: var(--surface-raised);
+button.finding-nav.active:not(:disabled) {
+  position: relative;
+  color: var(--accent-strong) !important;
+  background: var(--accent-soft);
   box-shadow: var(--shadow-small);
+}
+
+/* The stepper marks the current step with an accent bar on the edge facing the page. This is
+   that same bar, turned to the edge facing the editor. */
+button.finding-nav.active:not(:disabled)::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  content: "";
+}
+
+button.finding-nav.active:not(:disabled) .finding-nav-title {
+  color: var(--accent-strong) !important;
+  font-weight: 700;
+}
+
+button.finding-nav.active:not(:disabled) .finding-nav-meta,
+button.finding-nav.active:not(:disabled) .finding-nav-meta span {
+  color: var(--accent) !important;
 }
 
 .finding-nav-title {
@@ -1032,7 +1054,8 @@ button.finding-nav:hover:not(:disabled) .finding-nav-meta span {
 }
 
 .finding-card {
-  overflow: hidden;
+  /* clip, not hidden: hidden would make the card a scroll container and kill the sticky headers. */
+  overflow: clip;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
   background: var(--surface-raised);
@@ -1084,8 +1107,7 @@ button.finding-nav:hover:not(:disabled) .finding-nav-meta span {
 }
 
 .finding-locations span,
-.finding-assessment span,
-.evidence-details > label {
+.finding-assessment span {
   text-transform: none;
 }
 
@@ -1109,12 +1131,22 @@ button.finding-nav:hover:not(:disabled) .finding-nav-meta span {
 }
 
 .content-toggle {
+  /* Keeps the section name on screen through a long body, until the next section pushes it out.
+     Chrome pins against the pane's content box, so the inset is cancelled to sit flush with its top edge.
+     The shadow fills the 18px margin so fragments do not show through the gap while scrolling. */
+  position: sticky;
+  top: calc(var(--editor-inset) * -1);
+  z-index: 2;
+  /* A button's auto width is fit-content and a percentage ignores the negative margins; both leave a
+     gap at the right edge that scrolling fragments show through once the header is pinned. */
+  width: calc(100% + 48px);
   min-height: 48px;
   margin: 0 -24px 18px;
   padding: 0 24px;
   border-color: var(--line);
   color: var(--ink-soft);
   background: var(--surface-raised);
+  box-shadow: 0 18px 0 var(--surface-raised);
   font-size: 13px;
 }
 
@@ -1186,28 +1218,232 @@ button.content-toggle:hover:not(:disabled) small {
   background: var(--accent-soft);
 }
 
-.evidence-card {
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 16px;
-  padding: 14px;
-  border-color: var(--line-strong);
+.evidence-set {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.evidence-tile {
+  display: grid;
+  grid-template-rows: auto auto;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
-  background: var(--accent-faint);
-}
-
-.evidence-preview {
-  width: 150px;
-  height: 108px;
-  border-color: var(--line-strong);
-  border-radius: 3px;
-  color: var(--accent-strong);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-small);
 }
 
-.evidence-preview:hover:not(:disabled) {
+.evidence-tile.is-dragging {
+  opacity: 0.4;
+}
+
+.evidence-tile.is-drop-target {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.evidence-stage {
+  position: relative;
+  display: grid;
+  height: 190px;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--canvas-deep);
+}
+
+.evidence-stage .image-preview {
+  /* Overrides the legacy fixed 88x66 thumbnail so the whole screenshot is shown, not a crop of it. */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 166px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  object-fit: contain;
+}
+
+.evidence-drop {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: center;
+}
+
+.evidence-drop b {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.evidence-drop small {
+  font-size: 10px;
+}
+
+.evidence-paste-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  cursor: pointer;
+}
+
+/* The position control is the one thing a tester reaches for repeatedly, so it stays visible. */
+.evidence-order {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-small);
+}
+
+.evidence-order-number {
+  min-width: 22px;
+  padding: 0 2px;
+  color: var(--ink);
+  cursor: grab;
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 24px;
+  text-align: center;
+}
+
+.evidence-order-number:active {
+  cursor: grabbing;
+}
+
+.evidence-order button {
+  width: 22px;
+  min-width: 22px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+}
+
+.evidence-order button:hover:not(:disabled) {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.evidence-order button:disabled {
+  color: var(--muted-light);
+  opacity: 1;
+}
+
+.evidence-tools {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+
+.evidence-tile:hover .evidence-tools,
+.evidence-tile:focus-within .evidence-tools {
+  opacity: 1;
+}
+
+.evidence-tools > * {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.evidence-tools .evidence-replace {
+  color: var(--accent-strong);
+}
+
+.evidence-tools .evidence-replace:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.evidence-tile-body {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+.evidence-tile-body .evidence-caption {
+  width: 100%;
+  font-size: 12px;
+}
+
+.evidence-tile-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.evidence-tile-foot .evidence-environment {
+  min-height: 26px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.evidence-size {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.evidence-add {
+  display: grid;
+  min-height: 190px;
+  align-content: center;
+  justify-items: center;
+  gap: 3px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  text-align: center;
+}
+
+.evidence-add:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent-strong);
   background: var(--accent-soft);
+}
+
+.evidence-add b {
+  color: inherit;
+  font-size: 12px;
+}
+
+.evidence-add small {
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.evidence-fragment {
+  border-left-color: var(--line-strong);
 }
 
 .evidence-environment-value {
@@ -1248,7 +1484,7 @@ button.content-toggle:hover:not(:disabled) small {
 
 .review-heading b {
   border-radius: 3px;
-  background: var(--danger);
+  background: var(--muted);
   font-size: 11px;
 }
 
@@ -1276,17 +1512,21 @@ button.content-toggle:hover:not(:disabled) small {
   color: var(--muted);
 }
 
+/* An unchecked marker, not an alert: these are details the tester has yet to supply. */
 .review-group .review-icon {
   width: 13px;
   height: 13px;
   margin-top: 1px;
-  color: #fff;
-  background: var(--danger);
+  border: 1.5px solid var(--line-strong);
+  color: transparent;
+  background: transparent;
   font-size: 9px;
 }
 
 .review-group .review-item[data-level="warning"] .review-icon {
-  background: var(--warning);
+  border-color: var(--warning);
+  color: var(--warning);
+  background: transparent;
 }
 
 .review-group .review-item button {
@@ -1301,12 +1541,12 @@ button.content-toggle:hover:not(:disabled) small {
   background: transparent;
 }
 
-/* Red earns a scannable rail down the left edge instead of flooding the card. */
+/* A quiet rail marks the card as unfinished; red would read as something the app got wrong. */
 .review-group {
   overflow: hidden;
   margin-bottom: 8px;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--danger);
+  border-left: 3px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface-raised);
 }
@@ -1535,9 +1775,6 @@ button.content-toggle:hover:not(:disabled) small {
 .finding-locations em,
 .content-toggle small,
 .tag,
-.evidence-details > label,
-.evidence-file,
-.evidence-file small,
 .review-heading b {
   font-size: 11px;
 }
@@ -1701,6 +1938,11 @@ body > main {
     border-bottom-color: var(--accent);
   }
 
+  /* The strip sits above the editor, so the bottom border is already the edge facing it. */
+  #finding-nav .finding-nav.active::after {
+    display: none;
+  }
+
   #finding-editor {
     padding: 18px 12px 34px;
   }
@@ -1736,17 +1978,15 @@ body > main {
   }
 
   .content-toggle {
+    /* The pane stops scrolling itself here, so sticking would hide the header behind the app chrome. */
+    position: static;
+    width: calc(100% + 28px);
     margin-inline: -14px;
     padding-inline: 14px;
   }
 
-  .evidence-card {
+  .evidence-set {
     grid-template-columns: 1fr;
-  }
-
-  .evidence-preview {
-    width: 100%;
-    height: 180px;
   }
 
   .evidence-caption {
@@ -1808,8 +2048,8 @@ textarea,
 .list-textarea,
 .fragment,
 .finding-card,
-.evidence-card,
-.evidence-preview,
+.evidence-tile,
+.evidence-add,
 .add-fragment,
 .scope-panel,
 .location-group,
@@ -1918,10 +2158,10 @@ textarea,
   min-height: 26px;
 }
 
+/* Hidden, not removed: the reserved space keeps the row's controls from shifting between fragments. */
 .fragment-move-up:disabled,
 .fragment-move-down:disabled {
-  opacity: 1;
-  color: var(--muted-light);
+  visibility: hidden;
 }
 
 /* contenteditable has no native placeholder. */

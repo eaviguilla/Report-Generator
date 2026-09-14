@@ -9,14 +9,54 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 Severity = Literal["critical", "high", "medium", "low", "informational"]
 Status = Literal["open_new", "open_previously_discovered", "resolved"]
 Environment = Literal["production", "non_production"]
-Channel = Literal["api", "web", "mobile"]
-TestType = Literal["web", "api", "mobile", "web_api"]
+Channel = Literal["web", "api", "mobile"]
+# The one canonical app-type order. Lives here because docx_report and report_service both import
+# from this module, so putting it anywhere else would invert the dependency direction.
+CHANNELS: tuple[Channel, ...] = ("web", "api", "mobile")
+# The retired compound token set, kept only to read drafts written before app types became a list.
+LEGACY_TEST_TYPE_CHANNELS: dict[str, list[str]] = {"web": ["web"], "api": ["api"], "mobile": ["mobile"], "web_api": ["web", "api"]}
 # Only labels the Proof of Concept evidence groups; it never renames the environment itself.
 NonProductionLabel = Literal["UAT", "TEST/MO", "DEV"]
 Segment = Literal["JH", "GWAM", "Asia"]
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
 ContentType = Literal["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]
 StableId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
+
+
+def _channel_list(value) -> list:
+    """Accept the one malformed shape the retired migration produced: a bare channel string."""
+    if isinstance(value, str):
+        return [value]
+    return list(value) if isinstance(value, list) else []
+
+
+def expand_legacy_test_type(value) -> list:
+    """Unknown tokens pass through so the Channel literal rejects them; this never raises itself."""
+    return LEGACY_TEST_TYPE_CHANNELS.get(value, [value] if value else [])
+
+
+def resolve_tested_channels(report: dict) -> list:
+    """Single owner of "which app types does this report cover", for every entry path.
+
+    Precedence tests key presence, never truthiness, so an explicitly empty list stays empty and is
+    refused by the field's floor, while an absent key falls back to the report's own targets."""
+    engagement = report.get("engagement")
+    engagement = engagement if isinstance(engagement, dict) else {}
+    submitted = "tested_channels" in engagement
+    legacy = "test_type" in engagement
+    if not submitted and not legacy:
+        targets = report.get("scope_targets") or []
+        present = [target.get("channel") for target in targets if isinstance(target, dict)]
+        return [channel for channel in CHANNELS if channel in present] or ["web"]
+    # Both keys together only happens in a hand-edited or third-party file; union is the only
+    # resolution that cannot silently drop a scope target.
+    values = _channel_list(engagement.get("tested_channels")) if submitted else []
+    if legacy:
+        values += expand_legacy_test_type(engagement.get("test_type"))
+    if not values:
+        return []
+    known = [channel for channel in CHANNELS if channel in values]
+    return known + [value for value in dict.fromkeys(values) if value not in CHANNELS]
 
 
 class Run(BaseModel):
@@ -136,10 +176,12 @@ class Vulnerability(BaseModel):
     status: Status = "open_new"
     scope: Scope = Field(default_factory=Scope)
     library_ref: LibraryRef | None = None
-    # Which app type the current proof-of-concept steps came from, and which offers the tester has refused.
-    # Kept on the finding because both library insert paths rebuild library_ref from scratch.
-    poc_variant: TestType | None = None
-    poc_variant_declined: list[TestType] = Field(default_factory=list)
+    # Which app types the current proof-of-concept steps came from, and which offers the tester has
+    # refused. Kept on the finding because both library insert paths rebuild library_ref from scratch.
+    poc_variants: list[Channel] = Field(default_factory=list)
+    poc_variant_declined: list[Channel] = Field(default_factory=list)
+    # Per content section, the library_id whose keep/replace/add offer has been resolved, so it stops reappearing.
+    content_offer_resolved: dict[ContentType, StableId] = Field(default_factory=dict)
     contents: list[Content] = Field(default_factory=list)
 
 
@@ -153,7 +195,7 @@ class Engagement(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     tested_environments: list[Environment] = Field(default_factory=lambda: ["production", "non_production"])
-    test_type: TestType = "web"
+    tested_channels: list[Channel] = Field(default_factory=lambda: ["web"], min_length=1)
     non_production_label: NonProductionLabel = "UAT"
     test_windows: dict[Environment, TestWindow] = Field(default_factory=dict)
     test_accounts: list[TestAccount] = Field(default_factory=lambda: [TestAccount()])
@@ -164,15 +206,31 @@ class Engagement(BaseModel):
     template_set: str = "default-v1"
 
     @model_validator(mode="after")
-    def validate_environments(self) -> "Engagement":
+    def validate_coverage(self) -> "Engagement":
         if len(self.tested_environments) != len(set(self.tested_environments)):
             raise ValueError("tested environments must be unique")
+        if len(self.tested_channels) != len(set(self.tested_channels)):
+            raise ValueError("tested app types must be unique")
         return self
 
 
 class FolderHint(BaseModel):
     app_folder: str = ""
     report_folder: str = ""
+
+
+def _migrate_poc_variant(vulnerability):
+    """Turn the retired single poc_variant token into the list of app types it stood for."""
+    if not isinstance(vulnerability, dict):
+        return vulnerability
+    declined = vulnerability.get("poc_variant_declined")
+    migrated = {key: value for key, value in vulnerability.items() if key != "poc_variant"}
+    if "poc_variant" in vulnerability and "poc_variants" not in vulnerability:
+        migrated["poc_variants"] = expand_legacy_test_type(vulnerability["poc_variant"])
+    if isinstance(declined, list):
+        expanded = [channel for token in declined for channel in expand_legacy_test_type(token)]
+        migrated["poc_variant_declined"] = list(dict.fromkeys(expanded))
+    return migrated
 
 
 class EvidenceItem(BaseModel):
@@ -204,6 +262,23 @@ class Report(BaseModel):
     scope_targets: list[ScopeTarget] = Field(default_factory=list)
     vulnerabilities: list[Vulnerability] = Field(default_factory=list)
     evidence: dict[StableId, EvidenceItem] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalise_app_types(cls, data):
+        """Migrate the retired test_type token here rather than in load_path, because import_report
+        and parse_import build a Report without ever going through it."""
+        if not isinstance(data, dict):
+            return data
+        engagement = data.get("engagement")
+        if engagement is not None and not isinstance(engagement, dict):
+            return data
+        engagement = {key: value for key, value in (engagement or {}).items() if key != "test_type"}
+        engagement["tested_channels"] = resolve_tested_channels(data)
+        vulnerabilities = data.get("vulnerabilities")
+        if isinstance(vulnerabilities, list):
+            return {**data, "engagement": engagement, "vulnerabilities": [_migrate_poc_variant(item) for item in vulnerabilities]}
+        return {**data, "engagement": engagement}
 
     @model_validator(mode="after")
     def validate_references(self) -> "Report":

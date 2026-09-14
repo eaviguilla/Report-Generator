@@ -92,6 +92,8 @@
   const statuses = [["open_new", "Open (New)"], ["open_previously_discovered", "Open (Previously Discovered)"], ["resolved", "Resolved"]];
   const contentNames = {description:"Description", recommended_remediation:"Recommended Remediation", previous_proof_of_concept:"Previous Proof of Concept", proof_of_concept:"Proof of Concept", in_conclusion:"In Conclusion"};
   const allowed = {description:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], recommended_remediation:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], previous_proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], in_conclusion:["paragraph","note"]};
+  // Twin of docx_report.generation_issues; these two carry the finding, so neither is ever left empty.
+  const requiresFragment = ["description", "recommended_remediation"];
   let autoSaveTimer;
   const autoSaveDelay = Math.max(100, Number(window.VULNREPORT_AUTOSAVE_IDLE_MS ?? window.VULNREPORT_AUTOSAVE_INTERVAL_MS) || 5000);
   let localDraftTimer;
@@ -119,6 +121,9 @@
   let validateCurrentPage = () => true;
   let updateFindingSummary = () => {};
   const expandedFindingIds = new Set();
+  // Tells "nothing opened yet" apart from "the tester closed them all"; an empty set alone would
+  // re-open the first finding every time the table is rebuilt.
+  let findingFoldDefaulted = false;
   // Creates stable client-side IDs for vulnerabilities, fragments, and evidence records.
   const id = (prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
   // Escapes text before it is inserted into generated HTML markup.
@@ -875,8 +880,9 @@
     return environments;
   };
   const affectedEnvironments = finding => scopeEnvironments(finding.scope);
-  // Shared by the setup page's scope controls and the editor's proof-of-concept offer.
-  const testTypes = {web:{label:"Web App", channels:["web"]}, api:{label:"API", channels:["api"]}, mobile:{label:"Mobile", channels:["mobile"]}, web_api:{label:"Web App + API", channels:["web", "api"]}};
+  // Twin of models.CHANNELS; the one canonical app-type order on this side.
+  const CHANNELS = ["web", "api", "mobile"];
+  const channelLabels = {web:"Web", api:"API", mobile:"Mobile"};
   // Twin of report_service.affected_channels; keep both in step.
   const affectedChannels = finding => {
     const scope = finding.scope;
@@ -891,13 +897,12 @@
     }
     return channels;
   };
-  // Twin of report_service.applicable_poc_variant.
-  const applicablePocVariant = finding => {
+  const libraryEntryFor = finding => library.find(candidate => candidate.library_id === finding.library_ref?.library_id) || null;
+  // Twin of report_service.applicable_poc_variants.
+  const applicablePocVariants = finding => {
+    const available = libraryEntryFor(finding)?.proof_of_concept || {};
     const channels = affectedChannels(finding);
-    const has = channel => channels.includes(channel);
-    if (channels.length === 1) return has("web") ? "web" : has("api") ? "api" : has("mobile") ? "mobile" : null;
-    if (channels.length === 2 && has("web") && has("api")) return "web_api";
-    return null;
+    return CHANNELS.filter(channel => channels.includes(channel) && (available[channel] || []).length);
   };
   const environmentName = environment => environment === "production" ? "Production" : "Non-Production";
   const imagesForEnvironment = (finding, environment) => finding.contents.filter(content => content.type !== "previous_proof_of_concept").flatMap(content => (content.fragments || []).filter(fragment => fragment.type === "image" && fragment.environment === environment));
@@ -917,6 +922,9 @@
   // Single owner of the rule: provisioning guarantees these fragments exist, so allowing a delete
   // would only have the next save put one back and make the editor look like it lost the change.
   const deletionBlockedReason = (fragment, content, finding) => {
+    if (requiresFragment.includes(content.type)) {
+      return content.fragments.length === 1 ? `${contentNames[content.type]} always keeps one fragment.` : null;
+    }
     if (!content.type.endsWith("proof_of_concept")) return null;
     const sameType = content.fragments.filter(candidate => candidate.type === fragment.type);
     if (fragment.type === "numbered_list") return sameType.length === 1 ? "A proof of concept always keeps one list of steps." : null;
@@ -932,28 +940,40 @@
   const ensureProofSteps = content => {
     if (!content.fragments.some(fragment => fragment.type === "numbered_list")) content.fragments.unshift(newFragment("numbered_list"));
   };
-  // Twin of report_service.apply_poc_variant; keep both in step.
-  const applyPocVariant = (finding, steps, variant) => {
+  // Deep-clones library fragments with fresh frag_ids; frag_id uniqueness is report-wide, so nothing
+  // copied in from the library may keep its original id. Shared by every replace/merge offer.
+  const remintFragments = fragments => { const copied = JSON.parse(JSON.stringify(fragments)); copied.forEach(fragment => { fragment.frag_id = id("f"); }); return copied; };
+  // Twin of report_service.merge_step_lists; keep both in step. Appended steps are one procedure, so
+  // the numbered lists collapse into one -- two list fragments each restart at 1 in the document.
+  const mergeStepLists = fragments => {
+    const lists = fragments.filter(fragment => fragment.type === "numbered_list");
+    if (lists.length < 2) return fragments;
+    const items = lists.flatMap(fragment => fragment.items || []);
+    const written = items.filter(item => (item.runs || []).some(run => run.text.trim()));
+    lists[0].items = written.length ? written : items.slice(0, 1);
+    const absorbed = new Set(lists.slice(1));
+    return fragments.filter(fragment => !absorbed.has(fragment));
+  };
+  // Twin of report_service.apply_poc_variant; keep both in step. mode "replace" overwrites the
+  // non-image fragments; "merge" appends the library's steps after what is already there.
+  const applyPocVariant = (finding, steps, variants, mode = "replace") => {
     const proof = finding.contents.find(content => content.type === "proof_of_concept");
     if (!proof) return;
     const images = proof.fragments.filter(fragment => fragment.type === "image");
-    const copied = JSON.parse(JSON.stringify(steps));
-    copied.forEach(fragment => { fragment.frag_id = id("f"); });
-    proof.fragments = [...copied, ...images];
+    const kept = mode === "merge" ? proof.fragments.filter(fragment => fragment.type !== "image") : [];
+    proof.fragments = [...mergeStepLists([...kept, ...remintFragments(steps)]), ...images];
     ensureProofSteps(proof);
-    finding.poc_variant = variant;
-    // The earlier refusal referred to steps that no longer exist, so it must not suppress the next mismatch.
-    finding.poc_variant_declined = [];
+    finding.poc_variants ||= [];
+    variants.forEach(variant => { if (!finding.poc_variants.includes(variant)) finding.poc_variants.push(variant); });
+    // A refusal is per app type, so installing one must not clear the others.
+    finding.poc_variant_declined = (finding.poc_variant_declined || []).filter(channel => !variants.includes(channel));
   };
-  const pocStepsFor = (finding, variant) => {
-    if (!variant || !finding.library_ref?.library_id) return null;
-    const entry = library.find(candidate => candidate.library_id === finding.library_ref.library_id);
-    return entry?.proof_of_concept?.[variant] || null;
-  };
+  const pocStepsFor = (finding, variant) => libraryEntryFor(finding)?.proof_of_concept?.[variant] || null;
+  // A library entry's description/recommended_remediation fragments, for the Content-page offer.
+  const libraryContentFor = (entry, type) => entry?.contents?.find(content => content.type === type)?.fragments || [];
   // Initializes the setup page's engagement metadata, coverage, and scope controls.
   function setup() {
     const environmentLabels = {production:"Production", non_production:"Non-Production"};
-    const channelLabels = {api:"API", web:"Web", mobile:"Mobile"};
     const nonProductionLabels = ["UAT", "TEST/MO", "DEV"];
     const characterNames = new Map([
       [" ","space"], ["\t","tab"], ["\n","line feed"], ["\r","carriage return"], ["!","exclamation mark"], ['"',"double quote"], ["#","number sign"], ["$","dollar sign"], ["%","percent sign"], ["&","ampersand"], ["'","apostrophe"], ["(","left parenthesis"], [")","right parenthesis"], ["*","asterisk"], ["+","plus sign"], [",","comma"], ["-","hyphen"], [".","period"], ["/","slash"], [":","colon"], [";","semicolon"], ["<","less-than sign"], ["=","equals sign"], [">","greater-than sign"], ["?","question mark"], ["@","at sign"], ["[","left bracket"], ["\\","backslash"], ["]","right bracket"], ["^","caret"], ["_","underscore"], ["`","grave accent"], ["{","left brace"], ["|","vertical bar"], ["}","right brace"], ["~","tilde"],
@@ -1024,7 +1044,12 @@
       return !invalidInputs.length;
     };
     report.engagement.tested_environments ||= ["production", "non_production"];
-    report.engagement.test_type ||= "web";
+    // Twin of the last two branches of models.resolve_tested_channels: never fall back to web while
+    // the report's own targets can answer, because that would drop every API and mobile location.
+    if (!report.engagement.tested_channels?.length) {
+      const present = CHANNELS.filter(channel => report.scope_targets.some(target => target.channel === channel));
+      report.engagement.tested_channels = present.length ? present : ["web"];
+    }
     report.engagement.test_windows ||= {};
     ["production", "non_production"].forEach(environment => {
       report.engagement.test_windows[environment] ||= {
@@ -1039,7 +1064,7 @@
     report.scope_text ||= {};
     ["production", "non_production"].forEach(environment => {
       report.scope_text[environment] ||= {};
-      ["api", "web", "mobile"].forEach(channel => {
+      CHANNELS.forEach(channel => {
         if (report.scope_text[environment][channel] === undefined) {
           report.scope_text[environment][channel] = report.scope_targets.filter(target => target.environment === environment && target.channel === channel).sort((left, right) => left.order - right.order).map(target => target.value).join("\n");
         }
@@ -1100,15 +1125,14 @@
       const environment = mode === "all_production" ? "production" : "non_production";
       return targets.some(target => target.environment === environment);
     };
-    const findingsStrandedBy = (environments, testType) => {
-      const channels = testTypes[testType].channels;
+    const findingsStrandedBy = (environments, channels) => {
       const surviving = (report.scope_targets || []).filter(target => environments.includes(target.environment) && channels.includes(target.channel));
       return (report.vulnerabilities || [])
         .filter(finding => scopeReaches(finding.scope, report.scope_targets || []) && !scopeReaches(finding.scope, surviving))
         .map(finding => finding.title || "Untitled finding");
     };
-    const confirmScopeLoss = async (environments, testType, change) => {
-      const stranded = findingsStrandedBy(environments, testType);
+    const confirmScopeLoss = async (environments, channels, change) => {
+      const stranded = findingsStrandedBy(environments, channels);
       if (!stranded.length) return true;
       return window.vrDialog.confirm({
         title: `${change}?`,
@@ -1119,8 +1143,54 @@
         tone: "danger",
       });
     };
-    // Mirrors reconcile_targets: a target only survives an edit if its exact text is still listed.
+    const count = (total, word) => `${total} ${word}${total === 1 ? "" : "s"}`;
+    // Everything an app type owns goes when it is unchecked, so the dialog counts it before asking.
+    const channelRemovalImpact = channel => {
+      const targetIds = new Set((report.scope_targets || []).filter(target => target.channel === channel).map(target => target.target_id));
+      const endpointsIn = finding => Object.values(finding.scope?.custom_locations || {})
+        .reduce((total, byChannel) => total + (byChannel?.[channel] || []).filter(value => value.trim()).length, 0);
+      const findings = (report.vulnerabilities || []).filter(finding =>
+        (finding.scope?.target_ids || []).some(targetId => targetIds.has(targetId)) || endpointsIn(finding));
+      return {
+        targets: targetIds.size,
+        findings: findings.map(finding => finding.title || "Untitled finding"),
+        endpoints: (report.vulnerabilities || []).reduce((total, finding) => total + endpointsIn(finding), 0),
+      };
+    };
+    // The tester agreed to lose these, so clear them here too rather than leaving the page holding
+    // selections and typed endpoints the next save would silently drop.
+    const dropChannelEverywhere = channel => {
+      const targetIds = new Set((report.scope_targets || []).filter(target => target.channel === channel).map(target => target.target_id));
+      Object.values(report.scope_text || {}).forEach(byChannel => { if (byChannel) byChannel[channel] = ""; });
+      (report.vulnerabilities || []).forEach(finding => {
+        const scope = finding.scope || {};
+        scope.target_ids = (scope.target_ids || []).filter(targetId => !targetIds.has(targetId));
+        targetIds.forEach(targetId => { delete scope.location_values?.[targetId]; });
+        Object.entries(scope.custom_locations || {}).forEach(([environment, byChannel]) => {
+          delete byChannel?.[channel];
+          if (!Object.keys(byChannel || {}).length) delete scope.custom_locations[environment];
+        });
+      });
+      report.scope_targets = (report.scope_targets || []).filter(target => target.channel !== channel);
+    };
+    const confirmChannelRemoval = async channel => {
+      const impact = channelRemovalImpact(channel);
+      if (!impact.targets && !impact.findings.length) return true;
+      const stranded = findingsStrandedBy(report.engagement.tested_environments, report.engagement.tested_channels.filter(value => value !== channel));
+      const losses = [impact.targets && `${count(impact.targets, "scope target")} in Setup`, impact.endpoints && count(impact.endpoints, "additional affected endpoint")].filter(Boolean);
+      return window.vrDialog.confirm({
+        title: `Remove ${channelLabels[channel]} from the scope?`,
+        message: `${losses.join(", and ")} will be deleted, along with every ${channelLabels[channel]} affected location selected in the findings below.${stranded.length ? ` ${count(stranded.length, "finding")} will be left with no affected location at all.` : ""} This cannot be undone.`,
+        list: impact.findings,
+        confirmLabel: `Remove ${channelLabels[channel]} anyway`,
+        cancelLabel: "Keep this app type",
+        tone: "danger",
+      });
+    };
+    // Mirrors reconcile_targets: a target only survives an edit if its exact text is still listed
+    // under an app type the report still covers.
     const survivingAfterScopeText = () => report.scope_targets.filter(target => {
+      if (!report.engagement.tested_channels.includes(target.channel)) return false;
       const text = report.scope_text?.[target.environment]?.[target.channel];
       if (text === undefined) return true;
       return text.split(/\r?\n/).map(value => value.trim()).filter(value => value && !value.startsWith("#")).includes(target.value);
@@ -1148,18 +1218,42 @@
     };
     const renderCoverage = () => {
       configuration.innerHTML = "";
-      const typeGroup = document.createElement("label");
+      const typeGroup = document.createElement("div");
       typeGroup.className = "test-type-select";
-      typeGroup.innerHTML = `<span>Test Surface</span><select>${Object.entries(testTypes).map(([value, type]) => `<option value="${value}" ${report.engagement.test_type === value ? "selected" : ""}>${type.label}</option>`).join("")}</select>`;
-      typeGroup.querySelector("select").onchange = async event => {
-        if (!await confirmScopeLoss(report.engagement.tested_environments, event.target.value, "Change the test surface")) {
-          event.target.value = report.engagement.test_type;
-          return;
+      const typeHeading = document.createElement("span");
+      typeHeading.textContent = "App Types";
+      const typeOptions = document.createElement("div");
+      typeOptions.className = "test-type-options";
+      // Rendered from the static channel list, never from tested_channels: an imported empty
+      // selection would otherwise show no boxes on the only page that can put one back.
+      CHANNELS.forEach(channel => {
+        const option = document.createElement("label");
+        option.className = "coverage-option";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.value = channel;
+        box.checked = report.engagement.tested_channels.includes(channel);
+        box.setAttribute("aria-label", `Test ${channelLabels[channel]}`);
+        if (box.checked && report.engagement.tested_channels.length === 1) {
+          box.disabled = true;
+          option.title = "A report has to cover at least one app type.";
         }
-        report.engagement.test_type = event.target.value;
-        renderCoverage();
-        scheduleSave();
-      };
+        box.onchange = async () => {
+          if (!box.checked && !await confirmChannelRemoval(channel)) {
+            box.checked = true;
+            return;
+          }
+          if (!box.checked) dropChannelEverywhere(channel);
+          report.engagement.tested_channels = box.checked
+            ? CHANNELS.filter(value => value === channel || report.engagement.tested_channels.includes(value))
+            : report.engagement.tested_channels.filter(value => value !== channel);
+          renderCoverage();
+          scheduleSave();
+        };
+        option.append(box, document.createTextNode(channelLabels[channel]));
+        typeOptions.append(option);
+      });
+      typeGroup.append(typeHeading, typeOptions);
       configuration.append(typeGroup);
       windows.innerHTML = "";
       Object.entries(environmentLabels).forEach(([environment, label]) => {
@@ -1182,7 +1276,7 @@
         panel.querySelector("input[type=checkbox]").onchange = async event => {
           const values = report.engagement.tested_environments;
           const next = event.target.checked ? [...values, environment] : values.filter(item => item !== environment);
-          if (!event.target.checked && !await confirmScopeLoss(next, report.engagement.test_type, `Remove ${label}`)) {
+          if (!event.target.checked && !await confirmScopeLoss(next, report.engagement.tested_channels, `Remove ${label}`)) {
             event.target.checked = true;
             return;
           }
@@ -1224,10 +1318,9 @@
         const panel = document.createElement("div");
         panel.className = `scope-panel ${environment}`;
         panel.innerHTML = `<h2>${environmentLabels[environment]}</h2>`;
-        testTypes[report.engagement.test_type].channels.forEach(channel => {
+        CHANNELS.filter(channel => report.engagement.tested_channels.includes(channel)).forEach(channel => {
           const label = document.createElement("label");
-          label.textContent = channelLabels[channel];
-          const textarea = document.createElement("textarea");
+          label.textContent = channelLabels[channel];          const textarea = document.createElement("textarea");
           textarea.value = report.scope_text[environment][channel];
           // Two lines to start, then grow with the target list instead of scrolling.
           textarea.rows = 2;
@@ -1249,6 +1342,14 @@
           if (channel === "mobile") wireSetupRule(textarea, mobileScopeRule, `${environmentLabels[environment]} Mobile scope`);
           label.append(textarea);
           panel.append(label);
+          // Outside the label so it stays out of the textarea's accessible name. Delete this together
+          // with the mobile scope table when the .docx template gains one.
+          if (channel === "mobile") {
+            const note = document.createElement("p");
+            note.className = "scope-note";
+            note.textContent = "Mobile scope does not appear in the generated report yet.";
+            panel.append(note);
+          }
           grow();
           document.fonts?.ready.then(grow);
           observeWidth(textarea, grow);
@@ -1361,38 +1462,14 @@
       const stillUsed = new Set(report.vulnerabilities.flatMap(candidate => [...evidenceIdsIn(candidate)]));
       previousIds.forEach(evidenceId => { if (!stillUsed.has(evidenceId)) delete report.evidence[evidenceId]; });
     };
-    // Pulling in a library entry swaps the whole body, so tester work in that finding cannot survive.
-    const replaceFromLibrary = async (finding, entry, previousTitle) => {
-      const agreed = await window.vrDialog.confirm({
-        title: "Replace this finding with the library version?",
-        message: `"${entry.title}" is saved in the vulnerability library.\n\nUsing it will erase everything written for this finding on the Content page, including any screenshots that were uploaded.`,
-        confirmLabel: "Use the library version",
-        cancelLabel: "Keep the current content",
-        tone: "danger",
-      });
-      if (!agreed) {
-        finding.title = previousTitle ?? finding.title;
-        syncConclusion(finding);
-        renderFindings();
-        scheduleSave();
-        return false;
-      }
-      const previousEvidence = evidenceIdsIn(finding);
+    // A title match applies the finding's non-content fields immediately and silently; each content
+    // section offers its own keep/replace/add banner on the Content page instead of one whole-finding confirm.
+    const replaceFromLibrary = (finding, entry) => {
       applyLibraryEntry(finding, entry);
-      dropUnreferencedEvidence(previousEvidence);
       return true;
     };
     const applyLibraryEntry = (finding, entry) => {
-      Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || "informational", library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}, contents:JSON.parse(JSON.stringify(entry.contents || []))});
-      finding.contents.forEach(content => content.fragments.forEach(fragment => { fragment.frag_id = id("f"); }));
-      // A whole-body replace discards the old steps, so forget where they came from before reprovisioning.
-      finding.poc_variant = null;
-      finding.poc_variant_declined = [];
-      provision(finding);
-      syncEvidenceImageSlots(finding);
-      const variant = applicablePocVariant(finding);
-      const steps = entry.proof_of_concept?.[variant];
-      if (steps) applyPocVariant(finding, steps, variant);
+      Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || "informational", library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}});
     };
     const enhanceFindingRows = () => {
       const targetById = new Map(report.scope_targets.map(target => [target.target_id, target]));
@@ -1423,7 +1500,8 @@
           else expandedFindingIds.delete(finding.uid);
         };
         toggle.onclick = () => setExpanded(!row.classList.contains("finding-expanded"));
-        setExpanded(expandedFindingIds.has(finding.uid) || index === 0 && !expandedFindingIds.size);
+        setExpanded(expandedFindingIds.has(finding.uid) || (index === 0 && !findingFoldDefaulted));
+        if (index === 0) findingFoldDefaulted = true;
         const titleInput = row.querySelector(".finding-title-cell input");
         wireLibraryCombobox(titleInput, row.querySelector(".row-library-results"));
         if (titleInput.value.trim()) {
@@ -1516,7 +1594,7 @@
           checklist.querySelectorAll(".custom-location").forEach(option => option.remove());
           group.querySelector(".add-location")?.remove();
           const environment = group.dataset.locationGroup;
-          const channels = testTypes[report.engagement.test_type]?.channels || ["web"];
+          const channels = CHANNELS.filter(channel => (report.engagement.tested_channels || []).includes(channel));
           // Split the endpoint boxes by app type only when there is more than one; otherwise the channel is implied.
           channels.forEach(channel => {
           const customEditor = document.createElement("label");
@@ -1790,6 +1868,247 @@
   }
   // Creates the minimum valid data structure for a requested fragment type.
   function newFragment(type) { const fragment = {frag_id:id("f"),type}; if (type === "paragraph" || type === "note") fragment.runs = []; else if (type.endsWith("list")) fragment.items = [{runs:[]}]; else if (type === "table") Object.assign(fragment,{header:[{runs:[]}],rows:[[{runs:[]}]]}); else if (type === "image") Object.assign(fragment,{evidence_id:null,caption:"",width_mm:null}); else if (type === "code_block") Object.assign(fragment,{caption:null,text:""}); else fragment.text=""; return fragment; }
+  // One screenshot in an evidence set. Order is the fragment order, so the position control writes
+  // straight into content.fragments and the report comes out in the order the tiles are shown.
+  function renderEvidenceTile(fragment, content, rerender, finding, position) {
+    const evidence = report.evidence?.[fragment.evidence_id];
+    const tile = document.createElement("div");
+    tile.className = `evidence-tile${evidence ? " has-evidence" : ""}`;
+    tile.dataset.fragmentId = fragment.frag_id;
+    tile.tabIndex = 0;
+    tile.setAttribute("aria-label", `${contentNames[content.type]} screenshot ${position}, paste to attach`);
+    const upload = document.createElement("input");
+    upload.type = "file";
+    upload.accept = "image/*";
+    upload.id = `${fragment.frag_id}-upload`;
+    upload.hidden = true;
+
+    const uploadImage = async selectedFile => {
+      if (!selectedFile) return;
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      try {
+        setSaveState(SAVE_STATES.SAVING, "Uploading...");
+        if (!(await save("Uploading..."))) return;
+        const response = await fetch(`/reports/${reportId}/evidence`, {method:"POST", headers:{"X-Report-Saved-At":report.saved_at}, body:formData});
+        if (!response.ok) throw await diagnostics.fromResponse(response, "upload_evidence", "Upload failed");
+        const mutation = await response.json();
+        applyServerRevision(mutation.saved_at);
+        const evidenceRecord = mutation.evidence;
+        report.evidence ||= {};
+        report.evidence[evidenceRecord.evidence_id] = evidenceRecord;
+        fragment.evidence_id = evidenceRecord.evidence_id;
+        rerender();
+        scheduleSave();
+        await save();
+      } catch (error) {
+        if (error.status === 409) markSaveConflict(error, "upload_evidence");
+        else showOperationError(error, "upload_evidence", "Upload failed");
+      }
+    };
+    upload.onchange = () => uploadImage(upload.files?.[0]);
+    tile.onpaste = event => {
+      const pasted = [...(event.clipboardData?.files || [])].find(item => item.type.startsWith("image/"));
+      if (!pasted) return;
+      event.preventDefault();
+      uploadImage(pasted);
+    };
+
+    const stage = document.createElement("div");
+    stage.className = "evidence-stage";
+    if (evidence) {
+      const preview = document.createElement("img");
+      preview.className = "image-preview";
+      preview.src = `/reports/${reportId}/evidence/${fragment.evidence_id}`;
+      preview.alt = evidence.original_name || "Uploaded evidence";
+      preview.title = evidence.original_name || "";
+      preview.draggable = false;
+      stage.append(preview);
+    } else {
+      const drop = document.createElement("label");
+      drop.className = "evidence-drop";
+      drop.htmlFor = upload.id;
+      drop.innerHTML = "<b>Add a screenshot</b><small>Drop a file here, or click to browse</small>";
+      const pasteHint = document.createElement("p");
+      pasteHint.className = "evidence-paste-hint";
+      // Clicking the hint focuses the tile, which is what makes the next Ctrl+V land on this slot.
+      pasteHint.textContent = "Click here, then press Ctrl+V to paste";
+      stage.append(drop, pasteHint);
+    }
+
+    // Position is the one control a tester reaches for most, so it sits on the tile and takes
+    // either a click or a drag.
+    const order = document.createElement("div");
+    order.className = "evidence-order";
+    const moveTile = offset => {
+      const from = content.fragments.indexOf(fragment);
+      const to = from + offset;
+      if (to < 0 || to >= content.fragments.length || content.fragments[to].type !== "image") return;
+      [content.fragments[from], content.fragments[to]] = [content.fragments[to], content.fragments[from]];
+      rerender();
+      scheduleSave();
+    };
+    const orderButton = (offset, label, glyph) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = offset < 0 ? "evidence-order-earlier" : "evidence-order-later";
+      button.innerHTML = glyph;
+      button.title = label;
+      button.setAttribute("aria-label", `${label} screenshot ${position}`);
+      button.tabIndex = -1;
+      const neighbour = content.fragments[content.fragments.indexOf(fragment) + offset];
+      button.disabled = !neighbour || neighbour.type !== "image";
+      button.onclick = () => moveTile(offset);
+      return button;
+    };
+    const number = document.createElement("span");
+    number.className = "evidence-order-number";
+    number.textContent = position;
+    number.draggable = true;
+    number.title = "Drag to reposition";
+    number.ondragstart = event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", fragment.frag_id); tile.classList.add("is-dragging"); };
+    number.ondragend = () => tile.classList.remove("is-dragging");
+    order.append(orderButton(-1, "Move earlier", "&#8592;"), number, orderButton(1, "Move later", "&#8594;"));
+    stage.append(order);
+
+    const tools = document.createElement("div");
+    tools.className = "evidence-tools";
+    if (evidence) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "subtle";
+      open.textContent = "Open";
+      open.setAttribute("aria-label", `Open screenshot ${position}`);
+      open.onclick = () => {
+        const dialog = document.createElement("dialog");
+        dialog.className = "image-dialog";
+        dialog.innerHTML = `<button class="subtle" type="button" aria-label="Close image">Close</button><img src="/reports/${reportId}/evidence/${fragment.evidence_id}" alt="${escape(evidence.original_name || "Uploaded evidence")}">`;
+        dialog.querySelector("button").onclick = () => dialog.close();
+        dialog.onclick = event => { if (event.target === dialog) dialog.close(); };
+        dialog.onclose = () => dialog.remove();
+        document.body.append(dialog);
+        dialog.showModal();
+      };
+      tools.append(open);
+    }
+    const replace = document.createElement("label");
+    replace.className = "evidence-replace subtle";
+    replace.htmlFor = upload.id;
+    replace.textContent = evidence ? "Replace" : "Browse";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger";
+    remove.textContent = "Delete";
+    remove.setAttribute("aria-label", `Delete screenshot ${position}`);
+    const blockedReason = deletionBlockedReason(fragment, content, finding);
+    if (blockedReason) {
+      remove.disabled = true;
+      remove.title = blockedReason;
+    } else {
+      remove.onclick = () => { content.fragments.splice(content.fragments.indexOf(fragment), 1); rerender(); scheduleSave(); };
+    }
+    tools.append(replace, remove);
+    stage.append(tools);
+
+    const body = document.createElement("div");
+    body.className = "evidence-tile-body";
+    const caption = document.createElement("input");
+    caption.className = "evidence-caption";
+    caption.value = fragment.caption || "";
+    caption.placeholder = "Caption, printed under the figure";
+    caption.setAttribute("aria-label", `Screenshot ${position} caption`);
+    caption.oninput = () => { fragment.caption = caption.value; scheduleSave(); };
+    const foot = document.createElement("div");
+    foot.className = "evidence-tile-foot";
+    // A historical image is labelled with where it was found, so the current scope neither
+    // narrows the choice nor answers it for the tester.
+    const historical = content.type === "previous_proof_of_concept";
+    const imageEnvironments = historical ? ["production", "non_production"] : affectedEnvironments(finding);
+    if (!historical && imageEnvironments.length === 1) {
+      fragment.environment = imageEnvironments[0];
+      const environmentValue = document.createElement("span");
+      environmentValue.className = "evidence-environment-value";
+      environmentValue.textContent = imageEnvironments[0] === "production" ? "Production" : "Non-Production";
+      foot.append(environmentValue);
+    } else {
+      if (!historical && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
+      const environmentSelect = document.createElement("select");
+      environmentSelect.className = "evidence-environment";
+      environmentSelect.setAttribute("aria-label", `${contentNames[content.type]} image environment`);
+      const unset = historical && !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
+      environmentSelect.innerHTML = unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
+      environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; rerender(); scheduleSave(); };
+      foot.append(environmentSelect);
+    }
+    const size = document.createElement("small");
+    size.className = "evidence-size";
+    size.textContent = evidence ? `${evidence.width_px} x ${evidence.height_px}` : "No image yet";
+    foot.append(size);
+    body.append(caption, foot);
+
+    tile.ondragover = event => { event.preventDefault(); event.dataTransfer.dropEffect = event.dataTransfer.types.includes("Files") ? "copy" : "move"; tile.classList.add("is-drop-target"); };
+    tile.ondragleave = () => tile.classList.remove("is-drop-target");
+    tile.ondrop = event => {
+      event.preventDefault();
+      tile.classList.remove("is-drop-target");
+      const droppedFile = [...(event.dataTransfer.files || [])].find(item => item.type.startsWith("image/"));
+      if (droppedFile) { uploadImage(droppedFile); return; }
+      const draggedId = event.dataTransfer.getData("text/plain");
+      const from = content.fragments.findIndex(item => item.frag_id === draggedId);
+      const to = content.fragments.indexOf(fragment);
+      if (from < 0 || from === to || content.fragments[from].type !== "image") return;
+      const [dragged] = content.fragments.splice(from, 1);
+      content.fragments.splice(to, 0, dragged);
+      rerender();
+      scheduleSave();
+    };
+    tile.append(stage, body, upload);
+    return tile;
+  }
+  // A run of adjacent image fragments, shown as one set so the screenshots read and reorder together.
+  function renderEvidenceSet(images, content, rerender, finding) {
+    const article = document.createElement("article");
+    article.className = "fragment evidence-fragment";
+    article.innerHTML = `<div class="fragment-head"><span class="tag">evidence</span><button class="fragment-move-up" type="button" aria-label="Move evidence up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move evidence down" title="Move down">&#8595;</button></div>`;
+    const first = content.fragments.indexOf(images[0]);
+    const last = content.fragments.indexOf(images[images.length - 1]);
+    // The whole run travels together, by stepping the one neighbouring fragment over it.
+    const moveSet = offset => {
+      const target = offset < 0 ? first - 1 : last + 1;
+      if (target < 0 || target >= content.fragments.length) return;
+      const [neighbour] = content.fragments.splice(target, 1);
+      content.fragments.splice(offset < 0 ? last : first, 0, neighbour);
+      rerender();
+      scheduleSave();
+    };
+    const moveUp = article.querySelector(".fragment-move-up");
+    const moveDown = article.querySelector(".fragment-move-down");
+    moveUp.disabled = first === 0;
+    moveDown.disabled = last === content.fragments.length - 1;
+    moveUp.tabIndex = -1;
+    moveDown.tabIndex = -1;
+    moveUp.onclick = () => moveSet(-1);
+    moveDown.onclick = () => moveSet(1);
+    const set = document.createElement("div");
+    set.className = "evidence-set";
+    images.forEach((image, index) => set.append(renderEvidenceTile(image, content, rerender, finding, index + 1)));
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "evidence-add";
+    add.innerHTML = "<b>Add a screenshot</b><small>Adds an empty slot to this set</small>";
+    add.onclick = () => {
+      const image = newFragment("image");
+      const environments = affectedEnvironments(finding);
+      const existing = finding.contents.flatMap(item => item.fragments.filter(candidate => candidate.type === "image"));
+      image.environment = environments.find(environment => !existing.some(candidate => candidate.environment === environment)) || environments[0] || null;
+      content.fragments.splice(last + 1, 0, image);
+      rerender();
+      scheduleSave();
+    };
+    set.append(add);
+    article.append(set);
+    return article;
+  }
   // Renders one content fragment with its type-specific editing controls.
   function renderFragment(fragment, content, rerender, finding) {
     const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger" type="button">Delete</button></div>`;
@@ -1969,109 +2288,8 @@
       });
     }
     else if (fragment.type === "image") {
-      const upload = document.createElement("input");
-      upload.type = "file";
-      upload.accept = "image/*";
-      upload.id = `${fragment.frag_id}-upload`;
-      upload.hidden = true;
-      const caption = document.createElement("input");
-      caption.className = "evidence-caption";
-      caption.value = fragment.caption || "";
-      caption.placeholder = "Evidence caption required";
-      caption.oninput = () => { fragment.caption = caption.value; changed(); };
-      const evidence = report.evidence?.[fragment.evidence_id];
-      const evidenceCard = document.createElement("div");
-      evidenceCard.className = `evidence-card${evidence ? " has-evidence" : ""}`;
-      const previewArea = document.createElement(evidence ? "button" : "label");
-      previewArea.className = "evidence-preview";
-      if (evidence) {
-        previewArea.type = "button";
-        previewArea.title = "Open image";
-        previewArea.setAttribute("aria-label", "Open evidence image");
-      } else {
-        previewArea.htmlFor = upload.id;
-        previewArea.innerHTML = '<span aria-hidden="true">+</span><b>Add image</b><small>PNG, JPG, or GIF</small>';
-      }
-      const details = document.createElement("div");
-      details.className = "evidence-details";
-      // A historical image is labelled with where it was found, so the current scope neither
-      // narrows the choice nor answers it for the tester.
-      const historical = content.type === "previous_proof_of_concept";
-      const imageEnvironments = historical ? ["production", "non_production"] : affectedEnvironments(finding);
-      const environmentLabel = document.createElement("label");
-      environmentLabel.textContent = "Environment";
-      if (!historical && imageEnvironments.length === 1) {
-        fragment.environment = imageEnvironments[0];
-        const environmentValue = document.createElement("span");
-        environmentValue.className = "evidence-environment-value";
-        environmentValue.textContent = imageEnvironments[0] === "production" ? "Production" : "Non-Production";
-        environmentLabel.append(environmentValue);
-      } else {
-        if (!historical && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
-        const environmentSelect = document.createElement("select");
-        environmentSelect.className = "evidence-environment";
-        environmentSelect.setAttribute("aria-label", `${contentNames[content.type]} image environment`);
-        const unset = historical && !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
-        environmentSelect.innerHTML = unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
-        environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; rerender(); changed(); };
-        environmentLabel.append(environmentSelect);
-      }
-      details.append(environmentLabel);
-      details.insertAdjacentHTML("beforeend", `<label>Caption</label>`);
-      details.append(caption);
-      const fileRow = document.createElement("div");
-      fileRow.className = "evidence-file";
-      if (evidence) {
-        const preview = document.createElement("img");
-        preview.className = "image-preview";
-        preview.src = `/reports/${reportId}/evidence/${fragment.evidence_id}`;
-        preview.alt = evidence.original_name || "Uploaded evidence";
-        previewArea.append(preview);
-        previewArea.onclick = () => {
-          const dialog = document.createElement("dialog");
-          dialog.className = "image-dialog";
-          dialog.innerHTML = `<button class="subtle" type="button" aria-label="Close image">Close</button><img src="${preview.src}" alt="${escape(preview.alt)}">`;
-          dialog.querySelector("button").onclick = () => dialog.close();
-          dialog.onclick = event => { if (event.target === dialog) dialog.close(); };
-          dialog.onclose = () => dialog.remove();
-          document.body.append(dialog);
-          dialog.showModal();
-        };
-        fileRow.innerHTML = `<span>${escape(evidence.original_name || "Image")}</span><small>${evidence.width_px} x ${evidence.height_px}</small>`;
-      } else {
-        fileRow.innerHTML = "<span>No image attached</span>";
-      }
-      const replace = document.createElement("label");
-      replace.className = "evidence-replace";
-      replace.htmlFor = upload.id;
-      replace.textContent = evidence ? "Replace image" : "Choose image";
-      details.append(fileRow, replace);
-      upload.onchange = async () => {
-        const selectedFile = upload.files?.[0];
-        if (!selectedFile) return;
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-        try {
-          setSaveState(SAVE_STATES.SAVING, "Uploading...");
-          if (!(await save("Uploading..."))) return;
-          const response = await fetch(`/reports/${reportId}/evidence`, {method:"POST", headers:{"X-Report-Saved-At":report.saved_at}, body:formData});
-          if (!response.ok) throw await diagnostics.fromResponse(response, "upload_evidence", "Upload failed");
-          const mutation = await response.json();
-          applyServerRevision(mutation.saved_at);
-          const evidenceRecord = mutation.evidence;
-          report.evidence ||= {};
-          report.evidence[evidenceRecord.evidence_id] = evidenceRecord;
-          fragment.evidence_id = evidenceRecord.evidence_id;
-          rerender();
-          scheduleSave();
-          await save();
-        } catch (error) {
-          if (error.status === 409) markSaveConflict(error, "upload_evidence");
-          else showOperationError(error, "upload_evidence", "Upload failed");
-        }
-      };
-      evidenceCard.append(previewArea, details, upload);
-      card.append(evidenceCard);
+      // Images never reach here: the content loop routes each run of them to renderEvidenceSet.
+      card.append(renderEvidenceTile(fragment, content, rerender, finding, 1));
     } else {
       const isCode = fragment.type === "code_block";
       const input = document.createElement(isCode ? "textarea" : "input");
@@ -2097,6 +2315,11 @@
   function continuousEditor() {
     const nav = document.querySelector("#finding-nav");
     const pane = document.querySelector("#finding-editor");
+    // Pasting with nothing focused fills the first empty slot on screen; a card that took the paste itself has already cancelled it.
+    document.addEventListener("paste", event => {
+      if (event.defaultPrevented) return;
+      pane?.querySelector('.content-block:not([data-content-type="previous_proof_of_concept"]) .evidence-tile:not(.has-evidence)')?.onpaste?.(event);
+    });
     report.vulnerabilities.forEach(finding => { syncConclusion(finding); syncEvidenceImageSlots(finding); });
     let selectedFindingUid = report.vulnerabilities[0]?.uid;
     let expandedContentTypes;
@@ -2118,13 +2341,19 @@
       const fragmentIssues = finding => {
         // An image for an environment this finding does not affect is not the tester's to complete.
         const relevant = affectedEnvironments(finding);
-        return finding.contents.flatMap(content => content.fragments.flatMap(fragment => {
+        return finding.contents.flatMap(content => {
         const contentLabel = contentNames[content.type];
+        const missingFragment = requiresFragment.includes(content.type) && !content.fragments.length
+          ? [{contentLabel, fragmentLabel:"at least one fragment", message:"is required"}]
+          : [];
+        return [...missingFragment, ...content.fragments.flatMap(fragment => {
         const issues = [];
         if (fragment.runs && !hasText(fragment.runs)) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (fragment.items) {
-          const itemLabel = content.type.endsWith("proof_of_concept") ? "step" : "item";
-          issues.push(...fragment.items.flatMap((item, itemIndex) => hasText(item.runs) ? [] : [{contentLabel, fragmentLabel:`${itemLabel} ${itemIndex + 1}`, message:"text is required", fragmentId:fragment.frag_id}]));
+          // Steps are one textarea, so a per-line message would point at a field the tester cannot see.
+          const steps = content.type.endsWith("proof_of_concept") && fragment.type === "numbered_list";
+          if (steps) { if (fragment.items.some(item => !hasText(item.runs))) issues.push({contentLabel, fragmentLabel:"Steps to reproduce", message:"requires text", fragmentId:fragment.frag_id}); }
+          else issues.push(...fragment.items.flatMap((item, itemIndex) => hasText(item.runs) ? [] : [{contentLabel, fragmentLabel:`item ${itemIndex + 1}`, message:"text is required", fragmentId:fragment.frag_id}]));
         }
         if (fragment.type === "table") {
           const cells = [...fragment.header, ...fragment.rows.flat()];
@@ -2133,12 +2362,13 @@
         if (fragment.type === "image" && (content.type === "previous_proof_of_concept" || !fragment.environment || relevant.includes(fragment.environment))) {
           const environment = fragment.environment === "production" ? "Production" : fragment.environment === "non_production" ? "Non-Production" : "Unassigned";
           const missing = [!fragment.environment && "environment", !fragment.evidence_id && "image", !fragment.caption?.trim() && "caption"].filter(Boolean);
-          if (missing.length) issues.push({contentLabel, fragmentLabel:`${environment} image`, message:`${missing.join(" and ")} required`, fragmentId:fragment.frag_id});
+          if (missing.length) issues.push({contentLabel, fragmentLabel:`${environment} evidence`, message:`requires ${missing.join(" and ")}`, fragmentId:fragment.frag_id});
         }
         if (!fragment.runs && !fragment.items && fragment.type !== "table" && fragment.type !== "image" && !fragment.text?.trim()) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (placeholderPattern.test(fragmentText(fragment))) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"replace placeholder text", fragmentId:fragment.frag_id, level:"warning"});
         return issues;
-        }));
+        })];
+        });
       };
       const issues = report.vulnerabilities.flatMap(finding => {
         const label = finding.title || "Untitled finding";
@@ -2152,12 +2382,12 @@
         const environmentIssues = missingEvidence.map(environment => ({finding, message:`${environment === "production" ? "Production" : "Non-Production"} evidence image required`}));
         return [...(missing.length ? [{finding, message:missing.join(", ")}] : []), ...environmentIssues, ...fragmentIssues(finding).map(issue => ({finding, ...issue}))];
       });
-      count.textContent = issues.length ? `${issues.length} issue${issues.length === 1 ? "" : "s"}` : "Ready";
+      count.textContent = issues.length ? `${issues.length} to fill in` : "Ready";
       count.dataset.state = issues.length ? "issues" : "ready";
       const generateButton = document.querySelector("#generate-report");
       if (generateButton) {
         generateButton.disabled = Boolean(issues.length) || generateButton.dataset.busy === "true";
-        generateButton.title = issues.length ? "Resolve review issues before generating" : "Generate Word report";
+        generateButton.title = issues.length ? "Fill in the remaining details before generating" : "Generate Word report";
       }
       // One card per finding, so a finding with five gaps reads as one row rather than five.
       const groups = [];
@@ -2166,7 +2396,7 @@
         if (group) group.issues.push(issue);
         else groups.push({finding:issue.finding, issues:[issue]});
       });
-      const renderGroup = group => `<details class="review-group" data-level="${group.issues.some(issue => (issue.level || "error") === "error") ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${group.issues.length} issue${group.issues.length === 1 ? "" : "s"}</span></summary>${group.issues.map(({finding, message, fragmentId, contentLabel, fragmentLabel, level}) => `<div class="review-item" data-level="${level || "error"}"><span class="review-icon" aria-hidden="true">!</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
+      const renderGroup = group => `<details class="review-group" data-level="${group.issues.some(issue => (issue.level || "error") === "error") ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${group.issues.length} to fill in</span></summary>${group.issues.map(({finding, message, fragmentId, contentLabel, fragmentLabel, level}) => `<div class="review-item" data-level="${level || "error"}"><span class="review-icon" aria-hidden="true">${level === "warning" ? "!" : ""}</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
       panel.innerHTML = issues.length
         ? groups.map(renderGroup).join("")
         : '<div class="review-empty">All existing finding details are complete.</div>';
@@ -2234,6 +2464,9 @@
         jump.innerHTML = `<span class="finding-nav-title">${escape(finding.title || "Untitled finding")}</span><span class="finding-nav-meta"><span>${escape(finding.display_id || "No ID")}</span><i aria-label="${escape(finding.severity || "informational")} severity"></i></span>`;
         jump.onclick = () => { selectedFindingUid = finding.uid; expandedContentTypes = undefined; render(); };
         nav.append(jump);
+        // A long list can leave the open finding scrolled out of the rail, which is the other half
+        // of losing track of it; "nearest" does nothing when it is already in view.
+        if (finding.uid === selectedFindingUid) requestAnimationFrame(() => jump.scrollIntoView({block:"nearest", inline:"nearest"}));
       });
       // Setup context travels to Content so evidence choices don't depend on memory.
       const contextLabels = {production: "Production", non_production: "Non-Production"};
@@ -2324,12 +2557,23 @@
           const block = document.createElement("div");
           const isExpanded = expandedContentTypes.has(content.type);
           block.className = `content-block${isExpanded ? " is-expanded" : ""}`;
+          block.dataset.contentType = content.type;
           const heading = document.createElement("button");
           heading.className = "content-toggle";
           heading.type = "button";
           heading.setAttribute("aria-expanded", String(isExpanded));
           heading.innerHTML = `<span>${contentNames[content.type]}</span><small>${content.fragments.length} fragment${content.fragments.length === 1 ? "" : "s"}</small>`;
-          heading.onclick = () => { if (isExpanded) expandedContentTypes.delete(content.type); else expandedContentTypes.add(content.type); render(finding.uid); };
+          // Rebuilding the pane loses the reading position, so the toggled block is put back where it sat.
+          heading.onclick = () => {
+            const paneTop = pane.getBoundingClientRect().top;
+            const anchor = Math.max(block.getBoundingClientRect().top - paneTop, 0);
+            if (isExpanded) expandedContentTypes.delete(content.type); else expandedContentTypes.add(content.type);
+            render();
+            const moved = pane.querySelector(`[data-content-type="${content.type}"]`);
+            if (!moved) return;
+            pane.scrollTop += moved.getBoundingClientRect().top - paneTop - anchor;
+            moved.querySelector(".content-toggle")?.focus({preventScroll:true});
+          };
           block.append(heading);
           if (!isExpanded) { box.append(block); return; }
           if (content.type === "in_conclusion") {
@@ -2339,27 +2583,100 @@
             block.append(guidance);
           }
           if (content.type === "proof_of_concept") {
-            const variant = applicablePocVariant(finding);
-            const steps = pocStepsFor(finding, variant);
             // Derived from current state, so it survives a reload and can never double-fire or leak a missed event.
-            if (steps && finding.poc_variant !== variant && !(finding.poc_variant_declined || []).includes(variant)) {
+            const offered = applicablePocVariants(finding)
+              .filter(variant => !(finding.poc_variants || []).includes(variant) && !(finding.poc_variant_declined || []).includes(variant));
+            if (offered.length) {
               const written = content.fragments.some(fragment => fragment.type !== "image" && fragmentHasContent(fragment));
+              const chosen = new Set(offered);
               const banner = document.createElement("div");
               banner.className = "poc-offer";
-              banner.dataset.pocOffer = variant;
+              banner.dataset.pocOffer = offered.join(" ");
               const message = document.createElement("p");
-              message.textContent = `Saved ${testTypes[variant].label} steps are available for this finding.`;
+              message.textContent = offered.length === 1
+                ? `Saved ${channelLabels[offered[0]]} steps are available for this finding.`
+                : `This finding affects ${offered.map(variant => channelLabels[variant]).join(" and ")}. Pick the steps to use; they are added as one list you can edit.`;
               const accept = document.createElement("button");
               accept.type = "button";
               accept.className = "primary";
               accept.textContent = written ? "Use saved steps" : "Fill from library";
-              accept.onclick = () => { applyPocVariant(finding, steps, variant); render(); scheduleSave(); };
+              const add = document.createElement("button");
+              add.type = "button";
+              add.className = "subtle";
+              add.textContent = "Add saved steps";
               const refuse = document.createElement("button");
               refuse.type = "button";
               refuse.className = "subtle";
               refuse.textContent = written ? "Keep mine" : "Dismiss";
-              refuse.onclick = () => { (finding.poc_variant_declined ||= []).push(variant); render(); scheduleSave(); };
-              banner.append(message, accept, refuse);
+              const install = mode => {
+                const picked = offered.filter(variant => chosen.has(variant));
+                applyPocVariant(finding, picked.flatMap(variant => pocStepsFor(finding, variant) || []), picked, mode);
+                render();
+                scheduleSave();
+              };
+              accept.onclick = () => install("replace");
+              add.onclick = () => install("merge");
+              refuse.onclick = () => { finding.poc_variant_declined = [...new Set([...(finding.poc_variant_declined || []), ...offered])]; render(); scheduleSave(); };
+              banner.append(message);
+              if (offered.length > 1) {
+                const picker = document.createElement("div");
+                picker.className = "poc-offer-variants";
+                offered.forEach(variant => {
+                  const option = document.createElement("label");
+                  const box = document.createElement("input");
+                  box.type = "checkbox";
+                  box.checked = true;
+                  box.setAttribute("aria-label", `Include ${channelLabels[variant]} steps`);
+                  box.onchange = () => {
+                    if (box.checked) chosen.add(variant); else chosen.delete(variant);
+                    accept.disabled = add.disabled = !chosen.size;
+                  };
+                  option.append(box, document.createTextNode(channelLabels[variant]));
+                  picker.append(option);
+                });
+                banner.append(picker);
+              }
+              banner.append(accept, add, refuse);
+              block.append(banner);
+            }
+          }
+          if (content.type === "description" || content.type === "recommended_remediation") {
+            const entry = library.find(candidate => candidate.library_id === finding.library_ref?.library_id);
+            const libraryFragments = libraryContentFor(entry, content.type);
+            const locked = finding.status === "resolved" && content.type === "recommended_remediation";
+            // Derived from current state, like the proof-of-concept offer: survives a reload, never double-fires.
+            if (entry && libraryFragments.length && !locked && finding.content_offer_resolved?.[content.type] !== entry.library_id) {
+              const written = content.fragments.some(fragment => fragmentHasContent(fragment));
+              const banner = document.createElement("div");
+              banner.className = "content-offer";
+              banner.dataset.contentOffer = content.type;
+              const message = document.createElement("p");
+              message.textContent = `"${entry.title}" has saved ${contentNames[content.type].toLowerCase()} content.`;
+              const resolve = mode => {
+                (finding.content_offer_resolved ||= {})[content.type] = entry.library_id;
+                if (mode !== "keep") {
+                  const copied = remintFragments(libraryFragments);
+                  content.fragments = mode === "replace" ? copied : [...content.fragments, ...copied];
+                }
+                render();
+                scheduleSave();
+              };
+              const useLibrary = document.createElement("button");
+              useLibrary.type = "button";
+              useLibrary.className = "primary";
+              useLibrary.textContent = written ? "Use library version" : "Fill from library";
+              useLibrary.onclick = () => resolve("replace");
+              const addLibrary = document.createElement("button");
+              addLibrary.type = "button";
+              addLibrary.className = "subtle";
+              addLibrary.textContent = "Add library content";
+              addLibrary.onclick = () => resolve("merge");
+              const keep = document.createElement("button");
+              keep.type = "button";
+              keep.className = "subtle";
+              keep.textContent = written ? "Keep mine" : "Dismiss";
+              keep.onclick = () => resolve("keep");
+              banner.append(message, useLibrary, addLibrary, keep);
               block.append(banner);
             }
           }
@@ -2385,7 +2702,13 @@
           if (finding.status === "resolved" && content.type === "recommended_remediation") {
             block.append(document.createTextNode("Locked for resolved findings."));
           } else {
-            content.fragments.forEach(fragment => block.append(renderFragment(fragment, content, render, finding)));
+            for (let index = 0; index < content.fragments.length; index += 1) {
+              if (content.fragments[index].type !== "image") { block.append(renderFragment(content.fragments[index], content, render, finding)); continue; }
+              const run = [];
+              while (index < content.fragments.length && content.fragments[index].type === "image") { run.push(content.fragments[index]); index += 1; }
+              index -= 1;
+              block.append(renderEvidenceSet(run, content, render, finding));
+            }
             appendFragmentMenu();
           }
           box.append(block);

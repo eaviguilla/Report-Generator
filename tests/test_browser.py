@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import socket
 import hashlib
 import tempfile
@@ -443,7 +444,8 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_mobile_scope_allows_names_and_rejects_unapproved_special_characters(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
-        page.get_by_label("Test Surface").select_option("mobile")
+        page.get_by_label("Test Mobile").check()
+        page.get_by_label("Test Web").uncheck()
         mobile = page.get_by_role("textbox", name="Mobile", exact=True).first
 
         mobile.fill("# ignored ! []\nClient's \"Mobile\" App: iOS/Android_v2.1, QA-&")
@@ -455,6 +457,41 @@ class BrowserWorkflowTests(unittest.TestCase):
             'Production Mobile scope contains invalid character: "!" (exclamation mark)',
         )
         self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
+
+    def test_unchecking_an_app_type_confirms_then_clears_it_from_every_finding(self) -> None:
+        """Dropping an app type deletes its scope targets and every affected location and additional
+        endpoint recorded under it, so the tester is told exactly what goes before it happens."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["web", "api"]
+        report.scope_targets.append(ScopeTarget(target_id="tgt_api", environment="production", channel="api", value="https://prod-api.example.test"))
+        report.vulnerabilities[0].scope = Scope(
+            mode="custom",
+            target_ids=["tgt_browser", "tgt_api"],
+            custom_locations={"production": {"api": ["POST /v1/pay"]}},
+        )
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Test API").click()
+        page.locator(".vr-dialog").wait_for(timeout=5_000)
+        prompt = page.locator(".vr-dialog").inner_text()
+        self.assertIn("additional affected endpoint", prompt)
+        self.assertIn("Browser finding", prompt)
+
+        page.locator('[data-dialog-action="cancel"]').click()
+        self.assertTrue(page.get_by_label("Test API").is_checked(), "cancelling keeps the app type")
+
+        page.get_by_label("Test API").click()
+        page.locator('[data-dialog-action="confirm"]').click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.tested_channels, ["web"])
+        self.assertEqual([target.channel for target in saved.scope_targets], ["web"])
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_browser"], "the api location is gone from the finding")
+        self.assertEqual(saved.vulnerabilities[0].scope.custom_locations, {}, "the typed api endpoint is gone too")
 
     def test_library_insert_preserves_pending_finding(self) -> None:
         report_id = self.ready_report()
@@ -489,6 +526,47 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".content-block").filter(has_text="Description").locator(".rich").first.text_content(), "Unsaved description")
         self.assertEqual(page.locator(".image-preview").count(), 1)
 
+    def paste_png(self, selector: str | None = None) -> None:
+        """Dispatch a genuine paste event carrying a PNG, on one card or on the page itself."""
+        image_data = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        self.page.evaluate(
+            """([selector, encoded]) => {
+                const transfer = new DataTransfer();
+                transfer.items.add(new File([Uint8Array.from(atob(encoded), character => character.charCodeAt(0))], "pasted.png", {type: "image/png"}));
+                const target = selector ? document.querySelector(selector) : document.body;
+                target.dispatchEvent(new ClipboardEvent("paste", {clipboardData: transfer, bubbles: true, cancelable: true}));
+            }""",
+            [selector, base64.b64encode(image_data.getvalue()).decode()],
+        )
+
+    def test_pasting_a_screenshot_attaches_it_as_evidence(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        self.assertTrue(page.locator(".evidence-paste-hint").first.is_visible(), "an empty slot must say how to paste")
+        self.paste_png(".evidence-tile")
+        page.locator(".image-preview").first.wait_for(timeout=5_000)
+        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+
+        page.reload()
+        self.assertEqual(page.locator(".image-preview").count(), 1)
+        self.assertEqual(page.locator(".evidence-paste-hint").count(), 0, "the hint stayed on a filled slot")
+
+    def test_pasting_with_nothing_focused_fills_the_first_empty_slot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        self.paste_png()
+        page.locator(".image-preview").first.wait_for(timeout=5_000)
+        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+
+        page.reload()
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        self.assertEqual(proof.locator(".image-preview").count(), 1)
+
     def test_each_affected_environment_requires_an_image_and_allows_more(self) -> None:
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
@@ -502,7 +580,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
-        image_cards = proof.locator(".fragment").filter(has=page.locator(".evidence-environment"))
+        image_cards = proof.locator(".evidence-tile")
         self.assertEqual(image_cards.count(), 2)
         self.assertEqual(proof.locator(".evidence-environment").evaluate_all("selects => selects.map(select => select.value)"), ["production", "non_production"])
         self.assertEqual(proof.locator(".evidence-environment option").evaluate_all("options => [...new Set(options.map(option => option.value))]"), ["production", "non_production"])
@@ -517,14 +595,14 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.get_by_text("Production evidence image required", exact=True).count(), 0)
         self.assertTrue(page.get_by_text("Non-Production evidence image required", exact=True).is_visible())
 
-        image_cards = proof.locator(".fragment").filter(has=page.locator(".evidence-environment"))
+        image_cards = proof.locator(".evidence-tile")
         image_cards.nth(1).locator(".evidence-caption").fill("Non-Production transaction response")
         image_cards.nth(1).locator('input[type="file"]').set_input_files({"name": "uat.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
         self.assertEqual(page.get_by_text("Non-Production evidence image required", exact=True).count(), 0)
 
         proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
-        image_cards = proof.locator(".fragment").filter(has=page.locator(".evidence-environment"))
+        image_cards = proof.locator(".evidence-tile")
         self.assertEqual(image_cards.count(), 3)
         self.assertEqual(proof.locator(".evidence-environment").last.input_value(), "production")
 
@@ -544,7 +622,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         conflict.get_by_role("heading", name="Save conflict").wait_for()
         self.assertIn("save_report", conflict.text_content())
         self.assertIn("409", conflict.text_content())
-        self.assertIn("save_report", conflict.locator(".diagnostic-details").text_content())
+        self.assertIn("save_report", conflict.locator(".diagnostic-code").text_content())
 
         local_draft = stale_page.evaluate(
             "prefix => { const key = Object.keys(localStorage).find(candidate => candidate.startsWith(prefix)); return key ? localStorage.getItem(key) : null; }",
@@ -655,7 +733,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         diagnostic.get_by_role("heading", name="Operation failed").wait_for()
         self.assertIn("save_report", diagnostic.text_content())
         self.assertIn("Client", diagnostic.text_content())
-        self.assertIn("Technical details", diagnostic.text_content())
+        self.assertIn("save_report", diagnostic.locator(".diagnostic-code").text_content())
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "failed")
         self.assertEqual(page.locator("#save-button").text_content(), "Save failed - Retry")
         page.reload()
@@ -696,6 +774,23 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(cards.count(), initial_count + 1)
         cards.last.get_by_role("button", name="Move fragment up").click()
         self.assertEqual(cards.nth(initial_count - 1).locator(".tag").text_content(), "note")
+
+    def test_a_collapsed_finding_stays_collapsed_when_the_table_rebuilds(self) -> None:
+        """Typing the first vuln ID rebuilds the table, which used to re-open the first finding."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        expanded = page.locator("#findings > tr.finding-expanded")
+        expanded.wait_for()
+        # Driven directly because the fold toggle's actionability check does not settle headless.
+        page.evaluate("() => document.querySelector('.finding-fold-toggle').click()")
+        self.assertEqual(expanded.count(), 0)
+
+        vuln_id = page.locator("#findings input[inputmode='numeric']")
+        vuln_id.fill("1234")
+        vuln_id.blur()
+        page.locator("#findings .finding-id-display").wait_for()
+        self.assertEqual(expanded.count(), 0, "the collapsed finding re-opened when the table rebuilt")
 
     def test_previous_saves_before_library_replacement_and_next_navigation(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -744,7 +839,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         replacement = "Missing/Misconfigured Security Header: Content-Security-Policy (CSP)"
         title.fill(replacement)
         page.locator('.row-library-results [role="option"]').filter(has_text=replacement).click()
-        page.click('[data-dialog-action="confirm"]')
         page.get_by_role("button", name="Next: Content", exact=False).click()
         page.wait_for_url(f"**/reports/{report_id}/edit")
         self.assertEqual(page.get_by_role("heading", name=replacement).text_content(), replacement)
@@ -777,7 +871,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Previous: Findings").click()
         page.wait_for_url(f"**/reports/{content_report_id}/findings")
 
-    def test_declining_the_library_replacement_restores_the_previous_name(self) -> None:
+    def test_matching_a_library_title_applies_metadata_without_a_confirm(self) -> None:
+        """Title, likelihood, impact, severity, and library_ref apply immediately and silently on a
+        title match; there is no whole-finding confirm dialog, and content is left untouched."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
@@ -785,30 +881,43 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Edit finding name").click()
         page.locator(".finding-title-cell input").fill(title)
         page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
-        page.click('[data-dialog-action="cancel"]')
+        self.assertEqual(page.locator("[data-dialog-action]").count(), 0, "no confirm dialog appears")
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
         finding = main.workspace.load(report_id).vulnerabilities[0]
-        self.assertEqual(finding.title, "Browser finding")
-        self.assertIsNone(finding.library_ref)
+        self.assertEqual(finding.title, title)
+        self.assertEqual(finding.library_ref.library_id, "VDB-047")
+        description = next(content for content in finding.contents if content.type == "description")
+        self.assertEqual([fragment.type for fragment in description.fragments], ["paragraph"], "content is untouched by the title match")
 
-    def test_library_remediation_does_not_gain_empty_paragraph(self) -> None:
+    def test_using_the_library_remediation_offer_does_not_gain_empty_paragraph(self) -> None:
         report_id = self.ready_report(include_finding=True)
         page = self.page
-        # Library content is applied from Findings; renaming on Content never replaces a body.
+        # A title match only applies metadata now; content offers live on the Content page.
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
         title = "Session Token Remains Valid after Session Expiry Message"
         page.get_by_role("button", name="Edit finding name").click()
         search = page.get_by_role("combobox", name="Finding Name")
         search.fill(title)
         page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
-        page.click('[data-dialog-action="confirm"]')
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        # VDB-047 carries no default ratings, so restore them before Content so /edit doesn't
+        # redirect on an incomplete finding; the offer under test is unrelated to this rating.
+        report = main.workspace.load(report_id)
+        report.vulnerabilities[0].likelihood = "low"
+        report.vulnerabilities[0].impact = "low"
+        report.vulnerabilities[0].severity = "low"
+        main.workspace.save(report)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
+        remediation_block.get_by_role("button", name="Fill from library").click()
         # The autosave is debounced, so wait for it to leave and re-enter "saved" before asserting.
         page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
-        # Replacing from the library swaps the whole body, so the stored remediation is the
-        # library's own fragments with no stray empty paragraph appended.
+        # "Use library version" copies only the library's own fragments, with no stray empty paragraph appended.
         report = main.workspace.load(report_id)
         remediation = next(
             content
@@ -872,7 +981,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(page.locator(".fragment .rich").count(), 3)
         self.assertGreaterEqual(page.locator(".list-textarea").count(), 2)
         self.assertGreaterEqual(page.locator(".fragment input.instance-title-input").count(), 1)
-        self.assertGreaterEqual(page.locator(".evidence-card").count(), 2)
+        self.assertGreaterEqual(page.locator(".evidence-tile").count(), 2)
 
         page.get_by_role("button", name="Save").click()
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
@@ -917,16 +1026,16 @@ class BrowserWorkflowTests(unittest.TestCase):
         evidence_path.write_bytes(image_data.getvalue())
         return report, finding
 
-    def test_narrowing_a_finding_offers_the_steps_for_its_new_app_type(self) -> None:
-        """Accepting Web App + API steps and then narrowing the finding to web leaves the wrong
-        steps in place, so the offer has to come back for the app type the finding now covers."""
+    def test_a_finding_is_offered_only_the_app_types_it_has_not_installed(self) -> None:
+        """Variants are per app type now, so a finding spanning web and API with only the web steps
+        installed is offered API alone, and narrowing it back to web leaves nothing to offer."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
-        report.engagement.test_type = "web_api"
+        report.engagement.tested_channels = ["web", "api"]
         report.scope_targets.append(ScopeTarget(target_id="tgt_api", environment="production", channel="api", value="https://prod-api.example.test"))
         finding.scope = Scope(mode="custom", target_ids=["tgt_browser", "tgt_api"])
         finding.library_ref = LibraryRef(library_id="VDB-036", source_id="VDB-036", inserted_at=report.saved_at)
-        finding.poc_variant = "web_api"
+        finding.poc_variants = ["web"]
         finding.poc_variant_declined = []
         main.provision_report(report)
         main.workspace.save(report)
@@ -934,7 +1043,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
-        self.assertEqual(page.locator(".poc-offer").count(), 0, "the applied steps already match the finding")
+        offer = page.locator(".poc-offer")
+        self.assertEqual(offer.count(), 1, "the api steps are still missing")
+        self.assertEqual(offer.get_attribute("data-poc-offer"), "api")
 
         report = main.workspace.load(report_id)
         report.vulnerabilities[0].scope = Scope(mode="custom", target_ids=["tgt_browser"])
@@ -943,19 +1054,17 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
-        offer = page.locator(".poc-offer")
-        self.assertEqual(offer.count(), 1, "narrowing to web must offer the web steps")
-        self.assertEqual(offer.get_attribute("data-poc-offer"), "web")
+        self.assertEqual(page.locator(".poc-offer").count(), 0, "web is already installed, so nothing is left to offer")
 
-    def test_unchecking_a_location_in_the_page_offers_the_new_app_type(self) -> None:
+    def test_unchecking_a_location_in_the_page_withdraws_that_app_types_offer(self) -> None:
         """The same narrowing done through the Findings page, which is how a tester actually does it."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
-        report.engagement.test_type = "web_api"
+        report.engagement.tested_channels = ["web", "api"]
         report.scope_targets.append(ScopeTarget(target_id="tgt_api", environment="production", channel="api", value="https://prod-api.example.test"))
         finding.scope = Scope(mode="custom", target_ids=["tgt_browser", "tgt_api"])
         finding.library_ref = LibraryRef(library_id="VDB-036", source_id="VDB-036", inserted_at=report.saved_at)
-        finding.poc_variant = "web_api"
+        finding.poc_variants = ["web"]
         finding.poc_variant_declined = []
         main.provision_report(report)
         main.workspace.save(report)
@@ -971,14 +1080,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
         saved = main.workspace.load(report_id).vulnerabilities[0]
         self.assertEqual(saved.scope.target_ids, ["tgt_browser"], "the api location was not dropped")
-        self.assertEqual(saved.poc_variant, "web_api", "the applied steps are still the web+api ones")
+        self.assertEqual(saved.poc_variants, ["web"], "the installed app types are untouched by a scope edit")
 
         page.evaluate("document.querySelector('#next').click()")
         page.wait_for_url("**/edit", timeout=10_000)
         page.wait_for_selector("#issue-count")
-        offer = page.locator(".poc-offer")
-        self.assertEqual(offer.count(), 1, "narrowing to web must offer the web steps")
-        self.assertEqual(offer.get_attribute("data-poc-offer"), "web")
+        self.assertEqual(page.locator(".poc-offer").count(), 0, "the finding no longer touches api, so its steps are not offered")
 
     def test_the_fragments_provisioning_guarantees_cannot_be_deleted(self) -> None:
         """Provisioning puts these back on the next save, so offering a delete would look like the
@@ -1003,14 +1110,16 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
-        for section, kind in (("Previous Proof of Concept", "numbered list"), ("Previous Proof of Concept", "image")):
+        for section, kind in (("Previous Proof of Concept", "numbered list"),):
             block = page.locator(".content-block").filter(has_text=section)
             card = block.locator(".fragment").filter(has=page.locator(f'.tag:text-is("{kind}")'))
             self.assertTrue(card.locator("button.danger").is_disabled(), f"{section} {kind} must not be deletable")
+        history = page.locator(".content-block").filter(has_text="Previous Proof of Concept").locator(".evidence-tile")
+        self.assertTrue(history.locator("button.danger").is_disabled(), "the historical image must not be deletable")
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
-        for kind in ("numbered list", "image"):
-            card = proof.locator(".fragment").filter(has=page.locator(f'.tag:text-is("{kind}")'))
-            self.assertTrue(card.locator("button.danger").is_disabled(), f"proof of concept {kind} must not be deletable")
+        card = proof.locator(".fragment").filter(has=page.locator('.tag:text-is("numbered list")'))
+        self.assertTrue(card.locator("button.danger").is_disabled(), "proof of concept numbered list must not be deletable")
+        self.assertTrue(proof.locator(".evidence-tile button.danger").first.is_disabled(), "the required evidence must not be deletable")
 
         # Only the last one of each is guaranteed, so a second is the tester's to remove.
         proof.locator('select.add-fragment').select_option("numbered_list")
@@ -1027,7 +1136,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         finding.status = "open_previously_discovered"
         main.provision(finding)
         finding.library_ref = LibraryRef(library_id="VDB-043", source_id="VDB-043", inserted_at=report.saved_at)
-        finding.poc_variant = None
+        finding.poc_variants = []
         finding.poc_variant_declined = []
         main.provision_report(report)
         main.workspace.save(report)
@@ -1362,8 +1471,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         text = diagnostic.text_content()
         self.assertIn("import_report", text)
         self.assertIn("422", text)
-        self.assertIn("Reference", text)
-        self.assertIn("Technical details", text)
+        self.assertIn("Code", text)
         self.assertRegex(text, r"[0-9a-f]{12}")
         self.assertTrue(page.get_by_text("Select a valid VulnReport ZIP or JSON export, or a report DOCX").is_visible())
 

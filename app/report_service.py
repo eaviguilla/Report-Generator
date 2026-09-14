@@ -5,8 +5,9 @@ import re
 import unicodedata
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from app.models import Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TestType, Vulnerability
+from app.models import CHANNELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Vulnerability, resolve_tested_channels
 
 REPORT_TYPE_LABELS = {
     "annual_pentest": "Annual Pentest",
@@ -270,18 +271,10 @@ def affected_channels(vulnerability: Vulnerability, report: Report) -> list[Chan
     return ordered
 
 
-def applicable_poc_variant(vulnerability: Vulnerability, report: Report) -> TestType | None:
-    """Map the finding's app types onto a library proof-of-concept key, or None when they do not match one."""
+def applicable_poc_variants(vulnerability: Vulnerability, report: Report, available) -> list[Channel]:
+    """The app types a finding touches that the library entry actually carries steps for."""
     channels = set(affected_channels(vulnerability, report))
-    if channels == {"web"}:
-        return "web"
-    if channels == {"api"}:
-        return "api"
-    if channels == {"mobile"}:
-        return "mobile"
-    if channels == {"web", "api"}:
-        return "web_api"
-    return None
+    return [channel for channel in CHANNELS if channel in channels and channel in (available or {})]
 
 
 def fragment_applies(fragment, vulnerability: Vulnerability, report: Report, content_type: str) -> bool:
@@ -356,20 +349,39 @@ def assign_fresh_fragment_ids(vulnerability: Vulnerability) -> None:
             fragment.frag_id = f"f_{uuid.uuid4().hex[:8]}"
 
 
-def apply_poc_variant(vulnerability: Vulnerability, fragments: list, variant: TestType) -> None:
-    """Replace only the written steps of the proof of concept, keeping its uploaded images."""
+def merge_step_lists(fragments: list) -> list:
+    """Single owner of the rule: appended steps are one procedure, so the numbered lists collapse into
+    one. Two list fragments would each restart at 1 in the generated document."""
+    lists = [fragment for fragment in fragments if isinstance(fragment, ListFragment) and fragment.type == "numbered_list"]
+    if len(lists) < 2:
+        return fragments
+    items = [item for fragment in lists for item in fragment.items]
+    written = [item for item in items if any(run.text.strip() for run in item.runs)]
+    lists[0].items = written or items[:1]
+    absorbed = lists[1:]
+    return [fragment for fragment in fragments if not any(fragment is other for other in absorbed)]
+
+
+def apply_poc_variant(vulnerability: Vulnerability, fragments: list, variants: list, mode: Literal["replace", "merge"] = "replace") -> None:
+    """Install the proof-of-concept steps for one or more app types, keeping uploaded images intact.
+
+    "replace" overwrites the non-image fragments; "merge" appends the library's steps after what
+    is already there. Either way, every copied fragment gets a fresh id."""
     proof = next((content for content in vulnerability.contents if content.type == "proof_of_concept"), None)
     if proof is None:
         return
     images = [fragment for fragment in proof.fragments if isinstance(fragment, ImageFragment)]
+    kept = [fragment for fragment in proof.fragments if not isinstance(fragment, ImageFragment)] if mode == "merge" else []
     copied = [fragment.model_copy(deep=True) for fragment in fragments]
     for fragment in copied:
         fragment.frag_id = f"f_{uuid.uuid4().hex[:8]}"
-    proof.fragments = copied + images
+    proof.fragments = merge_step_lists(kept + copied) + images
     ensure_proof_steps(proof)
-    vulnerability.poc_variant = variant
-    # The earlier refusal referred to steps that no longer exist, so it must not suppress the next mismatch.
-    vulnerability.poc_variant_declined = []
+    for variant in variants:
+        if variant not in vulnerability.poc_variants:
+            vulnerability.poc_variants.append(variant)
+    # A refusal is per app type, so installing one must not clear the others.
+    vulnerability.poc_variant_declined = [channel for channel in vulnerability.poc_variant_declined if channel not in variants]
 
 
 def _scope_reaches_a_location(scope: dict, targets: list[dict]) -> bool:
@@ -396,11 +408,14 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     environments = engagement.get("tested_environments", ["production", "non_production"])
     if not isinstance(environments, list):
         raise ValueError("tested_environments must be a list")
-    channels_by_type = {"web": ["web"], "api": ["api"], "mobile": ["mobile"], "web_api": ["web", "api"]}
-    test_type = engagement.get("test_type", "web")
-    if test_type not in channels_by_type:
-        raise ValueError("test_type is invalid")
-    channels = channels_by_type[test_type]
+    channels = resolve_tested_channels(payload)
+    if not channels:
+        raise ValueError("select at least one app type")
+    # Written back for the same reason scope_targets is: this function replaces the target list, so a
+    # later derive-from-targets would otherwise read the new one and resolve differently.
+    payload["engagement"] = {key: value for key, value in engagement.items() if key != "test_type"}
+    payload["engagement"]["tested_channels"] = channels
+
     old = {(target.environment, target.channel, target.value): target.target_id for target in prior.scope_targets}
     targets = []
     for environment in environments:

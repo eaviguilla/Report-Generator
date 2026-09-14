@@ -38,11 +38,12 @@ from .docx_components import (
     replace_component_token_runs,
     replace_pattern_across_text_nodes,
 )
+from .models import CHANNELS
 from .report_service import REPORT_TYPE_LABELS, affected_environments, finding_is_complete, fragment_applies, setup_issues
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
 # Targets number from zero within each channel, so channel rank has to come first when ordering them.
-CHANNEL_ORDER = ["web", "api", "mobile"]
+CHANNEL_ORDER = list(CHANNELS)
 STATUS_LABELS = {
     "open_new": "Open (New)",
     "open_previously_discovered": "Open (Previously Discovered)",
@@ -106,6 +107,9 @@ def generation_issues(report: Report) -> list[str]:
             if not any(image.environment == environment and image.evidence_id for image in images):
                 issues.append(f"{label}: {'Production' if environment == 'production' else 'Non-Production'} evidence image required")
         for content in finding.contents:
+            # Twin of the editor's requiresFragment rule: these two carry the finding, so neither is ever left empty.
+            if content.type in {"description", "recommended_remediation"} and not content.fragments:
+                issues.append(f"{label}: {content.type} needs at least one fragment")
             for fragment in content.fragments:
                 if isinstance(fragment, (ParagraphFragment, NoteFragment)) and not _runs_have_text(fragment.runs):
                     issues.append(f"{label}: {content.type} text is required")

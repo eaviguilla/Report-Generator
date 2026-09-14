@@ -49,7 +49,7 @@ class DocxReportTests(unittest.TestCase):
                     report_date=date(2026, 9, 9),
                     tester="QA Tester",
                     tested_environments=["production", "non_production"],
-                    test_type="web_api",
+                    tested_channels=["web", "api"],
                     test_windows={
                         "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
                         "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Any time"),
@@ -308,7 +308,7 @@ class DocxReportTests(unittest.TestCase):
                     report_date=date(2026, 9, 9),
                     tester="QA Tester",
                     tested_environments=["production", "non_production"],
-                    test_type="web",
+                    tested_channels=["web"],
                     test_windows={
                         "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
                         "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Any time"),
@@ -361,7 +361,7 @@ class DocxReportTests(unittest.TestCase):
                 report_date=date(2026, 9, 9),
                 tester="QA Tester",
                 tested_environments=["production"],
-                test_type="web",
+                tested_channels=["web"],
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST")},
             ),
             scope_targets=[ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test")],
@@ -432,7 +432,7 @@ class DocxReportTests(unittest.TestCase):
                 report_id="r_wrap", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
                     app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
-                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], test_type="web_api",
+                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web", "api"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
                 scope_targets=[
@@ -517,7 +517,7 @@ class DocxReportTests(unittest.TestCase):
                 report_id="r_blank", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
                     app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
-                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], test_type="web",
+                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
                 scope_targets=[ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test")],

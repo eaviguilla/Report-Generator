@@ -4,7 +4,7 @@ The single reference for how report data is shaped, saved, and moved through thi
 
 > **Maintenance contract.** This file is the source of truth consulted by the `data-oracle` agent. Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, or the save/navigation paths in `app/web/static/app.js` must update the affected section here in the same change. Line numbers are hints only; function and field names are the durable identifiers.
 >
-> Last verified against source: **2026-09-14**, after making `previous_proof_of_concept` a historical record, aligning the Python and JavaScript proof-of-concept seeds, and renaming report folders after the application and its report type.
+> Last verified against source: **2026-09-15**, after replacing `engagement.test_type` with `engagement.tested_channels: list[Channel]` (Setup now renders app-type checkboxes, so mixed and all-three coverage is expressible), retiring the `web_api` token from the type, the library, and the library editor, making proof-of-concept variants per-channel and multi-select (`poc_variants` plural, `merge_step_lists` collapsing appended steps into one numbered list), and moving app-type normalisation out of `load_path` into a `Report` `mode="before"` validator so `import_report` and `parse_import` are covered too. Earlier in the same pass: per-content-section keep/replace/add offers (`content_offer_resolved` on `Vulnerability`), requiring at least one fragment in `description` and `recommended_remediation` on both sides, making `previous_proof_of_concept` a historical record, and renaming report folders after the application and its report type.
 
 ---
 
@@ -105,12 +105,14 @@ Defined in `app/models.py`, Pydantic v2, `schema_version` is `"1.4"`.
 Report
   report_id, app_id, app_version, schema_version, saved_at
   _folder_name_hint : FolderHint          alias, display convenience only
-  engagement        : Engagement          app_name, ci/bsn, tester, dates, test_type, tested_environments
+  engagement        : Engagement          app_name, ci/bsn, tester, dates, tested_channels, tested_environments
   scope_targets     : [ScopeTarget]       the authoritative list of locations, each carrying its own channel
   vulnerabilities   : [Vulnerability]     display_id, title, likelihood, impact, severity, status, scope,
-                                          poc_variant, poc_variant_declined, contents[]
+                                          poc_variants, poc_variant_declined, content_offer_resolved, contents[]
   evidence          : {evidence_id: EvidenceItem}
 ```
+
+`Vulnerability.content_offer_resolved: dict[ContentType, StableId]` records, per content section, which `library_id` that section's keep/replace/add offer has already been resolved against, so a title match to the same library entry does not keep re-offering a section the tester already decided. It defaults to `{}` via `default_factory`, so every existing `draft.json` loads unchanged with no legacy-repair entry needed. Because the field is typed as a plain `dict`, not `Optional`, a missing key or an explicit `{}` both validate as an empty dict, but an explicit JSON `null` for this field fails Pydantic validation — no code path in the app writes `null` here today (unlike `poc_variant`, which is `TestType | None` and is reset to `null` by design), and any future reset logic for this field must assign `{}`, never `null`.
 
 `Scope.custom_locations` is keyed **environment then channel** (`{production: {web: [...]}}`), mirroring `scope_text`, so a typed-in endpoint carries an app type just as a selected `ScopeTarget` does. Without that, a finding's app types could not be resolved and the proof-of-concept offer could never fire for it.
 
@@ -150,26 +152,37 @@ A violation raises `ValidationError` on load, which demotes the draft to the *le
 
 ### Proof-of-concept steps from the library
 
-A `LibraryEntry` may carry `proof_of_concept`, keyed by `TestType` (`web`, `api`, `web_api`, `mobile`). A missing key means no steps for that app type; an empty list is rejected, so "no steps" has exactly one representation.
+A `LibraryEntry` may carry `proof_of_concept`, keyed by `Channel` (`web`, `api`, `mobile`). A missing key means no steps for that app type; an empty list is rejected, so "no steps" has exactly one representation. Of the 12 entries in `resources/vuln_library.json` that define `proof_of_concept`, 12 have `web`, 12 have `api`, and **none have `mobile`**, so a mobile-only finding gets no steps regardless.
 
-`applicable_poc_variant` maps a finding's app types onto one of those keys by **exact set match** (`{web}` to `web`, `{api}` to `api`, `{web, api}` to `web_api`, `{mobile}` to `mobile`). Anything else, including a finding whose locations resolve to no app type at all, returns `None`. Variants are never synthesised or concatenated.
+The retired `web_api` token is gone from the type, the library, and the library editor. All 11 of its step lists were word-for-word copies of that entry's `web` list, so removing it lost no content. `LEGACY_TEST_TYPE_CHANNELS` in `models.py` survives as the single migration table that maps the old four tokens onto channel lists; nothing else in the app knows them.
 
-`apply_poc_variant` replaces only the non-image fragments of the `proof_of_concept` section, keeps every image exactly as it was, remints `frag_id`s, and never touches `previous_proof_of_concept`. It records `poc_variant` on the finding and clears `poc_variant_declined`, because a refusal referred to steps that no longer exist.
+`applicable_poc_variants(vulnerability, report, available)` returns **every** app type the finding touches that the entry actually carries steps for, in `CHANNELS` order. There is no exact-set match and no `None`: a finding spanning web and API is offered both.
 
-Nothing is written without a click. The Content page renders an offer, derived purely from current state, when steps exist for the derived app type and they are neither installed (`poc_variant`) nor refused (`poc_variant_declined`).
+`apply_poc_variant` takes a list of variants and a `mode`: `"replace"` (the default) overwrites the non-image fragments of the `proof_of_concept` section, `"merge"` keeps them and appends the library's steps after them. Either mode keeps every image exactly as it was, remints `frag_id`s, and never touches `previous_proof_of_concept`. **`merge_step_lists` then collapses every `numbered_list` into one**, because two list fragments each restart at `1.` in the generated document (`_remap_numbering` allocates a fresh `numId` per fragment and writes a `w:startOverride`). Installed app types are appended to `poc_variants`; only the app types just installed are removed from `poc_variant_declined`, because declining API and accepting Web are independent decisions.
+
+Nothing is written without a click. The Content page renders an offer, derived purely from current state, listing the app types that have steps and are neither installed (`poc_variants`) nor refused (`poc_variant_declined`). With more than one on offer the tester ticks which to install; `POST /reports/{id}/library/{library_id}` auto-installs **only** when exactly one variant applies, leaving the ambiguous case to that choice.
 
 ---
 
 ## 8. Legacy repair on load
 
-`Workspace.load_path` silently upgrades old drafts and rewrites them:
+**App-type normalisation lives in a `Report` `model_validator(mode="before")`, not in `load_path`**, because `import_report` and both `parse_import` branches build a `Report` without ever going through the load path. That validator is the single hook every entry path shares. It maps the retired `engagement.test_type` onto `engagement.tested_channels`, and the retired `Vulnerability.poc_variant` onto `poc_variants`.
 
-- `engagement.tested_channels` (a set) becomes `engagement.test_type` (a single enum)
+`models.resolve_tested_channels(report_mapping)` is the one function that answers "which app types does this report cover". Precedence tests key **presence**, never truthiness:
+
+1. both `tested_channels` and `test_type` present (only reachable in a hand-edited file) — their **union**, the one rule that cannot silently drop a target
+2. `tested_channels` present — used as given, deduped and ordered by `CHANNELS`; a bare string coerces to a one-element list. **The only branch that can return `[]`**
+3. `test_type` present — expanded through `LEGACY_TEST_TYPE_CHANNELS`; an unrecognised token passes through so the `Channel` literal rejects it, which keeps the validator from ever raising on its own
+4. neither — the channels present on the mapping's own `scope_targets`
+5. neither, and no targets — `["web"]`
+
+It returns `[]` **if and only if** the caller explicitly sent an empty list, which `Engagement.tested_channels`' `min_length=1` then refuses. That floor is the only gate on `import_report`, which skips `reconcile_targets` entirely.
+
+`Workspace.load_path` still silently upgrades and rewrites one shape:
+
 - a `numbered_list` / `bulleted_list` fragment with no `items` gets one empty item
 
-`repair_duplicate_fragment_ids` is opt-in from the manager UI for drafts that fail validation only because of repeated `frag_id`s.
-
-Any new legacy shape must be repaired here, not in the route handlers.
+`repair_duplicate_fragment_ids` is opt-in from the manager UI for drafts that fail validation only because of repeated `frag_id`s. Note it validates and then persists the **raw** draft, so a manager repair leaves a legacy `test_type` on disk until the next ordinary save.
 
 ---
 
@@ -225,7 +238,7 @@ Three server-rendered documents (`page1_setup`, `page2_findings`, `page2_editor`
 
 ## 12. Rules that exist twice
 
-These are implemented in both Python and JavaScript and **must be changed in pairs**. `tests/test_browser.py::test_browser_readiness_verdict_matches_server_generation_issues` is the contract test that catches drift.
+These are implemented in both Python and JavaScript and **must be changed in pairs**. `tests/test_browser.py::test_browser_readiness_verdict_matches_server_generation_issues` is the only contract test, and it covers **generation readiness alone** — it drives a browser and compares `#issue-count[data-state]` against `generation_issues`. It does not read any JavaScript constant, and it does not touch the app-type, scope-survival, or proof-of-concept rows below. Those have no drift guard.
 
 | Rule | Python | JavaScript |
 |---|---|---|
@@ -237,19 +250,28 @@ These are implemented in both Python and JavaScript and **must be changed in pai
 | scope resolves to a location | `scope_has_location`, `_scope_reaches_a_location` | `scopeHasLocation`, `scopeTargetIds` |
 | affected environments | `affected_environments` | `affectedEnvironments`, `scopeEnvironments` |
 | affected app types | `affected_channels` | `affectedChannels` |
-| library proof-of-concept selection | `applicable_poc_variant` | `applicablePocVariant` |
-| installing proof-of-concept steps | `apply_poc_variant` | `applyPocVariant` |
+| canonical app-type order | `CHANNELS` in `models.py`, imported by `docx_report.CHANNEL_ORDER` | `CHANNELS`, module scope in `app.js` |
+| which app types a report covers | `resolve_tested_channels` | the `tested_channels` seed in `setup()`, which twins branches 4 and 5 only |
+| which targets survive an app-type or environment change | the target loop in `reconcile_targets` | `findingsStrandedBy`, and `dropChannelEverywhere` for the confirmed purge |
+| which targets survive a scope-text edit | the same loop, reusing IDs by value | `survivingAfterScopeText`, `scopeTextStrandedFindings` |
+| mobile scope character allowlist | `invalid_character_issue` call inside `reconcile_targets` | `mobileScopeRule` |
+| library proof-of-concept selection | `applicable_poc_variants` | `applicablePocVariants` |
+| installing proof-of-concept steps, replace or merge-append | `apply_poc_variant` (`mode="replace"`/`"merge"`) | `applyPocVariant` (`mode` param) |
+| collapsing appended steps into one numbered list | `merge_step_lists` | `mergeStepLists` |
 | generation readiness | `generation_issues` | `updateReadinessPanel`, `fragmentIssues` |
+| description and remediation are never empty | `generation_issues` (`content.fragments` check) | `requiresFragment`, `fragmentIssues`, `deletionBlockedReason` |
 | placeholder text regex | `PLACEHOLDER_TEXT` | `placeholderPattern` (byte-identical) |
 | environment gating for fragments | `fragment_applies` | inline check in `updateReadinessPanel` |
 | image slots | `sync_evidence_image_slots` | `syncEvidenceImageSlots` |
-| status to section list | `provision` | `provision`, **and a third inline copy** in the status `onchange` (~line 1470) |
+| status to section list | `provision` | `provision`, **and a third inline copy** in the status `onchange` (line 1621) |
 
 **Previous proof of concept is historical, and that rule lives in five places.** `fragment_applies`, `sync_evidence_image_slots` and the evidence-coverage check in `generation_issues` all exempt it on the Python side. The browser mirrors it in `syncEvidenceImageSlots` and `fragmentIssues`, and two client-only paths must respect it as well: `settleScopeChange` must not **delete** a historical image when an environment leaves the scope, and the image editor must not **overwrite** a historical `environment` while rendering. A historical image offers every environment and starts unset, because only the tester knows where a carried screenshot came from.
 
 Python's `required_fragments` and the JavaScript `required` now seed identically — `["numbered_list", "image"]` into both proof-of-concept sections. They were out of step until 2026-09-14; anything that asks "is this section empty?" can now trust either side.
 
-**Client-only:** the `window.confirm` guards (`confirmScopeLoss`, `settleScopeChange`, `replaceFromLibrary`), finding-deletion confirmation, and `deletionBlockedReason`, which disables Delete on the fragments provisioning guarantees — the last `numbered_list` in either proof-of-concept section, the last `image` in `previous_proof_of_concept`, and the last `proof_of_concept` image for an affected environment. The server would recreate each on the next save, so the block exists to stop the editor looking like it discarded the change.
+**Client-only:** the `window.confirm` guards (`confirmScopeLoss`, `settleScopeChange`), finding-deletion confirmation, and `deletionBlockedReason`, which disables Delete on the fragments provisioning guarantees — the last fragment of any kind in `description` and `recommended_remediation`, the last `numbered_list` in either proof-of-concept section, the last `image` in `previous_proof_of_concept`, and the last `proof_of_concept` image for an affected environment. The server would recreate each on the next save, so the block exists to stop the editor looking like it discarded the change. The `description` and `recommended_remediation` rule counts fragments, not paragraphs: a library entry may supply a remediation that is a list and a note with no paragraph at all.
+
+**`replaceFromLibrary` no longer confirms or copies content.** A title match on the Findings page now silently applies only `title`, `likelihood`, `impact`, `severity`, `library_ref` (`applyLibraryEntry`) — `contents` is untouched. Instead, each library-sourced content section (`description`, `recommended_remediation`, and `proof_of_concept`) offers its own client-only, state-derived banner on the Content page — same pattern as the pre-existing proof-of-concept offer — with three choices: keep, replace, or add (merge-append) the library's fragments for that section. `description`/`recommended_remediation` resolution is tracked in the new `content_offer_resolved` field (§6) and has no server-side twin, since the mutation rides the ordinary autosave PUT like any other Content-page edit. `proof_of_concept`'s offer reuses `poc_variant`/`poc_variant_declined` and, because `apply_poc_variant`/`applyPocVariant` already have a Python/JavaScript twin, its new merge-append mode had to be added to **both** sides (see the table above). `previous_proof_of_concept` is excluded from this mechanism entirely — it is never library-sourced. Every fragment copied in from a library entry, for replace or merge-append alike, gets a fresh `frag_id` (`remintFragments` client-side, `model_copy(deep=True)` + reassignment server-side) — `frag_id` uniqueness is report-wide, not per-section.
 **Server-only:** `Report.validate_references`, the `referenced_scope_removed` 422, and all upload size limits.
 
 ---

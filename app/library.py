@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models import Content, Fragment, Severity, StableId, TestType
+from app.models import Channel, Content, Fragment, Severity, StableId
 
 
 class LibraryEntry(BaseModel):
@@ -20,7 +20,7 @@ class LibraryEntry(BaseModel):
     status: str = "approved"
     contents: list[Content] = Field(default_factory=list)
     # Ready-made proof-of-concept steps per tested app type. A missing key means no steps for that type.
-    proof_of_concept: dict[TestType, list[Fragment]] = Field(default_factory=dict)
+    proof_of_concept: dict[Channel, list[Fragment]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_fragment_ids(self) -> "LibraryEntry":
@@ -31,13 +31,13 @@ class LibraryEntry(BaseModel):
 
     @model_validator(mode="after")
     def validate_proof_of_concept(self) -> "LibraryEntry":
-        # Checked per app type, not across them: only one set is ever copied into a finding.
-        for test_type, fragments in self.proof_of_concept.items():
+        # Checked per app type, not across them: a finding installing several remints every copy.
+        for channel, fragments in self.proof_of_concept.items():
             if not fragments:
-                raise ValueError(f"proof of concept for {test_type} has no steps; omit the key instead")
+                raise ValueError(f"proof of concept for {channel} has no steps; omit the key instead")
             ids = [fragment.frag_id for fragment in fragments]
             if len(ids) != len(set(ids)):
-                raise ValueError(f"proof of concept for {test_type} contains duplicate fragment IDs")
+                raise ValueError(f"proof of concept for {channel} contains duplicate fragment IDs")
         return self
 
 

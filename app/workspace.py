@@ -270,11 +270,6 @@ class Workspace:
         """Load a known draft path and repair supported legacy shapes."""
         draft = read_json(path)
         repaired = False
-        engagement = draft.setdefault("engagement", {})
-        if "test_type" not in engagement:
-            legacy_channels = set(engagement.pop("tested_channels", []))
-            engagement["test_type"] = "web_api" if {"web", "api"} <= legacy_channels else "api" if "api" in legacy_channels else "mobile" if "mobile" in legacy_channels else "web"
-            repaired = True
         for vulnerability in draft.get("vulnerabilities", []):
             for content in vulnerability.get("contents", []):
                 for fragment in content.get("fragments", []):

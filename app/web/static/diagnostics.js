@@ -34,7 +34,6 @@
       log_file: existing.log_file,
       recoverable: existing.recoverable,
       latest_saved_at: existing.latest_saved_at,
-      client_stack: existing.reference ? undefined : source.stack,
       ...existing,
     };
     return source;
@@ -73,25 +72,6 @@
 
   const clear = () => document.getElementById(panelId)?.remove();
 
-  const technicalText = diagnostic => {
-    const entries = [
-      ["Operation", diagnostic.operation],
-      ["Server function", diagnostic.function],
-      ["Status", diagnostic.status],
-      ["Code", diagnostic.code],
-      ["Method", diagnostic.method],
-      ["Path", diagnostic.path],
-      ["Time", diagnostic.timestamp],
-      ["Reference", diagnostic.reference],
-      ["Exception", diagnostic.exception_type],
-      ["Client location", diagnostic.client_location],
-      ["Server log", diagnostic.log_file],
-    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-    const lines = entries.map(([label, value]) => `${label}: ${value}`);
-    if (diagnostic.client_stack) lines.push("", diagnostic.client_stack);
-    return lines.join("\n");
-  };
-
   const show = (error, operation, options = {}) => {
     clear();
     const normalized = normalize(error, operation, options.fallback);
@@ -120,29 +100,14 @@
     message.className = "diagnostic-message";
     message.textContent = diagnostic.message;
 
-    const summary = document.createElement("dl");
-    summary.className = "diagnostic-summary";
-    [
-      ["Operation", diagnostic.operation],
-      ["Function", diagnostic.function],
-      ["Status", diagnostic.status],
-      ["Reference", diagnostic.reference],
-    ].forEach(([label, value]) => {
-      if (value === undefined || value === null || value === "") return;
-      const term = document.createElement("dt");
-      term.textContent = label;
-      const description = document.createElement("dd");
-      description.textContent = String(value);
-      summary.append(term, description);
-    });
-
-    const details = document.createElement("details");
-    details.className = "diagnostic-details";
-    const detailsSummary = document.createElement("summary");
-    detailsSummary.textContent = "Technical details";
-    const pre = document.createElement("pre");
-    pre.textContent = technicalText(diagnostic);
-    details.append(detailsSummary, pre);
+    // The sentence is for the tester; the code is what finds this failure in the error log.
+    const code = document.createElement("p");
+    code.className = "diagnostic-code";
+    const codeLabel = document.createElement("span");
+    codeLabel.textContent = "Code";
+    const codeValue = document.createElement("code");
+    codeValue.textContent = [diagnostic.operation, diagnostic.status, diagnostic.code, diagnostic.reference].filter(Boolean).join(" \u00b7 ");
+    code.append(codeLabel, codeValue);
 
     const actions = document.createElement("div");
     actions.className = "diagnostic-actions";
@@ -164,7 +129,7 @@
       actions.append(button);
     });
 
-    panel.append(headingRow, message, summary, details);
+    panel.append(headingRow, message, code);
     if (actions.childElementCount) panel.append(actions);
     document.body.append(panel);
     requestAnimationFrame(() => panel.focus({preventScroll:true}));
@@ -175,7 +140,6 @@
 
   window.addEventListener("error", event => {
     const error = normalize(event.error || new Error(event.message || "Browser resource failed"), "client_runtime");
-    error.diagnostic.client_location = [event.filename, event.lineno, event.colno].filter(Boolean).join(":");
     show(error, "client_runtime", {title: "Browser error"});
   });
 

@@ -26,7 +26,7 @@ from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, render_report_docx
 from .library import Library
 from .docx_import import ReportImportError, parse_report_docx
-from .report_service import applicable_poc_variant, apply_poc_variant, assign_fresh_fragment_ids, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots
+from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots
 from .storage import atomic_write_bytes
 from .workspace import StaleReportError, Workspace, app_id_for
 
@@ -719,11 +719,12 @@ def insert_library(request: Request, report_id: str, library_id: str):
     provision(vulnerability)
     report.vulnerabilities.append(vulnerability)
     sync_evidence_image_slots(vulnerability, report)
-    variant = applicable_poc_variant(vulnerability, report)
-    steps = (entry.get("proof_of_concept") or {}).get(variant) if variant else None
-    if steps:
+    variants = applicable_poc_variants(vulnerability, report, entry.get("proof_of_concept"))
+    # Several applicable app types is the tester's choice to make on the Content page, not ours.
+    if len(variants) == 1:
+        steps = (entry.get("proof_of_concept") or {})[variants[0]]
         # The entry is a plain dict, so let Content parse the raw steps back into fragment models.
-        apply_poc_variant(vulnerability, Content(type="proof_of_concept", fragments=steps).fragments, variant)
+        apply_poc_variant(vulnerability, Content(type="proof_of_concept", fragments=steps).fragments, variants)
     save_if_current(report, expected_revision(request, report.saved_at))
     return {
         "saved_at": report.saved_at.isoformat(),

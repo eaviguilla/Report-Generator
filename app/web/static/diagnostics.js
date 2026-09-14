@@ -106,7 +106,7 @@
     const codeLabel = document.createElement("span");
     codeLabel.textContent = "Code";
     const codeValue = document.createElement("code");
-    codeValue.textContent = [diagnostic.operation, diagnostic.status, diagnostic.code, diagnostic.reference].filter(Boolean).join(" \u00b7 ");
+    codeValue.textContent = [diagnostic.operation, diagnostic.status, diagnostic.code, diagnostic.reference].filter(Boolean).join(" / ");
     code.append(codeLabel, codeValue);
 
     const actions = document.createElement("div");

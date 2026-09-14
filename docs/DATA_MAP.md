@@ -178,9 +178,10 @@ Nothing is written without a click. The Content page renders an offer, derived p
 
 It returns `[]` **if and only if** the caller explicitly sent an empty list, which `Engagement.tested_channels`' `min_length=1` then refuses. That floor is the only gate on `import_report`, which skips `reconcile_targets` entirely.
 
-`Workspace.load_path` still silently upgrades and rewrites one shape:
+`Workspace.load_path` still silently upgrades and rewrites two shapes:
 
 - a `numbered_list` / `bulleted_list` fragment with no `items` gets one empty item
+- a `recommended_remediation` holding the single unlabelled sentence `RESOLVED_REMEDIATION`. On a **resolved** finding it gains `generated: "resolved_remediation"`; on any other status its runs are emptied. Without the marker `provision` cannot tell its own boilerplate from the tester's prose, so the sentence outlived the resolved status and the report claimed a fix that never happened. The resolved case is safe because the editor locks that section while resolved, so the text can only be ours; the reopened case is damage from before the marker existed.
 
 `repair_duplicate_fragment_ids` is opt-in from the manager UI for drafts that fail validation only because of repeated `frag_id`s. Note it validates and then persists the **raw** draft, so a manager repair leaves a legacy `test_type` on disk until the next ordinary save.
 
@@ -264,6 +265,7 @@ These are implemented in both Python and JavaScript and **must be changed in pai
 | environment gating for fragments | `fragment_applies` | inline check in `updateReadinessPanel` |
 | image slots | `sync_evidence_image_slots` | `syncEvidenceImageSlots` |
 | status to section list | `provision` | `provision`, **and a third inline copy** in the status `onchange` (line 1621) |
+| resolved remediation boilerplate | `provision` (`RESOLVED_REMEDIATION`, `generated="resolved_remediation"`) | `provision` (`RESOLVED_REMEDIATION`) |
 
 **Previous proof of concept is historical, and that rule lives in five places.** `fragment_applies`, `sync_evidence_image_slots` and the evidence-coverage check in `generation_issues` all exempt it on the Python side. The browser mirrors it in `syncEvidenceImageSlots` and `fragmentIssues`, and two client-only paths must respect it as well: `settleScopeChange` must not **delete** a historical image when an environment leaves the scope, and the image editor must not **overwrite** a historical `environment` while rendering. A historical image offers every environment and starts unset, because only the tester knows where a carried screenshot came from.
 

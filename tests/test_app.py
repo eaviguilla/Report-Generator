@@ -408,6 +408,38 @@ class ReportApiTests(unittest.TestCase):
         finding.scope = Scope(mode="custom")
         self.assertEqual(applicable_poc_variants(finding, report, entry), [])
 
+    def test_reopening_a_finding_clears_the_resolved_remediation_boilerplate(self) -> None:
+        """Resolving replaces the remediation with a sentence saying none was needed. Reopening has
+        to take it back out, or the finding ships claiming it was fixed."""
+        finding = Vulnerability(uid="v_reopen", title="Finding", status="open_previously_discovered")
+        provision(finding)
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        remediation.fragments = [ParagraphFragment(frag_id="f_mine", type="paragraph", runs=[Run(text="Rotate the signing key.")])]
+
+        finding.status = "resolved"
+        provision(finding)
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        self.assertEqual([run.text for run in remediation.fragments[0].runs], ["None, the vulnerability has been remediated."])
+
+        finding.status = "open_previously_discovered"
+        provision(finding)
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        self.assertEqual([fragment.type for fragment in remediation.fragments], ["paragraph"])
+        self.assertEqual(remediation.fragments[0].runs, [], "the resolved boilerplate outlived the resolved status")
+
+    def test_a_testers_own_remediation_survives_provisioning(self) -> None:
+        """The boilerplate is recognised by its marker, not its wording, so a tester who writes that
+        same sentence on an open finding keeps it."""
+        finding = Vulnerability(uid="v_keep", title="Finding", status="open_new")
+        provision(finding)
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        remediation.fragments = [ParagraphFragment(frag_id="f_typed", type="paragraph", runs=[Run(text="None, the vulnerability has been remediated.")])]
+
+        provision(finding)
+
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        self.assertEqual(remediation.fragments[0].frag_id, "f_typed")
+
     def test_applying_a_proof_of_concept_keeps_images_and_leaves_the_previous_one_alone(self) -> None:
         finding = Vulnerability(uid="v_poc", title="Finding", status="open_previously_discovered")
         provision(finding)

@@ -307,9 +307,23 @@ def is_report_docx(contents: bytes) -> bool:
         return any(info.filename == "word/document.xml" for info in infos)
 
 
+def _unreadable_upload(contents: bytes) -> str | None:
+    """Name what was picked, because the JSON branch is the fallback for every non-ZIP and its
+    decoder error ("Expecting value: line 1 column 1") tells a tester nothing about their PDF."""
+    if not contents.strip():
+        return "the file is empty"
+    if contents[:5] == b"%PDF-":
+        return "this is a PDF, and only a report DOCX can be read back"
+    if contents.lstrip()[:1] not in (b"{", b"["):
+        return "this is not a VulnReport ZIP, a JSON draft, or a report DOCX"
+    return None
+
+
 def parse_import(contents: bytes) -> tuple[dict, dict[str, bytes]]:
     """Parse a legacy JSON draft or a bounded ZIP bundle with verified evidence."""
     if not zipfile.is_zipfile(io.BytesIO(contents)):
+        if unreadable := _unreadable_upload(contents):
+            raise ValueError(unreadable)
         if len(contents) > MAX_JSON_IMPORT_BYTES:
             raise HTTPException(413, "JSON report exceeds the 10 MB limit")
         payload = json.loads(contents.decode("utf-8"))
@@ -326,7 +340,7 @@ def parse_import(contents: bytes) -> tuple[dict, dict[str, bytes]]:
         if len(names) != len(set(names)):
             raise ValueError("Report bundle contains duplicate paths")
         if "draft.json" not in names:
-            raise ValueError("Report bundle is missing draft.json")
+            raise ValueError("this ZIP is neither a VulnReport bundle nor a report DOCX")
         if any(info.flag_bits & 1 for info in infos):
             raise ValueError("Encrypted report bundles are not supported")
         if sum(info.file_size for info in infos) > MAX_BUNDLE_UNCOMPRESSED_BYTES:

@@ -1121,7 +1121,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-050-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Pragma\" is Present/not set."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-050-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Pragma\" is Present/not set."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-050-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"Pragma\" is Present/not set."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-051",
@@ -1223,7 +1312,96 @@
             }
           ]
         }
-      ]
+      ],
+      "proof_of_concept": {
+        "api": [
+          {
+            "frag_id": "VDB-051-api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the endpoint in Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Send the request to Repeater."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-XSS-Protection\" is Present/not set."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web": [
+          {
+            "frag_id": "VDB-051-web-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-XSS-Protection\" is Present/not set."
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "web_api": [
+          {
+            "frag_id": "VDB-051-web_api-poc",
+            "type": "numbered_list",
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "Run the application in a browser configured to proxy with Burp Suite."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Open the captured traffic in the HTTP History's Proxy tab."
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "It is observed in the response that the \"X-XSS-Protection\" is Present/not set."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "library_id": "VDB-003",
@@ -2807,7 +2985,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -2836,7 +3014,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -2865,7 +3043,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Content-Security-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3049,7 +3227,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3078,7 +3256,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3107,7 +3285,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Cross-Origin-Embedder-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3238,7 +3416,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3267,7 +3445,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3296,7 +3474,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Cross-Origin-Resource-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3445,7 +3623,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3474,7 +3652,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3503,7 +3681,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Permissions-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3848,7 +4026,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3877,7 +4055,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -3906,7 +4084,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Referrer-Policy\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4055,7 +4233,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4084,7 +4262,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4113,7 +4291,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"Strict-Transport-Security\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4281,7 +4459,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4310,7 +4488,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4339,7 +4517,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Content-Type-Options\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4569,7 +4747,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4598,7 +4776,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4627,7 +4805,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Frame-Options\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4861,7 +5039,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4890,7 +5068,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured/Present."
                   }
                 ]
               }
@@ -4919,7 +5097,7 @@
               {
                 "runs": [
                   {
-                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured."
+                    "text": "It is observed in the response that the \"X-Permitted-Cross-Domain-Policies\" is Missing/Misconfigured/Present."
                   }
                 ]
               }

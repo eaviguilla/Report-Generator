@@ -275,6 +275,20 @@ class ImportRouteTests(unittest.TestCase):
         response = self._import("report.docx", self._docx()[: 4_000])
         self.assertEqual(response.status_code, 422)
 
+    def test_the_wrong_kind_of_file_is_named_rather_than_decoded(self) -> None:
+        """Every non-ZIP falls through to the JSON branch, so without this a tester who picks a PDF
+        is told "Expecting value: line 1 column 1"."""
+        cases = {
+            b"%PDF-1.4\ntrailer<</Root 1 0 R>>\n%%EOF\n": "this is a PDF",
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * 20: "not a VulnReport ZIP",
+            b"": "the file is empty",
+        }
+        for data, expected in cases.items():
+            with self.subTest(expected=expected):
+                response = self._import("report.docx", data)
+                self.assertEqual(response.status_code, 422)
+                self.assertIn(expected, response.json()["error"]["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

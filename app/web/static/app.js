@@ -853,6 +853,7 @@
       const present = new Set(content.fragments.map(fragment => fragment.type));
       required[content.type].forEach(type => { if (!present.has(type)) content.fragments.push(newFragment(type)); });
     });
+    vulnerability.contents.forEach(content => { if (content.type.endsWith("proof_of_concept")) ensureProofSteps(content); });
     if (vulnerability.status === "resolved") { const remediation = vulnerability.contents.find(content => content.type === "recommended_remediation"); remediation.fragments = [{frag_id:id("f"),type:"paragraph",runs:[{text:"None, the vulnerability has been remediated."}]}]; }
     syncConclusion(vulnerability);
     syncEvidenceImageSlots(vulnerability);
@@ -899,16 +900,37 @@
     return null;
   };
   const environmentName = environment => environment === "production" ? "Production" : "Non-Production";
-  const imagesForEnvironment = (finding, environment) => finding.contents.flatMap(content => (content.fragments || []).filter(fragment => fragment.type === "image" && fragment.environment === environment));
+  const imagesForEnvironment = (finding, environment) => finding.contents.filter(content => content.type !== "previous_proof_of_concept").flatMap(content => (content.fragments || []).filter(fragment => fragment.type === "image" && fragment.environment === environment));
+  // Twin of report_service.sync_evidence_image_slots; keep both in step. Coverage is a property of
+  // the proof of concept alone, so a carried previous-PoC image is never relabelled or counted here.
   const syncEvidenceImageSlots = finding => {
     const environments = affectedEnvironments(finding);
-    const images = finding.contents.flatMap(content => content.fragments.filter(fragment => fragment.type === "image"));
-    if (environments.length === 1) images.forEach(image => { image.environment = environments[0]; });
-    let missing = environments.filter(environment => !images.some(image => image.environment === environment));
-    images.filter(image => !image.environment).forEach(image => { image.environment = missing.shift() || environments[0] || null; });
-    missing = environments.filter(environment => !images.some(image => image.environment === environment));
     const proof = finding.contents.find(content => content.type === "proof_of_concept");
+    const images = finding.contents.filter(content => content.type !== "previous_proof_of_concept").flatMap(content => content.fragments.filter(fragment => fragment.type === "image"));
+    const covered = () => (proof?.fragments || []).filter(fragment => fragment.type === "image").map(fragment => fragment.environment);
+    if (environments.length === 1) images.forEach(image => { image.environment = environments[0]; });
+    let missing = environments.filter(environment => !covered().includes(environment));
+    images.filter(image => !image.environment).forEach(image => { image.environment = missing.shift() || environments[0] || null; });
+    missing = environments.filter(environment => !covered().includes(environment));
     missing.forEach(environment => { const image = newFragment("image"); image.environment = environment; proof?.fragments.push(image); });
+  };
+  // Single owner of the rule: provisioning guarantees these fragments exist, so allowing a delete
+  // would only have the next save put one back and make the editor look like it lost the change.
+  const deletionBlockedReason = (fragment, content, finding) => {
+    if (!content.type.endsWith("proof_of_concept")) return null;
+    const sameType = content.fragments.filter(candidate => candidate.type === fragment.type);
+    if (fragment.type === "numbered_list") return sameType.length === 1 ? "A proof of concept always keeps one list of steps." : null;
+    if (fragment.type !== "image") return null;
+    if (content.type === "previous_proof_of_concept") return sameType.length === 1 ? "The previous proof of concept always keeps one image." : null;
+    if (!fragment.environment || !affectedEnvironments(finding).includes(fragment.environment)) return null;
+    return sameType.filter(image => image.environment === fragment.environment).length === 1
+      ? `${environmentName(fragment.environment)} evidence is required while this finding affects it.`
+      : null;
+  };
+  // Twin of report_service.ensure_proof_steps; keep both in step. Steps are the substance of a proof
+  // of concept, so one numbered list survives deletion, a status change, and a library replace.
+  const ensureProofSteps = content => {
+    if (!content.fragments.some(fragment => fragment.type === "numbered_list")) content.fragments.unshift(newFragment("numbered_list"));
   };
   // Twin of report_service.apply_poc_variant; keep both in step.
   const applyPocVariant = (finding, steps, variant) => {
@@ -918,6 +940,7 @@
     const copied = JSON.parse(JSON.stringify(steps));
     copied.forEach(fragment => { fragment.frag_id = id("f"); });
     proof.fragments = [...copied, ...images];
+    ensureProofSteps(proof);
     finding.poc_variant = variant;
     // The earlier refusal referred to steps that no longer exist, so it must not suppress the next mismatch.
     finding.poc_variant_declined = [];
@@ -1326,6 +1349,7 @@
       }
       const previousEvidence = evidenceIdsIn(finding);
       lost.forEach(environment => finding.contents.forEach(content => {
+        if (content.type === "previous_proof_of_concept") return;
         content.fragments = (content.fragments || []).filter(fragment => !(fragment.type === "image" && fragment.environment === environment));
       }));
       dropUnreferencedEvidence(previousEvidence);
@@ -1768,7 +1792,15 @@
   function newFragment(type) { const fragment = {frag_id:id("f"),type}; if (type === "paragraph" || type === "note") fragment.runs = []; else if (type.endsWith("list")) fragment.items = [{runs:[]}]; else if (type === "table") Object.assign(fragment,{header:[{runs:[]}],rows:[[{runs:[]}]]}); else if (type === "image") Object.assign(fragment,{evidence_id:null,caption:"",width_mm:null}); else if (type === "code_block") Object.assign(fragment,{caption:null,text:""}); else fragment.text=""; return fragment; }
   // Renders one content fragment with its type-specific editing controls.
   function renderFragment(fragment, content, rerender, finding) {
-    const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger" type="button">Delete</button></div>`; card.querySelector(".danger").onclick=()=>{content.fragments.splice(content.fragments.indexOf(fragment),1);rerender();scheduleSave();};
+    const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger" type="button">Delete</button></div>`;
+    const removeButton = card.querySelector(".danger");
+    const blockedReason = deletionBlockedReason(fragment, content, finding);
+    if (blockedReason) {
+      removeButton.disabled = true;
+      removeButton.title = blockedReason;
+    } else {
+      removeButton.onclick = () => { content.fragments.splice(content.fragments.indexOf(fragment), 1); rerender(); scheduleSave(); };
+    }
     const moveFragment = offset => {
       const fromIndex = content.fragments.indexOf(fragment);
       const toIndex = fromIndex + offset;
@@ -1962,22 +1994,26 @@
       }
       const details = document.createElement("div");
       details.className = "evidence-details";
-      const imageEnvironments = affectedEnvironments(finding);
+      // A historical image is labelled with where it was found, so the current scope neither
+      // narrows the choice nor answers it for the tester.
+      const historical = content.type === "previous_proof_of_concept";
+      const imageEnvironments = historical ? ["production", "non_production"] : affectedEnvironments(finding);
       const environmentLabel = document.createElement("label");
       environmentLabel.textContent = "Environment";
-      if (imageEnvironments.length === 1) {
+      if (!historical && imageEnvironments.length === 1) {
         fragment.environment = imageEnvironments[0];
         const environmentValue = document.createElement("span");
         environmentValue.className = "evidence-environment-value";
         environmentValue.textContent = imageEnvironments[0] === "production" ? "Production" : "Non-Production";
         environmentLabel.append(environmentValue);
       } else {
-        if (!imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
+        if (!historical && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
         const environmentSelect = document.createElement("select");
         environmentSelect.className = "evidence-environment";
         environmentSelect.setAttribute("aria-label", `${contentNames[content.type]} image environment`);
-        environmentSelect.innerHTML = imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
-        environmentSelect.onchange = () => { fragment.environment = environmentSelect.value; rerender(); changed(); };
+        const unset = historical && !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
+        environmentSelect.innerHTML = unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
+        environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; rerender(); changed(); };
         environmentLabel.append(environmentSelect);
       }
       details.append(environmentLabel);
@@ -2094,7 +2130,7 @@
           const cells = [...fragment.header, ...fragment.rows.flat()];
           if (cells.some(cell => !hasText(cell.runs))) issues.push({contentLabel, fragmentLabel:"table", message:"every cell is required", fragmentId:fragment.frag_id});
         }
-        if (fragment.type === "image" && (!fragment.environment || relevant.includes(fragment.environment))) {
+        if (fragment.type === "image" && (content.type === "previous_proof_of_concept" || !fragment.environment || relevant.includes(fragment.environment))) {
           const environment = fragment.environment === "production" ? "Production" : fragment.environment === "non_production" ? "Non-Production" : "Unassigned";
           const missing = [!fragment.environment && "environment", !fragment.evidence_id && "image", !fragment.caption?.trim() && "caption"].filter(Boolean);
           if (missing.length) issues.push({contentLabel, fragmentLabel:`${environment} image`, message:`${missing.join(" and ")} required`, fragmentId:fragment.frag_id});
@@ -2110,7 +2146,8 @@
         if (!finding.title?.trim()) missing.push("finding name");
         if (![finding.likelihood, finding.impact, finding.severity, finding.status].every(Boolean)) missing.push("assessment details");
         if (!scopeHasLocation(finding)) missing.push("affected location");
-        const images = finding.contents.flatMap(content => content.fragments.filter(fragment => fragment.type === "image"));
+        const proof = finding.contents.find(content => content.type === "proof_of_concept");
+        const images = (proof?.fragments || []).filter(fragment => fragment.type === "image");
         const missingEvidence = affectedEnvironments(finding).filter(environment => !images.some(image => image.environment === environment && image.evidence_id));
         const environmentIssues = missingEvidence.map(environment => ({finding, message:`${environment === "production" ? "Production" : "Non-Production"} evidence image required`}));
         return [...(missing.length ? [{finding, message:missing.join(", ")}] : []), ...environmentIssues, ...fragmentIssues(finding).map(issue => ({finding, ...issue}))];

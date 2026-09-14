@@ -25,6 +25,7 @@ from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, render_report_docx
 from .library import Library
+from .docx_import import ReportImportError, parse_report_docx
 from .report_service import applicable_poc_variant, apply_poc_variant, assign_fresh_fragment_ids, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots
 from .storage import atomic_write_bytes
 from .workspace import StaleReportError, Workspace, app_id_for
@@ -46,7 +47,17 @@ app.mount("/static", StaticFiles(directory=ROOT / "app" / "web" / "static"), nam
 templates = Jinja2Templates(directory=ROOT / "app" / "web" / "templates")
 # One cache-buster for every asset, so the four pages can never load different CSS versions.
 STATIC_DIR = ROOT / "app" / "web" / "static"
-templates.env.globals["asset_v"] = str(int(max(p.stat().st_mtime for p in STATIC_DIR.glob("*.*"))))
+
+
+class _AssetVersion:
+    """Recomputed per render, because a value frozen at import serves a stale cached script for the
+    rest of the process and the tester sees an old page until they reload by hand."""
+
+    def __str__(self) -> str:
+        return str(int(max(path.stat().st_mtime for path in STATIC_DIR.glob("*.*"))))
+
+
+templates.env.globals["asset_v"] = _AssetVersion()
 logger = logging.getLogger(__name__)
 ERROR_LOG_PATH = DATA / "vulnreport-errors.log"
 STALE_REPORT_DETAIL = "This report changed in another browser tab. Choose whether to save your version or load the latest version."
@@ -283,6 +294,19 @@ async def read_upload_limited(file: UploadFile, limit: int, label: str) -> bytes
     return contents
 
 
+def is_report_docx(contents: bytes) -> bool:
+    """A .docx is itself a ZIP, so without this the bundle branch claims it and dies on a missing
+    draft.json. No bundle can hold this name: set equality already limits one to draft.json plus
+    evidence PNGs."""
+    if not zipfile.is_zipfile(io.BytesIO(contents)):
+        return False
+    with zipfile.ZipFile(io.BytesIO(contents)) as archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        if sum(info.file_size for info in infos) > MAX_BUNDLE_UNCOMPRESSED_BYTES:
+            raise HTTPException(413, "Expanded report bundle exceeds the 250 MB limit")
+        return any(info.filename == "word/document.xml" for info in infos)
+
+
 def parse_import(contents: bytes) -> tuple[dict, dict[str, bytes]]:
     """Parse a legacy JSON draft or a bounded ZIP bundle with verified evidence."""
     if not zipfile.is_zipfile(io.BytesIO(contents)):
@@ -412,7 +436,9 @@ def list_reports(request: Request):
         {
             "report_id": report.report_id,
             "app_name": report.engagement.app_name or "Untitled report",
-            "app_folder": report.folder_name_hint.app_folder or report.app_id,
+            # Grouped by the live name rather than the folder, so a rename is right immediately and
+            # folder drift never shows.
+            "app_folder": report.engagement.app_name.strip() or "Unassigned",
             "saved_at": report.saved_at.isoformat(),
             "finding_count": len(report.vulnerabilities),
         }
@@ -508,14 +534,19 @@ def open_report(report_id: str):
 
 @app.post("/reports/import")
 async def import_report(file: UploadFile = File(...)):
-    """Validate a JSON draft or ZIP bundle and save it as a separate local report."""
+    """Validate a JSON draft, a ZIP bundle, or a report this app generated, and save it separately."""
     try:
         contents = await read_upload_limited(file, MAX_BUNDLE_BYTES, "Report bundle")
+        if await run_in_threadpool(is_report_docx, contents):
+            payload, images, summary = await run_in_threadpool(parse_report_docx, contents)
+            evidence_files = {f"evidence/{evidence_id}.png": data for evidence_id, data in images.items()}
+            report = await run_in_threadpool(workspace.import_report, payload, evidence_files)
+            return {"report_id": report.report_id, "source": "docx", "summary": summary}
         payload, evidence_files = await run_in_threadpool(parse_import, contents)
         report = await run_in_threadpool(workspace.import_report, payload, evidence_files)
     except (UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile, UnidentifiedImageError, OSError, ValidationError, ValueError) as error:
         raise HTTPException(422, f"Select a valid VulnReport export: {error}") from error
-    return {"report_id": report.report_id}
+    return {"report_id": report.report_id, "source": "bundle"}
 
 
 @app.delete("/reports/{report_id}")

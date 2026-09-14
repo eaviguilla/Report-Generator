@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import tempfile
 import threading
 import unittest
@@ -22,7 +24,7 @@ from app.library import Library
 from app.report_service import affected_channels, applicable_poc_variant, apply_poc_variant, provision
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
-from app.models import ImageFragment, ListFragment, ListItem, Report, Run, Scope, ScopeTarget, Vulnerability
+from app.models import ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, Vulnerability
 from app.tester_identity import Identity, load_or_bootstrap
 
 
@@ -49,7 +51,9 @@ class ReportApiTests(unittest.TestCase):
     def test_report_management_lifecycle(self) -> None:
         report_id = self.new_report()
         original_path = main.workspace.find_path(report_id)
-        self.assertEqual(original_path.parent.parent.name, "X_unnamed")
+        # Both segments are provisional until the name and report type exist.
+        self.assertEqual(original_path.parent.parent.name, "unnamed")
+        self.assertEqual(original_path.parent.name[7:], f"_Report_{report_id[2:]}")
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["app_name"] = "Regression Report"
         report["engagement"]["ci_number"] = "CI-TEST-01"
@@ -78,6 +82,9 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual([content.type for content in persisted.vulnerabilities[0].contents], ["description", "recommended_remediation", "proof_of_concept"])
         self.assertNotEqual(main.workspace.find_path(report_id), original_path)
         self.assertFalse(original_path.exists())
+        settled = main.workspace.find_path(report_id)
+        self.assertEqual(settled.parent.parent.name, "Regression_Report")
+        self.assertEqual(settled.parent.name, f"2026-09_Annual_Pentest_{report_id[2:]}")
 
         listed = self.client.get("/reports")
         self.assertEqual(listed.status_code, 200)
@@ -98,6 +105,9 @@ class ReportApiTests(unittest.TestCase):
         renamed = self.client.patch(f"/reports/{report_id}/name", json={"app_name": "Renamed report"})
         self.assertEqual(renamed.status_code, 200)
         self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Renamed report")
+        # A settled folder name is a filing decision made once; the manager groups by the live name,
+        # so the drift is invisible and nothing on disk has to churn.
+        self.assertEqual(main.workspace.find_path(report_id).parent.parent.name, "Regression_Report")
         self.assertEqual(self.client.patch(f"/reports/{report_id}/name", json={"app_name": " "}).status_code, 422)
 
         duplicated = self.client.post(f"/reports/{report_id}/duplicate")
@@ -364,6 +374,40 @@ class ReportApiTests(unittest.TestCase):
         self.assertNotEqual(proof.fragments[0].frag_id, "f_lib")
         self.assertEqual(previous.fragments[0].items[0].runs[0].text, "Old evidence")
         self.assertEqual(finding.poc_variant, "web")
+
+    def test_a_proof_of_concept_always_keeps_a_steps_list(self) -> None:
+        """Steps are the substance of a proof of concept, so neither deleting the list nor replacing
+        it from a library entry that carries none may leave the section without one."""
+        finding = Vulnerability(uid="v_steps", title="Finding", status="open_previously_discovered")
+        provision(finding)
+        for content in finding.contents:
+            if content.type.endswith("proof_of_concept"):
+                content.fragments = [fragment for fragment in content.fragments if fragment.type != "numbered_list"]
+
+        provision(finding)
+        for content in finding.contents:
+            if content.type.endswith("proof_of_concept"):
+                self.assertEqual(content.fragments[0].type, "numbered_list", f"{content.type} was left with no steps")
+
+        apply_poc_variant(finding, [ParagraphFragment(frag_id="f_prose", type="paragraph", runs=[Run(text="Prose only")])], "web")
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.type for fragment in proof.fragments], ["numbered_list", "paragraph", "image"])
+
+    def test_asset_version_follows_a_static_edit_without_a_restart(self) -> None:
+        """Frozen at import, the token keeps serving a cached script for the life of the process, so
+        an edited page looks unchanged until the tester reloads by hand."""
+        pattern = re.compile(r"app\.css\?v=(\d+)")
+        static = Path(main.__file__).resolve().parent / "web" / "static"
+        script = static / "app.js"
+        stamps = script.stat()
+        newest = max(path.stat().st_mtime for path in static.glob("*.*"))
+        before = pattern.search(self.client.get("/").text).group(1)
+        try:
+            os.utime(script, (stamps.st_atime, newest + 60))
+            after = pattern.search(self.client.get("/").text).group(1)
+        finally:
+            os.utime(script, (stamps.st_atime, stamps.st_mtime))
+        self.assertNotEqual(before, after)
 
     def test_replacing_the_steps_clears_an_earlier_refusal(self) -> None:
         finding = Vulnerability(uid="v_memory", title="Finding", poc_variant_declined=["api"])

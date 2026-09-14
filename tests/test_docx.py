@@ -20,7 +20,7 @@ from app.docx_report import (
     generation_issues,
     render_report_docx,
 )
-from app.report_service import provision
+from app.report_service import provision, sync_evidence_image_slots
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
 
 
@@ -32,7 +32,7 @@ class DocxReportTests(unittest.TestCase):
             evidence_folder.mkdir()
             evidence = BytesIO()
             Image.new("RGB", (40, 20), "white").save(evidence, format="PNG")
-            for evidence_id in ("ev_prod", "ev_prod_extra", "ev_uat", "ev_prod_second"):
+            for evidence_id in ("ev_prod", "ev_prod_extra", "ev_uat", "ev_prod_second", "ev_prev"):
                 (evidence_folder / f"{evidence_id}.png").write_bytes(evidence.getvalue())
 
             now = datetime.now().astimezone()
@@ -69,7 +69,7 @@ class DocxReportTests(unittest.TestCase):
                 ],
                 evidence={
                     evidence_id: EvidenceItem(file=f"evidence/{evidence_id}.png", original_name=f"{evidence_id}.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)
-                    for evidence_id in ("ev_prod", "ev_prod_extra", "ev_uat", "ev_prod_second")
+                    for evidence_id in ("ev_prod", "ev_prod_extra", "ev_uat", "ev_prod_second", "ev_prev")
                 },
             )
             report.vulnerabilities = [
@@ -89,6 +89,12 @@ class DocxReportTests(unittest.TestCase):
                 ListItem(runs=[Run(text="Reproduce the previously reported behavior.")]),
                 ListItem(runs=[Run(text="Record the original vulnerable response.")]),
             ]
+            # Non-production is outside this finding's scope, so this also pins that history is not
+            # filtered by the current engagement.
+            previous_image = next(fragment for fragment in previous.fragments if isinstance(fragment, ImageFragment))
+            previous_image.environment = "non_production"
+            previous_image.evidence_id = "ev_prev"
+            previous_image.caption = "Original non-production response"
 
             template = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
             generated = render_report_docx(report, template, report_folder)
@@ -112,11 +118,12 @@ class DocxReportTests(unittest.TestCase):
                 for index in (1, 2, 3):
                     rating_run = next(run for run in row.cells[index].paragraphs[0].runs if run.text)
                     self.assertEqual(rating_run.font.size, Pt(12))
-            self.assertEqual(len(rendered.inline_shapes), 4)
+            self.assertEqual(len(rendered.inline_shapes), 5)
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("PROD:"), 2)
-            # The evidence label follows the engagement's chosen non-production name.
-            self.assertEqual(paragraph_texts.count("UAT:"), 1)
+            # The evidence label follows the engagement's chosen non-production name. The second
+            # occurrence is the carried previous proof of concept, which the retest no longer covers.
+            self.assertEqual(paragraph_texts.count("UAT:"), 2)
             self.assertEqual(paragraph_texts.count("NON-PROD:"), 0)
 
             # The component template is the only supported one, so the checks below share this render.
@@ -189,7 +196,7 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(sum(paragraph.text == "High Findings" for paragraph in component_document.paragraphs), 1)
             self.assertEqual(sum(paragraph.text == "Previous Proof of Concept: " for paragraph in component_document.paragraphs), 1)
             self.assertEqual(sum(paragraph.text == "In Conclusion: " for paragraph in component_document.paragraphs), 1)
-            self.assertEqual(len(component_document.inline_shapes), 4)
+            self.assertEqual(len(component_document.inline_shapes), 5)
             self._assert_image_fragment_format(component_document)
             web_scope = next(table for table in component_document.tables if table.cell(0, 0).text == "URL(s) in Scope")
             api_scope = next(table for table in component_document.tables if table.cell(0, 0).text == "API Routes")
@@ -332,6 +339,84 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(paragraph_texts.count("UAT:"), 0)
             self.assertEqual(len(rendered.inline_shapes), 1)
             self.assertNotIn("Stale lower-region response", "\n".join(paragraph_texts))
+
+    def _retest_report(self, report_folder: Path, evidence_ids: tuple[str, ...]) -> Report:
+        """A production-only finding in an engagement that also tested non-production."""
+        evidence_folder = report_folder / "evidence"
+        evidence_folder.mkdir()
+        buffer = BytesIO()
+        Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+        for evidence_id in evidence_ids:
+            (evidence_folder / f"{evidence_id}.png").write_bytes(buffer.getvalue())
+        now = datetime.now().astimezone()
+        return Report(
+            report_id="r_retest",
+            app_id="CI-DOCX",
+            saved_at=now,
+            engagement=Engagement(
+                app_name="Northstar Banking",
+                ci_number="CI-DOCX",
+                segment="JH",
+                report_type="retest",
+                report_date=date(2026, 9, 9),
+                tester="QA Tester",
+                tested_environments=["production"],
+                test_type="web",
+                test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST")},
+            ),
+            scope_targets=[ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test")],
+            evidence={
+                evidence_id: EvidenceItem(file=f"evidence/{evidence_id}.png", original_name=f"{evidence_id}.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)
+                for evidence_id in evidence_ids
+            },
+        )
+
+    @staticmethod
+    def _carry_history(finding: Vulnerability, environment: str, evidence_id: str) -> ImageFragment:
+        """Promote a finding to previously discovered and fill the seeded previous proof of concept."""
+        finding.status = "open_previously_discovered"
+        provision(finding)
+        previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+        next(fragment for fragment in previous.fragments if isinstance(fragment, ListFragment)).items = [ListItem(runs=[Run(text="Reproduce the original finding.")])]
+        history = next(fragment for fragment in previous.fragments if isinstance(fragment, ImageFragment))
+        history.environment = environment
+        history.evidence_id = evidence_id
+        history.caption = "Original non-production response"
+        return history
+
+    def test_previous_proof_of_concept_image_survives_a_narrower_retest(self) -> None:
+        """A retest is usually narrower than the test before it, so gating history on the current
+        scope would hide, relabel, or drop evidence the previous engagement actually gathered."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._retest_report(report_folder, ("ev_prod", "ev_history"))
+            report.vulnerabilities = [
+                self._finding("v_retest", "Authorization bypass", "high", "001", ["t_prod"], [
+                    ImageFragment(frag_id="f_img_prod", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
+                ]),
+            ]
+            finding = report.vulnerabilities[0]
+            history = self._carry_history(finding, "non_production", "ev_history")
+
+            sync_evidence_image_slots(finding, report)
+            self.assertEqual(history.environment, "non_production", "a carried image keeps the environment it was found in")
+            self.assertEqual(generation_issues(report), [])
+
+            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
+            rendered = Document(BytesIO(render_report_docx(report, template, report_folder)))
+            paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
+            self.assertEqual(paragraph_texts.count("UAT:"), 1, "the carried non-production image must still be labelled and rendered")
+            self.assertEqual(len(rendered.inline_shapes), 2)
+
+    def test_previous_evidence_does_not_satisfy_the_retest_requirement(self) -> None:
+        """Last year's screenshot is not this year's proof, so it must not silently stand in for it."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._retest_report(report_folder, ("ev_history",))
+            report.vulnerabilities = [self._finding("v_retest", "Authorization bypass", "high", "001", ["t_prod"], [])]
+            self._carry_history(report.vulnerabilities[0], "production", "ev_history")
+
+            self.assertIn("Authorization bypass: Production evidence image required", generation_issues(report))
 
     def test_affected_locations_are_real_bullets_and_long_paths_wrap_on_a_slash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

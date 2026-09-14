@@ -4,7 +4,7 @@ The single reference for how report data is shaped, saved, and moved through thi
 
 > **Maintenance contract.** This file is the source of truth consulted by the `data-oracle` agent. Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, or the save/navigation paths in `app/web/static/app.js` must update the affected section here in the same change. Line numbers are hints only; function and field names are the durable identifiers.
 >
-> Last verified against source: **2026-09-14**, after the library proof-of-concept work.
+> Last verified against source: **2026-09-14**, after making `previous_proof_of_concept` a historical record, aligning the Python and JavaScript proof-of-concept seeds, and renaming report folders after the application and its report type.
 
 ---
 
@@ -46,7 +46,9 @@ generated/                                      finished .docx output
 | `evidence_id` | `ev_` + 12 hex | random at upload | `persist_uploaded_evidence` |
 | evidence file | always `evidence/<evidence_id>.png` | enforced by validator | `Report.validate_references` |
 
-**Folder migration:** a report saved while `app_id` is `unnamed` lands in `X_unnamed/`. When the CI, BSN, or app name is later filled in, the next save *moves* the directory to its real home (`existing.parent.replace(desired.parent)`). Anything caching the old path across that save is holding a stale path.
+**`app_id` is derived once, then frozen.** `app_id_for` is called from exactly two places, and both are guarded by `if report.app_id == "unnamed"` — `main.rename_report` and `main.save_report`. `save_report` also overwrites the submitted `app_id` with `prior.app_id` before validation, so the browser can never change it. Once `app_id` holds a real value, editing `ci_number`, `bsn_number`, or `app_name` does **not** re-derive it and does **not** move the folder. `Workspace.import_report` never calls `app_id_for` at all; it persists whatever `app_id` the payload carried, and `app_id` is a required field on `Report` with no default.
+
+**Folder migration:** a report saved while `app_id` is `unnamed` lands in `X_unnamed/`. The *first* save after the CI, BSN, or app name is filled in moves the directory to its real home (`existing.parent.replace(desired.parent)`) — but only because `_save_unlocked` gates that move on `existing.parent.parent.name == "X_unnamed"`. There is no second migration. Anything caching the old path across that save is holding a stale path.
 
 **`safe_name`** strips `<>:"/\|?*`, collapses whitespace to `_`, trims to 60 chars, and substitutes a fallback for Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`).
 
@@ -114,11 +116,16 @@ Report
 
 **Cross-object invariants enforced by `Report.validate_references`:**
 
+- `scope_targets[].target_id` values are unique
+- `vulnerabilities[].uid` values are unique
+- **two findings may not share a `display_id`** (finding number); `None` is exempt
+- within one finding, `contents[].type` values are unique
+- a finding's `scope.target_ids` must all exist in `scope_targets`, **checked only when `scope.mode == "custom"`** — stale `target_ids` under any other mode pass validation
+- `frag_id` values are unique across the entire report
 - every `fragment.evidence_id` points at an existing `evidence` entry
 - every `evidence.file` basename equals `<evidence_id>.png`
-- `frag_id` values are unique across the entire report
-- a finding's `scope.target_ids` must all exist in `scope_targets`
-- **two findings may not share a `display_id`** (finding number)
+
+Not enforced here: which fragment types may appear in which content section, and which content sections a `status` requires. `ContentType` restricts the five section names and nothing more; `Content.fragments` accepts any fragment type. Section membership is `provision`'s job, and `provision` runs only on `PUT` and library insert — never on `load_path` or `import_report`.
 
 A violation raises `ValidationError` on load, which demotes the draft to the *legacy/invalid* list on the manager page rather than crashing it (`Workspace.list_legacy_reports`).
 
@@ -130,12 +137,16 @@ A violation raises `ValidationError` on load, which demotes the draft to the *le
 
 | Function | Runs from | What it guarantees |
 |---|---|---|
-| `provision` | `provision_report` | each finding has its required content sections and seed fragments |
-| `sync_evidence_image_slots` | `provision_report` | one image slot per affected environment, no slots for unaffected ones |
+| `provision` | `provision_report` | each finding has its required content sections and seed fragments; both proof-of-concept sections seed `numbered_list` then `image` |
+| `sync_evidence_image_slots` | `provision_report` | at least one image slot exists in `proof_of_concept` for every affected environment |
 | `reconcile_targets` | the PUT handler, only when `scope_text` is present | rebuilds `scope_targets` from the submitted `scope_text`, and rejects the change with 422 `referenced_scope_removed` if it would strand a finding |
 | `assign_fresh_fragment_ids` | `insert_library` | library inserts never reuse a `frag_id` |
+| `ensure_proof_steps` | `provision`, `apply_poc_variant` | both proof-of-concept sections always hold a `numbered_list`, first in the section |
+| `parse_report_docx` | `import_report`, when the upload is a generated report | a DOCX becomes a retest draft: every retained finding is `open_previously_discovered`, the document's Proof of Concept becomes the draft's **previous** one, and a fresh empty `proof_of_concept` is built with one image slot per affected environment |
 
-`fragment_applies(fragment, vulnerability, report)` is the **single owner** of the "does this fragment belong to an environment this finding actually affects" rule. Both the renderer and the readiness panel must go through it.
+`sync_evidence_image_slots` **only ever adds**. It never deletes a slot for an environment the finding stopped affecting — a stale image keeps its `environment` and stays in the draft. Two further details matter to any new caller: coverage is measured against `proof_of_concept` images **only**, so a carried `previous_proof_of_concept` image never suppresses a new slot; and appended slots go into `proof_of_concept` only, so a finding with no `proof_of_concept` section gets nothing. It never reads or relabels `previous_proof_of_concept`.
+
+`fragment_applies(fragment, vulnerability, report, content_type)` is the **single owner** of the "does this fragment belong to an environment this finding actually affects" rule. Both the renderer and the readiness panel must go through it — it is what hides a stale slot, since nothing removes one. **`previous_proof_of_concept` always applies**, whatever the environment: it records the engagement that found the finding, and a retest is usually narrower than the test before it, so gating history on the current scope would silently drop evidence from the document.
 
 ### Proof-of-concept steps from the library
 
@@ -234,9 +245,11 @@ These are implemented in both Python and JavaScript and **must be changed in pai
 | image slots | `sync_evidence_image_slots` | `syncEvidenceImageSlots` |
 | status to section list | `provision` | `provision`, **and a third inline copy** in the status `onchange` (~line 1470) |
 
-**These two are already out of sync, by design or by accident — check before assuming parity:** Python's `required_fragments` seeds `["numbered_list"]` into the proof-of-concept sections while the JavaScript `required` seeds `["numbered_list", "image"]`. The outcomes converge through the image-slot syncs, but the rules are not mirrors. Anything that asks "is this section empty?" will see a different starting state on each side.
+**Previous proof of concept is historical, and that rule lives in five places.** `fragment_applies`, `sync_evidence_image_slots` and the evidence-coverage check in `generation_issues` all exempt it on the Python side. The browser mirrors it in `syncEvidenceImageSlots` and `fragmentIssues`, and two client-only paths must respect it as well: `settleScopeChange` must not **delete** a historical image when an environment leaves the scope, and the image editor must not **overwrite** a historical `environment` while rendering. A historical image offers every environment and starts unset, because only the tester knows where a carried screenshot came from.
 
-**Client-only:** the `window.confirm` guards (`confirmScopeLoss`, `settleScopeChange`, `replaceFromLibrary`) and finding-deletion confirmation.
+Python's `required_fragments` and the JavaScript `required` now seed identically — `["numbered_list", "image"]` into both proof-of-concept sections. They were out of step until 2026-09-14; anything that asks "is this section empty?" can now trust either side.
+
+**Client-only:** the `window.confirm` guards (`confirmScopeLoss`, `settleScopeChange`, `replaceFromLibrary`), finding-deletion confirmation, and `deletionBlockedReason`, which disables Delete on the fragments provisioning guarantees — the last `numbered_list` in either proof-of-concept section, the last `image` in `previous_proof_of_concept`, and the last `proof_of_concept` image for an affected environment. The server would recreate each on the next save, so the block exists to stop the editor looking like it discarded the change.
 **Server-only:** `Report.validate_references`, the `referenced_scope_removed` 422, and all upload size limits.
 
 ---
@@ -247,6 +260,9 @@ Recorded so they are not rediscovered as bugs.
 
 - **The comment above `scheduleSave` says "30-second cadence"** (line 574); the actual default is 5000 ms.
 - **Template context key differs by page:** setup and findings receive `library`, the editor receives `library_entries`.
-- **`find_path` and `list_reports` scan every `draft.json` on disk** for each call. Correct, but O(number of reports) per lookup.
+- **`find_path` and `list_reports` scan every `draft.json` on disk** for each call. Correct, but O(number of reports) per lookup. It is also why folder names are free to change: nothing resolves a report through one.
+- **Folder segments are provisional until the value that names them exists.** `app_folder_name` gives `unnamed` while `app_name` is blank and `report_folder_name` gives `Report` while `report_type` is `None`. `_save_unlocked` renames on the save that supplies the missing value and freezes afterwards, so a later rename leaves the folder alone. The manager groups by `engagement.app_name`, not by the folder, so that drift never shows.
 - **One backup only.** `draft.bak.json` is overwritten on every save.
 - **`scope_text` asymmetry** (section 9): present in requests, absent from responses. Code that assumes request and response shapes match will break here.
+- **`provision` seeds only into an *empty* section.** The `present` set it computes is dead code, because the loop has already skipped any section with fragments. A finding whose `previous_proof_of_concept` already holds steps but no image will never gain the image slot, so the seed reaches new sections only, never existing drafts.
+- **`generation_issues` validates the images that exist; it does not require one to exist.** Only `affected_environments` coverage forces an image into being, and that is measured against `proof_of_concept` alone. A `previous_proof_of_concept` holding steps and no image is therefore generation-clean.

@@ -98,12 +98,9 @@ def generation_issues(report: Report) -> list[str]:
         label = finding.title or "Untitled finding"
         if not finding_is_complete(finding, report):
             issues.append(f"{label}: finding details or affected locations are incomplete")
-        images = [
-            fragment
-            for content in finding.contents
-            for fragment in content.fragments
-            if isinstance(fragment, ImageFragment)
-        ]
+        proof = next((content for content in finding.contents if content.type == "proof_of_concept"), None)
+        # Last year's screenshot is not this year's proof, so only the proof of concept counts.
+        images = [fragment for fragment in proof.fragments if isinstance(fragment, ImageFragment)] if proof else []
         environments = affected_environments(finding, report)
         for environment in environments:
             if not any(image.environment == environment and image.evidence_id for image in images):
@@ -115,7 +112,7 @@ def generation_issues(report: Report) -> list[str]:
                 elif isinstance(fragment, ListFragment) and any(not _runs_have_text(item.runs) for item in fragment.items):
                     issues.append(f"{label}: {content.type} list item text is required")
                 elif isinstance(fragment, ImageFragment):
-                    if not fragment_applies(fragment, finding, report):
+                    if not fragment_applies(fragment, finding, report, content.type):
                         continue
                     missing = []
                     if not fragment.environment:
@@ -686,7 +683,7 @@ def _render_component_content(
     fragments = [] if content is None else [
         fragment
         for fragment in content.fragments
-        if finding is None or fragment_applies(fragment, finding, report)
+        if finding is None or fragment_applies(fragment, finding, report, content.type)
     ]
     if not fragments:
         rendered = _render_text_component(

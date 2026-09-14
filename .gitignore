@@ -15,6 +15,10 @@ CLAUDE.md
 .impeccable/
 .graphifyignore
 graphify-out/
+.github/
+
+# customer reports used for local testing; these never belong in the repository
+/*.docx
 
 # python / macOS
 .venv/

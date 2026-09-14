@@ -137,7 +137,7 @@
       diagnostics.clear();
       location.href = `/reports/${reportId}/setup`;
     } catch (error) {
-      showError(error, "import_report", "Select a valid VulnReport ZIP or JSON export");
+      showError(error, "import_report", "Select a valid VulnReport ZIP or JSON export, or a report DOCX");
     }
     finally { importInput.value = ""; }
   };

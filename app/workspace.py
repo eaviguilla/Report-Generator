@@ -14,6 +14,7 @@ from typing import Iterator
 from pydantic import ValidationError
 
 from app.models import Engagement, FolderHint, Report
+from .report_service import REPORT_TYPE_LABELS
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 
 INVALID_NAME = re.compile(r'[<>:"/\\|?*]+')
@@ -34,6 +35,28 @@ def safe_name(value: str, fallback: str) -> str:
 def app_id_for(engagement: Engagement) -> str:
     """Derive the application folder identity from CI, BSN, or application name."""
     return safe_name(engagement.ci_number or engagement.bsn_number or engagement.app_name, "unnamed")
+
+
+# A folder segment is provisional until the value that names it exists, so a draft started before
+# its name or report type was chosen still reaches its real home on the save that supplies one.
+UNNAMED_APP_FOLDER = "unnamed"
+PROVISIONAL_REPORT_LABEL = "Report"
+
+
+def app_folder_name(report: Report) -> str:
+    """Name the application folder after the application, not its CI number.
+
+    Nothing looks a report up by folder name, so this is read by people: `find_path` and
+    `list_reports` both scan every `draft.json` on disk.
+    """
+    return safe_name(report.engagement.app_name, UNNAMED_APP_FOLDER)
+
+
+def report_folder_name(report: Report) -> str:
+    """Name the report folder after its own report date and type."""
+    label = REPORT_TYPE_LABELS.get(report.engagement.report_type or "", PROVISIONAL_REPORT_LABEL)
+    month = report.engagement.report_date or datetime.now().date()
+    return f"{month:%Y-%m}_{safe_name(label, PROVISIONAL_REPORT_LABEL)}_{report.report_id[2:]}"
 
 
 class Workspace:
@@ -308,15 +331,23 @@ class Workspace:
                 raise
 
     def _save_unlocked(self, report: Report) -> Path:
-        app_name = safe_name(report.engagement.app_name, "X")
-        first_letter = app_name[0].upper() if app_name[0].isascii() and app_name[0].isalpha() else "X"
         existing = self.find_path(report.report_id)
-        desired = self.apps_root / f"{first_letter}_{safe_name(report.app_id, 'unnamed')}" / f"{datetime.now():%Y-%m}_Report_{report.report_id[2:]}" / "draft.json"
+        desired = self.apps_root / app_folder_name(report) / report_folder_name(report) / "draft.json"
         path = existing or desired
-        if existing and existing.parent.parent.name == "X_unnamed" and report.app_id != "unnamed":
-            desired.parent.parent.mkdir(parents=True, exist_ok=True)
-            existing.parent.replace(desired.parent)
-            path = desired
+        if existing is not None:
+            app_folder = existing.parent.parent.name
+            report_folder = existing.parent.name
+            provisional_report = report_folder == f"{report_folder[:7]}_{PROVISIONAL_REPORT_LABEL}_{report.report_id[2:]}"
+            target = self.apps_root / (
+                desired.parent.parent.name if app_folder == UNNAMED_APP_FOLDER else app_folder
+            ) / (desired.parent.name if provisional_report else report_folder) / "draft.json"
+            if target != existing:
+                vacated = existing.parent.parent
+                target.parent.parent.mkdir(parents=True, exist_ok=True)
+                existing.parent.replace(target.parent)
+                if vacated != target.parent.parent and vacated.is_dir() and not any(vacated.iterdir()):
+                    vacated.rmdir()
+                path = target
         report.folder_name_hint = FolderHint(app_folder=path.parent.parent.name, report_folder=path.parent.name)
         now = datetime.now().astimezone()
         report.saved_at = max(now, report.saved_at + timedelta(microseconds=1))

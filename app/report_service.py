@@ -151,6 +151,13 @@ def report_export_filename(report: Report, suffix: str = ".zip") -> str:
     return f"{segment} - {application} - {report_type} {year}{suffix}"
 
 
+def ensure_proof_steps(content: Content) -> None:
+    """Single owner of the rule: steps are the substance of a proof of concept, so one numbered list
+    survives a deletion, a status change, and a library replacement that carried none."""
+    if not any(fragment.type == "numbered_list" for fragment in content.fragments):
+        content.fragments.insert(0, ListFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="numbered_list", items=[ListItem(runs=[])]))
+
+
 def provision(vulnerability: Vulnerability) -> None:
     """Create the status-required content blocks and starter fragments for a finding."""
     types = ["description", "recommended_remediation", "proof_of_concept"]
@@ -161,8 +168,8 @@ def provision(vulnerability: Vulnerability) -> None:
     required_fragments = {
         "description": ["paragraph"],
         "recommended_remediation": ["paragraph"],
-        "previous_proof_of_concept": ["numbered_list"],
-        "proof_of_concept": ["numbered_list"],
+        "previous_proof_of_concept": ["numbered_list", "image"],
+        "proof_of_concept": ["numbered_list", "image"],
         "in_conclusion": [],
     }
     for content in vulnerability.contents:
@@ -179,6 +186,9 @@ def provision(vulnerability: Vulnerability) -> None:
             else:
                 fragment = ImageFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="image", evidence_id=None, caption="", width_mm=None)
             content.fragments.append(fragment)
+    for content in vulnerability.contents:
+        if content.type.endswith("proof_of_concept"):
+            ensure_proof_steps(content)
     if vulnerability.status == "resolved":
         remediation = next(content for content in vulnerability.contents if content.type == "recommended_remediation")
         remediation.fragments = [ParagraphFragment.model_validate({"frag_id": f"f_{uuid.uuid4().hex[:8]}", "type": "paragraph", "runs": [{"text": "None, the vulnerability has been remediated."}]})]
@@ -274,28 +284,48 @@ def applicable_poc_variant(vulnerability: Vulnerability, report: Report) -> Test
     return None
 
 
-def fragment_applies(fragment, vulnerability: Vulnerability, report: Report) -> bool:
+def fragment_applies(fragment, vulnerability: Vulnerability, report: Report, content_type: str) -> bool:
     """Single owner of the rule: an image left behind for an environment the finding no longer
-    affects is stale, so it is neither the tester's to complete nor ours to render."""
+    affects is stale, so it is neither the tester's to complete nor ours to render. Previous proof
+    of concept is exempt, because it records the engagement that found the finding rather than
+    this one, and a retest is usually narrower than the test before it."""
+    if content_type == "previous_proof_of_concept":
+        return True
     environment = getattr(fragment, "environment", None)
     return not environment or environment in affected_environments(vulnerability, report)
 
 
+def _covered_environments(content: Content | None) -> set[Environment]:
+    """Environments already represented by an image inside one content block."""
+    if content is None:
+        return set()
+    return {fragment.environment for fragment in content.fragments if isinstance(fragment, ImageFragment) and fragment.environment}
+
+
 def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> None:
-    """Ensure each affected environment has an image slot while preserving extra images."""
+    """Ensure each affected environment has an image slot while preserving extra images.
+
+    Coverage is a property of the proof of concept alone: a carried previous-PoC image is history,
+    not this retest's evidence, so it neither suppresses a slot nor gets relabelled here."""
     environments = affected_environments(vulnerability, report)
-    images = [fragment for content in vulnerability.contents for fragment in content.fragments if isinstance(fragment, ImageFragment)]
+    proof = next((content for content in vulnerability.contents if content.type == "proof_of_concept"), None)
+    images = [
+        fragment
+        for content in vulnerability.contents
+        if content.type != "previous_proof_of_concept"
+        for fragment in content.fragments
+        if isinstance(fragment, ImageFragment)
+    ]
     if len(environments) == 1:
         for image in images:
             image.environment = environments[0]
-    missing = [environment for environment in environments if not any(image.environment == environment for image in images)]
+    missing = [environment for environment in environments if environment not in _covered_environments(proof)]
     for image in (image for image in images if image.environment is None):
         if missing:
             image.environment = missing.pop(0)
         elif environments:
             image.environment = environments[0]
-    missing = [environment for environment in environments if not any(image.environment == environment for image in images)]
-    proof = next((content for content in vulnerability.contents if content.type == "proof_of_concept"), None)
+    missing = [environment for environment in environments if environment not in _covered_environments(proof)]
     if proof is None:
         return
     for environment in missing:
@@ -336,6 +366,7 @@ def apply_poc_variant(vulnerability: Vulnerability, fragments: list, variant: Te
     for fragment in copied:
         fragment.frag_id = f"f_{uuid.uuid4().hex[:8]}"
     proof.fragments = copied + images
+    ensure_proof_steps(proof)
     vulnerability.poc_variant = variant
     # The earlier refusal referred to steps that no longer exist, so it must not suppress the next mismatch.
     vulnerability.poc_variant_declined = []

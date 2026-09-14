@@ -21,7 +21,7 @@ from app import main
 from app.docx_report import generation_issues
 from app.storage import atomic_write_json, read_json
 from app.workspace import Workspace
-from app.models import EvidenceItem, ImageFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
+from app.models import EvidenceItem, ImageFragment, LibraryRef, Run, Scope, ScopeTarget, TestWindow, Vulnerability
 
 
 class BrowserWorkflowTests(unittest.TestCase):
@@ -185,11 +185,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(fragments.count(), initial_fragment_count + 1)
 
         page.goto(f"{self.base_url}/")
-        page.get_by_role("searchbox", name="Apps").fill("CI-BROWSER")
+        # Groups are keyed on the application name now, not its CI number.
+        page.get_by_role("searchbox", name="Apps").fill("Browser QA")
         group = page.locator(".app-group:not([hidden])")
         group.first.wait_for()
         self.assertEqual(group.count(), 1)
         self.assertTrue(group.evaluate("element => element.open"))
+        self.assertEqual(group.locator(".app-group-name").first.text_content(), "Browser QA")
 
     def test_automatic_save_uses_configured_idle_delay(self) -> None:
         page = self.page
@@ -915,6 +917,163 @@ class BrowserWorkflowTests(unittest.TestCase):
         evidence_path.write_bytes(image_data.getvalue())
         return report, finding
 
+    def test_narrowing_a_finding_offers_the_steps_for_its_new_app_type(self) -> None:
+        """Accepting Web App + API steps and then narrowing the finding to web leaves the wrong
+        steps in place, so the offer has to come back for the app type the finding now covers."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.test_type = "web_api"
+        report.scope_targets.append(ScopeTarget(target_id="tgt_api", environment="production", channel="api", value="https://prod-api.example.test"))
+        finding.scope = Scope(mode="custom", target_ids=["tgt_browser", "tgt_api"])
+        finding.library_ref = LibraryRef(library_id="VDB-036", source_id="VDB-036", inserted_at=report.saved_at)
+        finding.poc_variant = "web_api"
+        finding.poc_variant_declined = []
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        self.assertEqual(page.locator(".poc-offer").count(), 0, "the applied steps already match the finding")
+
+        report = main.workspace.load(report_id)
+        report.vulnerabilities[0].scope = Scope(mode="custom", target_ids=["tgt_browser"])
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        offer = page.locator(".poc-offer")
+        self.assertEqual(offer.count(), 1, "narrowing to web must offer the web steps")
+        self.assertEqual(offer.get_attribute("data-poc-offer"), "web")
+
+    def test_unchecking_a_location_in_the_page_offers_the_new_app_type(self) -> None:
+        """The same narrowing done through the Findings page, which is how a tester actually does it."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.test_type = "web_api"
+        report.scope_targets.append(ScopeTarget(target_id="tgt_api", environment="production", channel="api", value="https://prod-api.example.test"))
+        finding.scope = Scope(mode="custom", target_ids=["tgt_browser", "tgt_api"])
+        finding.library_ref = LibraryRef(library_id="VDB-036", source_id="VDB-036", inserted_at=report.saved_at)
+        finding.poc_variant = "web_api"
+        finding.poc_variant_declined = []
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        # Driven directly because the fold toggle's actionability check does not settle headless.
+        page.evaluate("""() => {
+          const box = document.querySelector('input[data-location][value="tgt_api"]');
+          box.checked = false;
+          box.dispatchEvent(new Event("change", {bubbles: true}));
+        }""")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        saved = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(saved.scope.target_ids, ["tgt_browser"], "the api location was not dropped")
+        self.assertEqual(saved.poc_variant, "web_api", "the applied steps are still the web+api ones")
+
+        page.evaluate("document.querySelector('#next').click()")
+        page.wait_for_url("**/edit", timeout=10_000)
+        page.wait_for_selector("#issue-count")
+        offer = page.locator(".poc-offer")
+        self.assertEqual(offer.count(), 1, "narrowing to web must offer the web steps")
+        self.assertEqual(offer.get_attribute("data-poc-offer"), "web")
+
+    def test_the_fragments_provisioning_guarantees_cannot_be_deleted(self) -> None:
+        """Provisioning puts these back on the next save, so offering a delete would look like the
+        editor silently discarded the change."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+        next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Original step")]
+        image_data = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        history = next(fragment for fragment in previous.fragments if fragment.type == "image")
+        history.environment = "production"
+        history.evidence_id = "ev_history"
+        history.caption = "Original response"
+        report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
+        (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data.getvalue())
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        for section, kind in (("Previous Proof of Concept", "numbered list"), ("Previous Proof of Concept", "image")):
+            block = page.locator(".content-block").filter(has_text=section)
+            card = block.locator(".fragment").filter(has=page.locator(f'.tag:text-is("{kind}")'))
+            self.assertTrue(card.locator("button.danger").is_disabled(), f"{section} {kind} must not be deletable")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        for kind in ("numbered list", "image"):
+            card = proof.locator(".fragment").filter(has=page.locator(f'.tag:text-is("{kind}")'))
+            self.assertTrue(card.locator("button.danger").is_disabled(), f"proof of concept {kind} must not be deletable")
+
+        # Only the last one of each is guaranteed, so a second is the tester's to remove.
+        proof.locator('select.add-fragment').select_option("numbered_list")
+        cards = proof.locator('.fragment').filter(has=page.locator('.tag:text-is("numbered list")'))
+        self.assertEqual(cards.count(), 2)
+        self.assertFalse(cards.last.locator("button.danger").is_disabled(), "a second steps list is deletable")
+        self.assertFalse(cards.first.locator("button.danger").is_disabled(), "neither one is required once there are two")
+
+    def test_library_step_offer_appears_only_on_the_proof_of_concept(self) -> None:
+        """The offer replaces this engagement's steps. Previous Proof of Concept is the record of
+        the engagement before it, so an offer there would invite overwriting history."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        finding.library_ref = LibraryRef(library_id="VDB-043", source_id="VDB-043", inserted_at=report.saved_at)
+        finding.poc_variant = None
+        finding.poc_variant_declined = []
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        previous = page.locator(".content-block").filter(has_text="Previous Proof of Concept")
+        self.assertEqual(proof.locator(".poc-offer").count(), 1, "the offer belongs on the proof of concept")
+        self.assertEqual(previous.locator(".poc-offer").count(), 0, "history must never be offered a replacement")
+
+    def test_editor_keeps_a_carried_previous_proof_image_outside_the_retest_scope(self) -> None:
+        """The finding covers production only, so the old editor overwrote a carried non-production
+        label on render and autosaved the corruption. History belongs to the tester, not the scope."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+        next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Original reproduction step")]
+        image_data = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        history = next(fragment for fragment in previous.fragments if fragment.type == "image")
+        history.environment = "non_production"
+        history.evidence_id = "ev_history"
+        history.caption = "Original non-production response"
+        report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
+        (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data.getvalue())
+        main.provision_report(report)
+        main.workspace.save(report)
+        self.assertEqual(
+            next(fragment for fragment in previous.fragments if fragment.type == "image").environment,
+            "non_production",
+            "the server must not relabel a carried image either",
+        )
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        block = page.locator(".content-block").filter(has_text="Previous Proof of Concept")
+        page.wait_for_selector("#issue-count")
+        # A single-environment finding renders a fixed label instead of a select, so the presence of
+        # the select is itself the assertion that history was not forced into the current scope.
+        self.assertEqual(block.locator(".evidence-environment").input_value(), "non_production")
+        self.assertEqual(block.locator(".evidence-environment-value").count(), 0)
+
     def test_browser_readiness_verdict_matches_server_generation_issues(self) -> None:
         """The scope and completeness rules live in both Python and JavaScript. If they ever
         disagree the tester is told a report is ready that the server then refuses, so pin
@@ -1206,7 +1365,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIn("Reference", text)
         self.assertIn("Technical details", text)
         self.assertRegex(text, r"[0-9a-f]{12}")
-        self.assertTrue(page.get_by_text("Select a valid VulnReport ZIP or JSON export").is_visible())
+        self.assertTrue(page.get_by_text("Select a valid VulnReport ZIP or JSON export, or a report DOCX").is_visible())
 
 
 if __name__ == "__main__":

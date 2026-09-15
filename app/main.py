@@ -720,6 +720,9 @@ def insert_library(request: Request, report_id: str, library_id: str):
     # Scope defaults to "all", which would read as a deliberate every-target choice and let the
     # finding past the affected-location gate before the tester has picked anything.
     vulnerability = Vulnerability(uid=f"v_{uuid.uuid4().hex[:8]}", title=entry["title"], likelihood=entry.get("default_likelihood"), impact=entry.get("default_impact"), severity=entry.get("default_severity") or "informational", scope=Scope(mode="custom"), library_ref=LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=datetime.now().astimezone()), contents=copy.deepcopy(entry.get("contents", [])))
+    # This finding *is* the entry, so the Content page must not offer to install what it already
+    # holds. Only the sections actually copied are answered; the rest still get their offer.
+    vulnerability.content_offer_resolved = {content.type: entry["library_id"] for content in vulnerability.contents}
     assign_fresh_fragment_ids(vulnerability)
     provision(vulnerability)
     report.vulnerabilities.append(vulnerability)

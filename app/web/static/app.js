@@ -1088,6 +1088,9 @@
   const pocStepsFor = (finding, variant) => libraryEntryFor(finding)?.proof_of_concept?.[variant] || null;
   // A library entry's description/recommended_remediation fragments, for the Content-page offer.
   const libraryContentFor = (entry, type) => entry?.contents?.find(content => content.type === type)?.fragments || [];
+  // frag_ids are reminted on every copy, so they are the one thing two identical sections never share.
+  const sameFragments = (left, right) => JSON.stringify(left, (key, value) => key === "frag_id" ? undefined : value)
+    === JSON.stringify(right, (key, value) => key === "frag_id" ? undefined : value);
   // Single owner of "which sections still have an unanswered library offer", so the Content-page
   // banners and the review panel can never disagree about what is outstanding.
   const pendingLibraryOffers = finding => {
@@ -1097,6 +1100,9 @@
       .filter(type => !(finding.status === "resolved" && type === "recommended_remediation"))
       .filter(type => finding.content_offer_resolved?.[type] !== entry.library_id)
       .filter(type => libraryContentFor(entry, type).length)
+      // Offering what the section already holds is noise: a finding inserted from the library
+      // arrives carrying the entry's own content.
+      .filter(type => !sameFragments(finding.contents?.find(content => content.type === type)?.fragments || [], libraryContentFor(entry, type)))
       .map(type => ({type, entry}));
     const variants = applicablePocVariants(finding)
       .filter(variant => !(finding.poc_variants || []).includes(variant) && !(finding.poc_variant_declined || []).includes(variant));
@@ -1128,12 +1134,12 @@
       valid:value => !mobileScopeInvalidCharacters(value).length,
     };
     const setupRules = {
-      app_name: characterRule("Application name", /^[\p{L}\p{Nd} :()\-]$/u),
+      app_name: characterRule("Application name", /^[\p{L}\p{Nd} :;.()\-]$/u),
       ci_number: characterRule("CI number", /^[\p{L}\p{Nd}-]$/u),
       bsn_number: characterRule("BSN number", /^[\p{L}\p{Nd}-]$/u),
       app_owner: characterRule("Application owner", /^[\p{L} \-]$/u),
       tester: characterRule("Tester", /^[\p{L} \-]$/u),
-      limitations: characterRule("Limitations", /^[\p{L}\p{Nd} /,.()&'"\-\r\n]$/u),
+      limitations: characterRule("Limitations", /^[\p{L}\p{Nd} /,.;:()&'"\-\r\n]$/u),
       time: characterRule("Time", /^[\p{L}\p{Nd} :/\-]$/u),
       userRole: characterRule("User role", /^[\p{L}\p{Nd} /\-]$/u),
       username: {...usernameCharacters, valid:value => !value || value === "N/A" || /^[A-Za-z0-9](?:[A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/.test(value), message:label => `${label} must start and end with a letter or number`},
@@ -2561,7 +2567,7 @@
       const count = document.querySelector("#issue-count");
       if (!panel || !count) return [];
       const hasText = runs => Array.isArray(runs) && runs.some(run => run.text?.trim());
-      const placeholderPattern = /\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here|\[value_taken_from/i;
+      const placeholderPattern = /\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here/i;
       const fragmentText = fragment => {
         if (fragment.runs) return fragment.runs.map(run => run.text).join("");
         if (fragment.items) return fragment.items.flatMap(item => item.runs).map(run => run.text).join(" ");

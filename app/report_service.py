@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from app.models import CHANNELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Vulnerability, resolve_tested_channels
+from app.models import CHANNELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TableFragment, Vulnerability, resolve_tested_channels
 
 REPORT_TYPE_LABELS = {
     "annual_pentest": "Annual Pentest",
@@ -160,13 +160,44 @@ def ensure_proof_steps(content: Content) -> None:
         content.fragments.insert(0, ListFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="numbered_list", items=[ListItem(runs=[])]))
 
 
+def content_types_for_status(status: str) -> list[str]:
+    """Single owner of which sections a finding's status puts in the document."""
+    if status == "open_new":
+        return ["description", "recommended_remediation", "proof_of_concept"]
+    return ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]
+
+
+def content_has_work(content: Content) -> bool:
+    """Whether a section holds anything a tester would be sorry to lose.
+
+    Boilerplate this app wrote itself does not count: it is regenerated on demand, so treating it as
+    work would mean every finding looks like it has something to lose."""
+    for fragment in content.fragments:
+        if isinstance(fragment, ParagraphFragment) and (fragment.generated or _is_default_status_conclusion(fragment)):
+            continue
+        if any(run.text.strip() for run in getattr(fragment, "runs", [])):
+            return True
+        if any(run.text.strip() for item in getattr(fragment, "items", []) for run in item.runs):
+            return True
+        if getattr(fragment, "text", "").strip() or getattr(fragment, "caption", None) and fragment.caption.strip():
+            return True
+        if getattr(fragment, "evidence_id", None):
+            return True
+        if isinstance(fragment, TableFragment) and any(
+            run.text.strip() for cell in [*fragment.header, *(cell for row in fragment.rows for cell in row)] for run in cell.runs
+        ):
+            return True
+    return False
+
+
 def provision(vulnerability: Vulnerability) -> None:
     """Create the status-required content blocks and starter fragments for a finding."""
-    types = ["description", "recommended_remediation", "proof_of_concept"]
-    if vulnerability.status != "open_new":
-        types = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]
+    types = content_types_for_status(vulnerability.status)
     existing = {content.type: content for content in vulnerability.contents}
-    vulnerability.contents = [existing.get(content_type, Content(type=content_type)) for content_type in types]
+    # A status change must not destroy work. A section this status does not print is kept when it
+    # still holds something written, so changing status and back brings the tester's work with it.
+    carried = [content for content in vulnerability.contents if content.type not in types and content_has_work(content)]
+    vulnerability.contents = [existing.get(content_type, Content(type=content_type)) for content_type in types] + carried
     required_fragments = {
         "description": ["paragraph"],
         "recommended_remediation": ["paragraph"],
@@ -175,12 +206,9 @@ def provision(vulnerability: Vulnerability) -> None:
         "in_conclusion": [],
     }
     for content in vulnerability.contents:
-        if content.fragments:
+        if content.fragments or content.type not in required_fragments:
             continue
-        present = {fragment.type for fragment in content.fragments}
         for fragment_type in required_fragments[content.type]:
-            if fragment_type in present:
-                continue
             if fragment_type == "paragraph":
                 fragment = ParagraphFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="paragraph", runs=[])
             elif fragment_type == "numbered_list":
@@ -311,6 +339,23 @@ def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> N
     Coverage is a property of the proof of concept alone: a carried previous-PoC image is history,
     not this retest's evidence, so it neither suppresses a slot nor gets relabelled here."""
     environments = affected_environments(vulnerability, report)
+    # An empty slot for an environment the finding no longer affects is nobody's to fill, so it goes
+    # rather than lingering as a second demand. An uploaded screenshot stays exactly where it is:
+    # relabelling it would file the tester's evidence under a heading it never belonged to.
+    for content in vulnerability.contents:
+        if content.type == "previous_proof_of_concept":
+            continue
+        content.fragments = [
+            fragment
+            for fragment in content.fragments
+            if not (
+                isinstance(fragment, ImageFragment)
+                and fragment.environment
+                and fragment.environment not in environments
+                and not fragment.evidence_id
+                and not fragment.caption.strip()
+            )
+        ]
     proof = next((content for content in vulnerability.contents if content.type == "proof_of_concept"), None)
     images = [
         fragment
@@ -319,9 +364,6 @@ def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> N
         for fragment in content.fragments
         if isinstance(fragment, ImageFragment)
     ]
-    if len(environments) == 1:
-        for image in images:
-            image.environment = environments[0]
     missing = [environment for environment in environments if environment not in _covered_environments(proof)]
     for image in (image for image in images if image.environment is None):
         if missing:
@@ -340,6 +382,12 @@ def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> N
             caption="",
             width_mm=None,
         ))
+    # A carried previous-PoC slot still needs an environment to render under, even though it never
+    # counts as this engagement's coverage. Provisioning creates it blank, so nothing else would.
+    previous = next((content for content in vulnerability.contents if content.type == "previous_proof_of_concept"), None)
+    for fragment in previous.fragments if previous else []:
+        if isinstance(fragment, ImageFragment) and fragment.environment is None and environments:
+            fragment.environment = environments[0]
 
 
 def _fragment_has_text(fragment: ParagraphFragment) -> bool:
@@ -466,6 +514,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
         scope = vulnerability.get("scope", {})
         if not isinstance(scope, dict):
             raise ValueError("finding scope must be an object")
+        reached_before = _scope_reaches_a_location(scope, prior_targets)
         # A typed location outside the tested surface is no longer reachable, so it must not keep
         # the finding looking complete or make it resolve to an app type the engagement dropped.
         custom = scope.get("custom_locations")
@@ -480,10 +529,14 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
         if scope.get("mode") == "custom":
             if set(scope.get("target_ids", [])) - target_ids:
                 removed_references.append(title)
+            # Dropping the only app type a typed-in location belonged to strands the finding exactly
+            # as removing a selected target does, so it has to be reported the same way.
+            elif reached_before and not _scope_reaches_a_location(scope, targets):
+                removed_references.append(title)
             continue
         # An "all production"-style finding holds no target IDs, so only losing every
         # location it could resolve to shows that the scope change stranded it.
-        if _scope_reaches_a_location(scope, prior_targets) and not _scope_reaches_a_location(scope, targets):
+        if reached_before and not _scope_reaches_a_location(scope, targets):
             removed_references.append(title)
     return removed_references
 

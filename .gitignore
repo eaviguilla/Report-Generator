@@ -9,6 +9,9 @@ data/vulnreport-errors.log*
 generated/*
 !generated/.gitkeep
 
+# release packaging output
+/dist/
+
 # agent tooling — not needed on other devices
 .claude/
 CLAUDE.md

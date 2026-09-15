@@ -31,6 +31,12 @@
     });
     return [...groups.values()];
   };
+  const setHeaderCount = (selector, total, noun) => {
+    const chip = document.querySelector(selector);
+    if (!chip) return;
+    chip.replaceChildren(Object.assign(document.createElement("b"), {textContent: String(total)}), document.createTextNode(` ${noun}${total === 1 ? "" : "s"}`));
+    chip.hidden = !total;
+  };
   // Drawn rather than lettered, so four actions per row stop shouting in red and blue.
   const ACTION_PATHS = {
     rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
@@ -51,6 +57,8 @@
     if (!legacyResponse.ok) throw await responseError(legacyResponse, "list_legacy_reports", "Unable to load legacy reports");
     const [reports, legacy] = await Promise.all([response.json(), legacyResponse.json()]);
     const groups = groupReportsByFolder(reports).sort((left, right) => (left[0].app_folder || "Unassigned").localeCompare(right[0].app_folder || "Unassigned"));
+    setHeaderCount("#draft-count", reports.length, "draft");
+    setHeaderCount("#app-count", groups.length, "application");
     rows.innerHTML = groups.length ? groups.map(group => { const folder = group[0].app_folder || "Unassigned"; return `<details class="app-group" data-app-name="${escapeHtml(folder)}"${openAppFolders.has(folder) ? " open" : ""}><summary><span class="app-caret" aria-hidden="true"></span><span class="app-group-name">${escapeHtml(folder)}</span><span class="app-group-count">${group.length}</span></summary><div class="app-group-body"><div class="app-group-columns"><span>Report</span><span>Last saved</span><span>Findings</span><span aria-label="Actions"></span></div><div class="app-group-rows">${group.map(row).join("")}</div></div></details>`; }).join("") : '<div class="empty-reports">No reports yet.</div>';
     rows.querySelectorAll(".app-group").forEach(group => group.addEventListener("toggle", () => {
       if (group.open) openAppFolders.add(group.dataset.appName);

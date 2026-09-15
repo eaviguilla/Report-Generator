@@ -39,7 +39,7 @@ from .docx_components import (
     replace_pattern_across_text_nodes,
 )
 from .models import CHANNELS
-from .report_service import REPORT_TYPE_LABELS, affected_environments, finding_is_complete, fragment_applies, setup_issues
+from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, setup_issues
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
 # Targets number from zero within each channel, so channel rank has to come first when ordering them.
@@ -106,7 +106,11 @@ def generation_issues(report: Report) -> list[str]:
         for environment in environments:
             if not any(image.environment == environment and image.evidence_id for image in images):
                 issues.append(f"{label}: {'Production' if environment == 'production' else 'Non-Production'} evidence image required")
+        printed = set(content_types_for_status(finding.status))
         for content in finding.contents:
+            # A section this status does not print is carried for safekeeping, not for completing.
+            if content.type not in printed:
+                continue
             # Twin of the editor's requiresFragment rule: these two carry the finding, so neither is ever left empty.
             if content.type in {"description", "recommended_remediation"} and not content.fragments:
                 issues.append(f"{label}: {content.type} needs at least one fragment")

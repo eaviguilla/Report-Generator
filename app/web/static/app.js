@@ -14,12 +14,27 @@
   const reportId = report.report_id;
   const reportTypeLabels = {annual_pentest:"Annual Pentest", retest:"Retest", deployment_pentest:"Deployment Pentest", new_test:"New Test"};
   // The header names the engagement only once both halves are saved; a missing half falls back.
+  // Each fact gets its own chip: the old hyphen-joined string was unreadable against an application
+  // name that contains hyphens of its own.
   const updateEngagementName = (saved = report) => {
     const heading = document.querySelector(".engagement-name");
     if (!heading) return;
-    const appName = saved.engagement?.app_name?.trim();
-    const testType = reportTypeLabels[saved.engagement?.report_type];
-    heading.textContent = appName && testType ? `${appName} - ${testType}` : "Application Penetration Testing";
+    const engagement = saved.engagement || {};
+    const appName = engagement.app_name?.trim();
+    const testType = reportTypeLabels[engagement.report_type];
+    const title = document.createElement("span");
+    title.className = "engagement-title";
+    title.textContent = appName && testType ? appName : "Application Penetration Testing";
+    heading.replaceChildren(title);
+    if (!appName || !testType) return;
+    [[testType, false], [engagement.segment, false], [engagement.ci_number?.trim() || engagement.bsn_number?.trim(), true]]
+      .filter(([value]) => value)
+      .forEach(([value, mono]) => {
+        const chip = document.createElement("span");
+        chip.className = mono ? "fchip fchip-mono" : "fchip";
+        chip.textContent = value;
+        heading.append(chip);
+      });
   };
   const localDraftPrefix = `vulnreport-pending:${reportId}`;
   const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
@@ -901,15 +916,30 @@
     }
     if (generated) conclusion.fragments = conclusion.fragments.filter(fragment => fragment === generated || fragment.type !== "paragraph" || fragmentHasText(fragment));
   }
+  // Twin of report_service.content_types_for_status; the one owner of which sections a status prints.
+  const contentTypesForStatus = status => status === "open_new"
+    ? ["description","recommended_remediation","proof_of_concept"]
+    : ["description","recommended_remediation","previous_proof_of_concept","proof_of_concept","in_conclusion"];
+  // Twin of report_service.content_has_work. Boilerplate this app wrote itself does not count: it
+  // is regenerated on demand, so counting it would make every finding look like it has work to lose.
+  const contentHasWork = content => (content.fragments || [])
+    .filter(fragment => !(fragment.generated || isDefaultStatusConclusion(fragment)))
+    .some(fragment =>
+      (fragment.runs || []).some(run => run.text?.trim())
+      || (fragment.items || []).some(item => (item.runs || []).some(run => run.text?.trim()))
+      || fragment.text?.trim() || fragment.caption?.trim() || fragment.evidence_id
+      || [...(fragment.header || []), ...(fragment.rows || []).flat()].some(cell => (cell.runs || []).some(run => run.text?.trim())));
   function provision(vulnerability) {
-    const types = vulnerability.status === "open_new" ? ["description","recommended_remediation","proof_of_concept"] : ["description","recommended_remediation","previous_proof_of_concept","proof_of_concept","in_conclusion"];
+    const types = contentTypesForStatus(vulnerability.status);
     const existing = Object.fromEntries((vulnerability.contents || []).map(content => [content.type, content]));
-    vulnerability.contents = types.map(type => existing[type] || {type, fragments:[]});
+    // A status change must not destroy work. A section this status does not print is kept when it
+    // still holds something written, so changing status and back brings the tester's work with it.
+    const carried = (vulnerability.contents || []).filter(content => !types.includes(content.type) && contentHasWork(content));
+    vulnerability.contents = [...types.map(type => existing[type] || {type, fragments:[]}), ...carried];
     const required = {description:["paragraph"], recommended_remediation:["paragraph"], previous_proof_of_concept:["numbered_list","image"], proof_of_concept:["numbered_list","image"], in_conclusion:[]};
     vulnerability.contents.forEach(content => {
-      if (content.fragments.length) return;
-      const present = new Set(content.fragments.map(fragment => fragment.type));
-      required[content.type].forEach(type => { if (!present.has(type)) content.fragments.push(newFragment(type)); });
+      if (content.fragments.length || !required[content.type]) return;
+      required[content.type].forEach(type => content.fragments.push(newFragment(type)));
     });
     vulnerability.contents.forEach(content => { if (content.type.endsWith("proof_of_concept")) ensureProofSteps(content); });
     const remediation = vulnerability.contents.find(content => content.type === "recommended_remediation");
@@ -969,14 +999,27 @@
   // the proof of concept alone, so a carried previous-PoC image is never relabelled or counted here.
   const syncEvidenceImageSlots = finding => {
     const environments = affectedEnvironments(finding);
+    // An empty slot for an environment the finding no longer affects is nobody's to fill, so it goes
+    // rather than lingering as a second demand. An uploaded screenshot stays exactly where it is:
+    // relabelling it would file the tester's evidence under a heading it never belonged to.
+    finding.contents.filter(content => content.type !== "previous_proof_of_concept").forEach(content => {
+      content.fragments = content.fragments.filter(fragment => !(
+        fragment.type === "image" && fragment.environment && !environments.includes(fragment.environment)
+        && !fragment.evidence_id && !fragment.caption?.trim()));
+    });
     const proof = finding.contents.find(content => content.type === "proof_of_concept");
     const images = finding.contents.filter(content => content.type !== "previous_proof_of_concept").flatMap(content => content.fragments.filter(fragment => fragment.type === "image"));
     const covered = () => (proof?.fragments || []).filter(fragment => fragment.type === "image").map(fragment => fragment.environment);
-    if (environments.length === 1) images.forEach(image => { image.environment = environments[0]; });
     let missing = environments.filter(environment => !covered().includes(environment));
     images.filter(image => !image.environment).forEach(image => { image.environment = missing.shift() || environments[0] || null; });
     missing = environments.filter(environment => !covered().includes(environment));
     missing.forEach(environment => { const image = newFragment("image"); image.environment = environment; proof?.fragments.push(image); });
+    // A carried previous-PoC slot still needs an environment to render under, even though it never
+    // counts as this engagement's coverage. Provisioning creates it blank, so nothing else would.
+    const previous = finding.contents.find(content => content.type === "previous_proof_of_concept");
+    (previous?.fragments || []).forEach(fragment => {
+      if (fragment.type === "image" && !fragment.environment && environments.length) fragment.environment = environments[0];
+    });
   };
   // Single owner of the rule: provisioning guarantees these fragments exist, so allowing a delete
   // would only have the next save put one back and make the editor look like it lost the change.
@@ -1188,12 +1231,18 @@
     const scopeGrid = document.querySelector("#scope-grid");
     const selected = (values, value) => values.includes(value);
     if (configuration && windows && scopeGrid) {
-    // Mirrors the server's removal guard so Setup can warn before a save is rejected.
-    const scopeReaches = (scope, targets) => {
+    // Mirrors the server's removal guard so Setup can warn before a save is rejected. A typed-in
+    // location only counts while the engagement still covers both its environment and its app type.
+    const scopeReaches = (scope, targets, coverage) => {
       const mode = scope?.mode || "custom";
       if (mode === "custom") {
         if ((scope?.target_ids || []).some(targetId => targets.some(target => target.target_id === targetId))) return true;
-        return customLocationValues(scope).some(value => value.trim());
+        return Object.entries(scope?.custom_locations || {})
+          .filter(([environment]) => !coverage || coverage.environments.includes(environment))
+          .flatMap(([, byChannel]) => Object.entries(byChannel || {})
+            .filter(([channel]) => !coverage || coverage.channels.includes(channel))
+            .flatMap(([, values]) => values || []))
+          .some(value => value.trim());
       }
       if (mode === "all") return targets.length > 0;
       const environment = mode === "all_production" ? "production" : "non_production";
@@ -1202,7 +1251,7 @@
     const findingsStrandedBy = (environments, channels) => {
       const surviving = (report.scope_targets || []).filter(target => environments.includes(target.environment) && channels.includes(target.channel));
       return (report.vulnerabilities || [])
-        .filter(finding => scopeReaches(finding.scope, report.scope_targets || []) && !scopeReaches(finding.scope, surviving))
+        .filter(finding => scopeReaches(finding.scope, report.scope_targets || []) && !scopeReaches(finding.scope, surviving, {environments, channels}))
         .map(finding => finding.title || "Untitled finding");
     };
     const confirmScopeLoss = async (environments, channels, change) => {
@@ -1273,8 +1322,9 @@
     const scopeTextStrandedFindings = () => {
       const surviving = survivingAfterScopeText();
       if (surviving.length === report.scope_targets.length) return [];
+      const coverage = {environments: report.engagement.tested_environments, channels: report.engagement.tested_channels};
       return report.vulnerabilities
-        .filter(finding => scopeReaches(finding.scope, report.scope_targets) && !scopeReaches(finding.scope, surviving))
+        .filter(finding => scopeReaches(finding.scope, report.scope_targets) && !scopeReaches(finding.scope, surviving, coverage))
         .map(finding => finding.title || "Untitled finding");
     };
     strandedByScopeEdit = scopeTextStrandedFindings;
@@ -1775,10 +1825,12 @@
       };
       controls[5].onchange = async event => {
         const nextStatus = event.target.value;
-        const nextTypes = nextStatus === "open_new" ? ["description", "recommended_remediation", "proof_of_concept"] : ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"];
-        const discarded = finding.contents.filter(content => !nextTypes.includes(content.type)).map(content => optionLabel(content.type));
+        const nextTypes = contentTypesForStatus(nextStatus);
+        // Only sections holding something are worth a warning, and they are hidden rather than
+        // deleted, so the dialog must not threaten a loss that no longer happens.
+        const hidden = finding.contents.filter(content => !nextTypes.includes(content.type) && contentHasWork(content)).map(content => optionLabel(content.type));
         const replacesRemediation = nextStatus === "resolved" && finding.status !== "resolved";
-        if ((discarded.length || replacesRemediation) && !await window.vrDialog.confirm({title: "Change the status of this finding?", message: `This will ${discarded.length ? `discard ${discarded.join(", ")}` : "replace the recommended remediation"}.`, confirmLabel: "Change the status", cancelLabel: "Keep the current status", tone: "danger"})) {
+        if ((hidden.length || replacesRemediation) && !await window.vrDialog.confirm({title: "Change the status of this finding?", message: hidden.length ? `This will take ${hidden.join(", ")} out of the report. Nothing is deleted, and changing the status back brings it all with it.` : "This will replace the recommended remediation.", confirmLabel: "Change the status", cancelLabel: "Keep the current status", tone: hidden.length ? "default" : "danger"})) {
           event.target.value = finding.status;
           return;
         }
@@ -2436,13 +2488,20 @@
       const fragmentIssues = finding => {
         // An image for an environment this finding does not affect is not the tester's to complete.
         const relevant = affectedEnvironments(finding);
-        return finding.contents.flatMap(content => {
+        const printed = contentTypesForStatus(finding.status);
+        // A section this status does not print is carried for safekeeping, not for completing.
+        return finding.contents.filter(content => printed.includes(content.type)).flatMap(content => {
         const contentLabel = contentNames[content.type];
         const missingFragment = requiresFragment.includes(content.type) && !content.fragments.length
           ? [{contentLabel, fragmentLabel:"at least one fragment", message:"is required"}]
           : [];
         return [...missingFragment, ...content.fragments.flatMap(fragment => {
         const issues = [];
+        // Twin of report_service.fragment_applies: a stale image is neither the tester's to finish
+        // nor ours to render, so nothing about it is reported, its caption included.
+        const staleImage = fragment.type === "image" && content.type !== "previous_proof_of_concept"
+          && Boolean(fragment.environment) && !relevant.includes(fragment.environment);
+        if (staleImage) return issues;
         if (fragment.runs && !hasText(fragment.runs)) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (fragment.items) {
           // Steps are one textarea, so a per-line message would point at a field the tester cannot see.
@@ -2611,7 +2670,7 @@
       if (!findings.length) {
         pane.innerHTML = "<section><h1>No findings yet</h1><p>Add a vulnerability to begin its content.</p><button class=\"add-vulnerability\" type=\"button\">Add vulnerability</button></section>";
         pane.querySelector(".add-vulnerability").onclick = () => {
-          const newFinding = {uid:id("v"), title:"", severity:"informational", status:"open_new", scope:{mode:"all",target_ids:[]}, contents:[]};
+          const newFinding = {uid:id("v"), title:"", severity:"informational", status:"open_new", scope:{mode:"custom",target_ids:[],location_values:{},custom_locations:{}}, contents:[]};
           provision(newFinding);
           report.vulnerabilities.push(newFinding);
           render();
@@ -2892,7 +2951,9 @@
         };
         // Description sits beside its remediation, and on a retest last year's proof sits beside
         // this year's, because those are the pairs a reader compares. Everything else runs full width.
-        const blocks = new Map(finding.contents.map(content => [content.type, buildContentBlock(content)]));
+        // A section this status does not print is carried for safekeeping and stays out of the page.
+        const printedContents = finding.contents.filter(content => contentTypesForStatus(finding.status).includes(content.type));
+        const blocks = new Map(printedContents.map(content => [content.type, buildContentBlock(content)]));
         const paired = new Set();
         const pairUp = (left, right) => {
           const first = blocks.get(left);
@@ -2907,7 +2968,7 @@
         };
         pairUp("description", "recommended_remediation");
         pairUp("previous_proof_of_concept", "proof_of_concept");
-        finding.contents.forEach(content => {
+        printedContents.forEach(content => {
           if (!paired.has(content.type)) box.append(blocks.get(content.type));
         });
         pane.append(box);

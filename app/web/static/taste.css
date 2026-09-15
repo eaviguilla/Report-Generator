@@ -266,10 +266,9 @@ body > header.app-header {
   height: var(--header-height);
   padding: 0 clamp(16px, 3vw, 38px);
   gap: 16px;
-  border-bottom: 1px solid rgba(185, 200, 196, 0.86);
+  border-bottom: 1px solid var(--line);
   color: var(--ink);
   background: var(--surface-bar);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(14px);
 }
 
@@ -301,15 +300,29 @@ img.brand-mark {
 }
 
 .engagement-name {
-  max-width: min(48vw, 560px);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: min(52vw, 620px);
   overflow: hidden;
   padding-left: 16px;
   border-left-color: var(--line-strong);
-  color: var(--ink-soft) !important;
-  font-size: 12px !important;
-  font-weight: 500;
+}
+
+/* The name yields first: the chips are short, and each one is a fact the name cannot spell out. */
+.engagement-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.engagement-name .fchip {
+  flex: none;
 }
 
 .history-controls {
@@ -2169,11 +2182,6 @@ button.content-toggle:hover:not(:disabled) small {
   padding-top: var(--shell-pad-top);
 }
 
-.manager-bar {
-  border-color: var(--line);
-  background: var(--surface-raised);
-}
-
 .manager-search {
   max-width: none;
   margin-bottom: 0;
@@ -2301,6 +2309,11 @@ body > main {
   .editor-workspace {
     grid-template-columns: 210px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  /* Clipped chips read as breakage, so the secondary facts leave before the row runs out of room. */
+  .engagement-name .fchip ~ .fchip {
+    display: none;
   }
 
   /* Three panels into two columns: the sidebar stacks the findings list over the review list, and the
@@ -2508,17 +2521,6 @@ body > main {
 
   .evidence-caption {
     font-size: 12px;
-  }
-
-  .manager-bar {
-    flex-wrap: wrap;
-    gap: 9px;
-  }
-
-  .manager-bar > .icon-command,
-  .manager-bar > .primary {
-    flex: 1;
-    justify-content: center;
   }
 
   .report-name b,

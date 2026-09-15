@@ -109,7 +109,7 @@ report IDs are runtime data and are not tracked in this plan.
    - Required report types: Annual Pentest, Retest, Deployment Pentest, or New
      Test.
    - Selected environments, test surface, test windows, free-text test time,
-     and scope targets. Environment time defaults to `Any time`; letters,
+     and scope targets. Environment time defaults to `Anytime`; letters,
      numbers, spaces, colons, slashes, and hyphens are accepted.
    - Start and end dates may be the same day. Each native date picker updates
      the other picker's inclusive `min`/`max` bound so reversed ranges cannot

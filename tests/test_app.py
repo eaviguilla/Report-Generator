@@ -196,7 +196,7 @@ class ReportApiTests(unittest.TestCase):
             "tester": "QA Tester",
             "test_windows": {
                 "production": {"start_date": "2026-01-01", "end_date": "2026-01-01", "test_time": "08:00-17:00"},
-                "non_production": {"start_date": "2026-01-03", "end_date": "2026-01-04", "test_time": "Any time"},
+                "non_production": {"start_date": "2026-01-03", "end_date": "2026-01-04", "test_time": "Anytime"},
             },
             "test_accounts": [{"user_role": "Admin-2 / QA", "username": "DOMAIN\\qa.user@example"}],
             "limitations": "No API - version 2. (Read only) & 'approved' / \"reviewed\"",
@@ -411,7 +411,7 @@ class ReportApiTests(unittest.TestCase):
 
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["test_windows"] = {
-            "production": {"start_date": "2026-01-01", "end_date": "2026-01-02", "test_time": "Any time"},
+            "production": {"start_date": "2026-01-01", "end_date": "2026-01-02", "test_time": "Anytime"},
             "non_production": {"start_date": "2026-01-01", "end_date": "2026-01-02", "test_time": "7:00 EST"},
         }
         report["engagement"].update({"segment": "JH", "report_type": "annual_pentest"})
@@ -1008,7 +1008,7 @@ class ReportApiTests(unittest.TestCase):
         report["engagement"].update({
             "app_name": "Carry", "ci_number": "CI-CARRY", "segment": "JH", "report_type": "annual_pentest",
             "tester": "QA Tester", "tested_environments": ["production"],
-            "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Any time"}},
+            "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"}},
         })
         report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
@@ -1096,7 +1096,7 @@ class ReportApiTests(unittest.TestCase):
         report["engagement"].update({
             "app_name": "Coverage", "ci_number": "CI-COV", "tested_environments": ["production", "non_production"],
             "test_windows": {
-                "production": {"start_date": "2026-08-01", "end_date": "2026-08-05", "test_time": "Any time"},
+                "production": {"start_date": "2026-08-01", "end_date": "2026-08-05", "test_time": "Anytime"},
                 "non_production": {"start_date": "2026-07-01", "end_date": "2026-07-05", "test_time": "Evenings only"},
             },
         })
@@ -1141,7 +1141,7 @@ class ReportApiTests(unittest.TestCase):
         report["engagement"].update({
             "app_name": name, "ci_number": "CI-LOC", "segment": "JH", "report_type": "annual_pentest",
             "tester": "QA Tester", "tested_channels": list(channels), "tested_environments": list(environments),
-            "test_windows": {environment: {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Any time"} for environment in environments},
+            "test_windows": {environment: {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"} for environment in environments},
         })
         report["scope_text"] = {
             environment: {channel: f"https://{channel}.{environment}.test" for channel in channels}
@@ -1263,7 +1263,7 @@ class ReportApiTests(unittest.TestCase):
             "app_name": "No Identifier", "ci_number": "", "bsn_number": "",
             "segment": "JH", "report_type": "annual_pentest", "tester": "QA Tester",
             "tested_environments": ["production"],
-            "test_windows": {"production": {"start_date": "2026-08-01", "end_date": "2026-08-02", "test_time": "Any time"}},
+            "test_windows": {"production": {"start_date": "2026-08-01", "end_date": "2026-08-02", "test_time": "Anytime"}},
         })
         report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
         saved = self.client.put(f"/reports/{report_id}", json=report)
@@ -1422,7 +1422,7 @@ class ReportApiTests(unittest.TestCase):
             "ci_number": "CI-GENERATE",
             "report_date": "2026-09-09",
             "tested_environments": ["production"],
-            "test_windows": {"production": {"start_date": "2026-09-01", "end_date": "2026-09-02", "test_time": "Any time"}},
+            "test_windows": {"production": {"start_date": "2026-09-01", "end_date": "2026-09-02", "test_time": "Anytime"}},
         })
         report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
         report["vulnerabilities"] = [{

@@ -52,7 +52,7 @@ class DocxReportTests(unittest.TestCase):
                     tested_channels=["web", "api"],
                     test_windows={
                         "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
-                        "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Any time"),
+                        "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Anytime"),
                     },
                     test_accounts=[TestAccount(user_role="Customer", username="qa.customer"), TestAccount(user_role="Admin", username="qa.admin")],
                     limitations="No destructive testing.",
@@ -311,7 +311,7 @@ class DocxReportTests(unittest.TestCase):
                     tested_channels=["web"],
                     test_windows={
                         "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
-                        "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Any time"),
+                        "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Anytime"),
                     },
                 ),
                 scope_targets=[

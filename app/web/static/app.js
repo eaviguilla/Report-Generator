@@ -1187,9 +1187,9 @@
       report.engagement.test_windows[environment] ||= {
         start_date: environment === "production" ? report.engagement.start_date : null,
         end_date: environment === "production" ? report.engagement.end_date : null,
-        test_time: "Any time",
+        test_time: "Anytime",
       };
-      if (report.engagement.test_windows[environment].test_time == null) report.engagement.test_windows[environment].test_time = "Any time";
+      if (report.engagement.test_windows[environment].test_time == null) report.engagement.test_windows[environment].test_time = "Anytime";
     });
     report.engagement.test_accounts ||= [{user_role:"N/A", username:"N/A"}];
     if (report.engagement.limitations == null) report.engagement.limitations = "N/A";
@@ -2793,7 +2793,7 @@
         const list = targets.length
           ? `<ul>${targets.map(target => `<li><span>${escape(String(target.channel || "").toUpperCase())}</span>${escape(target.value)}</li>`).join("")}</ul>`
           : `<p class="engagement-context-empty">No scope targets</p>`;
-        return `<div class="engagement-context-env"><b>${escape(contextLabels[environment])}</b><small>${escape(dates)} &middot; ${escape(testWindow.test_time || "Any time")}</small>${list}</div>`;
+        return `<div class="engagement-context-env"><b>${escape(contextLabels[environment])}</b><small>${escape(dates)} &middot; ${escape(testWindow.test_time || "Anytime")}</small>${list}</div>`;
       }).join("");
       context.innerHTML = `<summary>Engagement scope</summary><div class="engagement-context-body">${body || `<p class="engagement-context-empty">No environments selected</p>`}</div>`;
       const selectedFinding = findings.find(finding => finding.uid === selectedFindingUid);

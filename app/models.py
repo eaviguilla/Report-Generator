@@ -159,7 +159,7 @@ class ScopeTarget(BaseModel):
 class TestWindow(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
-    test_time: str = "Any time"
+    test_time: str = "Anytime"
 
     @model_validator(mode="after")
     def validate_order(self) -> "TestWindow":

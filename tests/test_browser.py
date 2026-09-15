@@ -147,7 +147,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator('input[aria-label="Production end date"]').fill("2026-01-02")
         page.locator('input[aria-label="Non-Production start date"]').fill("2026-01-01")
         page.locator('input[aria-label="Non-Production end date"]').fill("2026-01-02")
-        self.assertEqual(page.get_by_role("textbox", name="Production time", exact=True).input_value(), "Any time")
+        self.assertEqual(page.get_by_role("textbox", name="Production time", exact=True).input_value(), "Anytime")
         page.get_by_role("textbox", name="Non-Production time", exact=True).fill("7:00 EST")
         self.assertEqual(page.get_by_label("User role 1").input_value(), "N/A")
         self.assertEqual(page.get_by_label("Username 1").input_value(), "N/A")

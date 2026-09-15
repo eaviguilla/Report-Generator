@@ -96,7 +96,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ("Production time", "08:00_17:00", "08:00-17:00", 'Production time contains invalid character: "_" (underscore)'),
             ("User role 1", "Admin_2", "Admin-2 / QA", 'User role 1 contains invalid character: "_" (underscore)'),
             ("Username 1", "bad user", "DOMAIN\\qa.user@example", 'Username 1 contains invalid character: " " (space)'),
-            ("Limitations", "No testing: production", "No API - version 2. (Read only) & 'approved' / \"reviewed\"", 'Limitations contains invalid character: ":" (colon)'),
+            ("Limitations", "No testing @ production", "No API - version 2. (Read only) & 'approved' / \"reviewed\"; see scope: prod only.", 'Limitations contains invalid character: "@" (at sign)'),
         ]
         for label, invalid_value, valid_value, expected_message in field_cases:
             with self.subTest(label=label):

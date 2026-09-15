@@ -60,7 +60,7 @@ UNRESOLVED_MARKERS = (
     "brief-explanation-here",
 )
 PLACEHOLDER_TEXT = re.compile(
-    r"\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here|\[value_taken_from",
+    r"\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here",
     re.IGNORECASE,
 )
 CELL_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")

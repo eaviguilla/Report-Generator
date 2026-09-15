@@ -39,7 +39,7 @@ from .docx_components import (
     replace_pattern_across_text_nodes,
 )
 from .models import CHANNELS
-from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, setup_issues
+from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, location_lines, setup_issues
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
 # Targets number from zero within each channel, so channel rank has to come first when ordering them.
@@ -1003,25 +1003,15 @@ def _set_page_break_before(paragraph_element) -> None:
 def _finding_locations(report: Report, finding: Vulnerability) -> dict[str, list[str]]:
     values = {"production": [], "non_production": []}
     targets = {target.target_id: target for target in report.scope_targets}
-    if finding.scope.mode == "custom":
-        for target_id in finding.scope.target_ids:
-            target = targets.get(target_id)
-            if target:
-                values[target.environment].append(finding.scope.location_values.get(target_id, target.value))
-    else:
-        environments = {
-            "all": {"production", "non_production"},
-            "all_production": {"production"},
-            "all_non_production": {"non_production"},
-        }[finding.scope.mode]
-        for target in sorted(report.scope_targets, key=lambda item: (CHANNEL_ORDER.index(item.channel), item.order)):
-            if target.environment in environments:
-                values[target.environment].append(target.value)
-    # Typed endpoints are labelled "additional", so they belong to the finding whatever its mode.
+    for target_id in finding.scope.target_ids:
+        target = targets.get(target_id)
+        if target:
+            values[target.environment].append(finding.scope.location_values.get(target_id, target.value))
+    # Typed endpoints are labelled "additional", so they print after whatever was selected.
     for environment, by_channel in finding.scope.custom_locations.items():
         for channel in CHANNEL_ORDER:
-            for value in by_channel.get(channel, []):
-                if value.strip() and value not in values[environment]:
+            for value in location_lines(by_channel.get(channel, [])):
+                if value not in values[environment]:
                     values[environment].append(value)
     return values
 

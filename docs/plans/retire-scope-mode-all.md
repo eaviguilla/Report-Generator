@@ -559,8 +559,417 @@ Likewise `tests/test_docx.py`, `tests/test_docx_import.py`, and all five `Scope(
 
 ## Round 2 - Oracle: verdict on the proposal
 
+### Answer
+
+The proposal is sound and the sequencing is right: relax the strict branch, add the survivor filter, migrate on the way in, keep the migration in memory. Four things must change before it is implementable — the union step should be dropped, the call-site contract (mutate vs. return) must be pinned or two of the three call sites are dead code, the sort key is named wrong, and the `draft.bak.json` evidence the plan is built around no longer exists in the tree. Three test items in §5 are mis-scoped and one new file is required. No draft on disk breaks under the proposed shape.
+
+---
+
+### 1. Risk rows that are wrong, in either direction
+
+**Wrong as `RISK` — the evidence is gone.**
+
+- **Migration fidelity (the `draft.bak.json` case).** The artefact this row rests on no longer exists. Both revisions of `2026-09_Annual_Pentest_c6ff01abda9e` now carry `"mode": "all"` with all four target IDs populated on all fourteen findings. A search for `"target_ids": []` across that report's directory returns nothing. The backup rolled over since the Round 0 pass. The row's *conclusion* — resolve before relabel — survives on other grounds (the two environment modes, hand-edited files, `parse_report_docx` output), but the plan's only real-data example is gone, the proposed `test_a_legacy_all_scope_loads_as_explicit_custom_targets` must now be built synthetically rather than harvested, and the "What I would not do → I would not relabel without resolving" argument should be rewritten to cite the environment modes instead.
+
+**Wrong as `clear` — it is a risk, minor but real.**
+
+- **Request/response asymmetry.** `reconcileCanonicalObject` adopts a canonical value only when `sameValue(liveValue, sentValue)`. `scope.target_ids` is a plain string array with no stable item key, so it lands in that branch. A tester who ticks a box while a save is in flight loses the canonical migration for that finding and keeps `mode: "all"` on the live page. It self-heals on the next PUT, so the disposition is right; "clear" is not.
+
+**Correct as `RISK`, but understated.**
+
+- **Rule drift.** The row names the right files, but the specific drift that bites here is unnamed: `scope_has_location` returns `bool(scope.target_ids)` and **never checks that those IDs resolve**, while `_scope_reaches_a_location` intersects them against the surviving target list. These are two different predicates wearing one name. Today `scope_has_location`'s honesty is guaranteed entirely by `Report.validate_references`, which only fires on `mode == "custom"`. After the migration every finding is custom, so the shape is safe — but this is the precise reason step 1's two halves cannot ship apart, and the plan attributes it only to the error blob.
+- **Backup exhaustion.** Stronger than stated. `list_reports` calls `load_path` once per draft, and `list_legacy_reports` calls it *again* per draft on the same manager render. A persisting migration would rewrite every draft twice per page load in the worst case. Also worth recording in the plan's favour: `load_path` writes **before** it validates, so an in-place before-validator mutation cannot be accidentally persisted by that path.
+
+**Correct as `clear`, for a reason the plan does not give.**
+
+- **Undo replay.** The row is right, and stronger than stated: `restoreHistory` applies the diff, calls `save()`, then reloads the page, so a replayed `mode: "all"` reaches call site 2 within the same interaction and the page is re-seeded from the canonical response. But `sessionStorage` is not the only replay carrier — the `localStorage` local-draft envelope stores the whole `report` object and restores it on reload. Same disposition, but it belongs in the row.
+
+**Correct as written** (verified, no change needed): navigation trap, orphan reference, stale write, lost update, two findings one display ID, silent stranding, derived-state fight, 422 reachability, schema break. On schema break, one precision note: a `mode="before"` field validator does **not** run when `mode` is absent from the payload — the field default supplies `"custom"` there, not the coercion.
+
+**Evidence-slot narrowing** is a genuine risk and correctly marked, with one correction. `sync_evidence_image_slots` does not touch an uploaded or captioned image, as claimed. But the generalised `dropTargetsEverywhere` proposed in step 1 writes `target_ids` directly without routing through `settleScopeChange`, exactly as `dropChannelEverywhere` already does — so a finding that loses its only non-production location keeps its non-production images, which `fragment_applies` then hides from generation without any dialog. That is the existing precedent's behaviour, so it is defensible, but the plan's "reword the dialog" item needs to say that hidden-not-deleted is the intended outcome.
+
+**A row that is missing entirely.** Because call site 2 runs *before* `reconcile_targets`, the payload still carries the pre-edit `scope_targets`. On the first Setup save after the migration, a tester who adds a scope line gets that target created **and** every `mode: "all"` finding frozen to the IDs that existed before that same save — so the newly added line is silently excluded from every legacy finding, on the one save where the old behaviour would have included it. Note that the only reason call site 2 must precede `reconcile_targets` is the `mode == "custom"` test that step 1 deletes; once step 1 lands, the call can move *after* `reconcile_targets` for strictly better fidelity.
+
+---
+
+### 2. Migration mechanics
+
+**(a) The early returns — confirmed exactly as claimed.** `if not isinstance(data, dict): return data` at [models.py#L271](../../app/models.py#L271), then `engagement = data.get("engagement")` at [L273](../../app/models.py#L273), then `if engagement is not None and not isinstance(engagement, dict): return data` at [L274](../../app/models.py#L274). A call placed between them is reached by `Workspace.create_report`, which passes `engagement=Engagement(...)` at [workspace.py#L116](../../app/workspace.py#L116) — Pydantic hands the before-validator the kwargs mapping, so the first guard passes and the second fires.
+
+One hole. Placing the call above the `engagement` guard means it also runs on constructions where `scope_targets` holds `ScopeTarget` **instances**. The plan says what to do about model *findings* (skip them) but only says "tolerate" for model targets. If tolerating means treating them as absent, the resolve step yields an empty ID set and the filter blanks the finding's locations. The safe rule is: **if `scope_targets` is not a list of dicts, return the mapping untouched.** Latent rather than live today — no call site mixes model targets with dict findings — but the plan chose this position precisely to cover model-instance construction.
+
+**(b) The sort key — wrong as written, right in effect.** The exact expression at [docx_report.py#L1017](../../app/docx_report.py#L1017) is:
+
+```python
+sorted(targets.values(), key=lambda item: (CHANNEL_ORDER.index(item.channel), item.order))
+```
+
+`CHANNEL_ORDER = list(CHANNELS)` at [docx_report.py#L46](../../app/docx_report.py#L46) — a copy, not a re-export. So `CHANNELS.index(...)` is value-identical and is the correct thing to write in `models.py`, since importing `CHANNEL_ORDER` there would invert the dependency. The plan should say "`CHANNELS`, which `docx_report.CHANNEL_ORDER` is a `list()` copy of". Two further details that make the migration reproduce printed order exactly: the non-custom branch sorts the **whole** target collection once and then buckets by environment, and `order` is a per-(environment, channel) index assigned by the `enumerate` in `reconcile_targets`, so cross-environment ties are resolved by Python's stable sort and are invisible after bucketing. A migration that applies the same global `(channel, order)` sort per finding produces byte-identical output.
+
+**(c) The union — no widening via the UI, and the stated justification does not hold.**
+
+`renderFindings` computes `selectedTargets` as `mode === "custom" ? target_ids : []`, so a non-custom finding renders with **every box unticked** regardless of what the backfill wrote. There is nothing to untick. Any checkbox interaction runs `updateLocations`, which replaces the scope wholesale with `{mode: "custom", target_ids: <what is checked>, ...}`. A narrowed selection therefore cannot sit under a non-custom mode by that route.
+
+The only client writer that narrows `target_ids` without flipping `mode` is `dropChannelEverywhere` — and it removes the same targets from `report.scope_targets` in the same call, so the resolve step resolves to the narrowed set anyway and the union is a no-op. (The typed-endpoint `oninput` handler writes `custom_locations` and never touches `mode`, but it adds nothing to `target_ids`.)
+
+So for `mode: "all"` — the only retired mode present on disk — the union is **provably a no-op in every reachable case**, and the plan's justification ("so the client backfill's existing writes are preserved rather than recomputed away") describes a state the client cannot produce. For `all_production` and `all_non_production` the union is **not** a no-op and is a genuine widening: an existing ID pointing at the other environment — reachable via hand-edit or DOCX import, which is exactly the population those modes exist to serve — would be unioned in, adding an environment to `affected_environments`, an image slot from `sync_evidence_image_slots`, and a screenshot demand from `generation_issues`.
+
+**Drop the union.** Resolve → filter → sort → relabel. It loses nothing reachable and removes the only widening path.
+
+**(d) Pydantic ordering — correct.** With `pydantic==2.13.5` as pinned, a `field_validator(..., mode="before")` wraps the field's core schema and runs ahead of `Literal` enforcement, so `Scope(mode="all")` coerces rather than raising. Two caveats worth a line in the plan: it does not run when `mode` is absent, and it does not run on `model_copy`, which `Workspace.duplicate` uses — that path is covered only because its source already came through `load`.
+
+**(e) `repair_duplicate_fragment_ids` — confirmed at the line claimed, but the call site as written cannot work.** `Report.model_validate(draft)` at [workspace.py#L238](../../app/workspace.py#L238), `atomic_write_json(path, draft)` at [L239](../../app/workspace.py#L239), `return self.load(report_id)` at [L240](../../app/workspace.py#L240). So yes — the raw draft is persisted after validation, and a migration that only lives in the model would be lost here.
+
+But the plan specifies `normalise_scope_modes(report_mapping) -> report_mapping`, "raw mapping in, raw mapping out", modelled on `_migrate_poc_variant` — which is **pure**, returning a new dict. Call sites 2 and 3 are then written as bare statements: `normalise_scope_modes(payload)` and `normalise_scope_modes(draft)`. With a pure function those two lines are no-ops, and call site 3 would persist the un-migrated draft, defeating its own purpose. Either the function mutates in place, or all three call sites assign the result. In-place is the safer of the two, because `load_path` writes before it validates — so an in-place mutation there still cannot leak to disk.
+
+---
+
+### 3. The 422 decision
+
+**`dropChannelEverywhere` does what the plan says, and slightly more.** It blanks `report.scope_text[environment][channel]`, filters `target_ids` on every finding regardless of mode, deletes matching `location_values`, deletes the channel out of `custom_locations` (pruning emptied environments), **and removes the targets from `report.scope_targets`**. That last step means a generalised `dropTargetsEverywhere(targetIds)` is not a straight extraction: for the environment path the server rebuilds `scope_targets` from `scope_text` and `tested_environments`, and for the scope-text path the textarea is the source, so neither may remove targets itself. Only the per-finding half generalises.
+
+**The environment path is genuinely missing an equivalent.** The checkbox `onchange` confirms via `confirmScopeLoss`, sets `tested_environments`, re-renders, and schedules a save — no purge, and no target removal. The scope-text commit confirms via `confirmScopeTextLoss` and then either accepts or reverts the textarea — no purge. Both then hand a payload to `reconcile_targets`, which is where the 422 fires. The plan's reading is correct.
+
+**Does anything else read `scope.target_ids` expecting them all to resolve?** One thing, and it is a hard error rather than a silent fault: `Report.validate_references` at [models.py#L302](../../app/models.py#L302) raises when a custom finding's IDs are not a subset of `scope_targets`. That is why option (b) — relaxing the branch alone — produces an `invalid_report` blob instead of a clean save. Every other reader is tolerant: `affected_environments` and `affected_channels` use `target_by_id.get(...)` guarded by `if target:`; `_scope_reaches_a_location` intersects; `_finding_locations` uses `targets.get(...)` guarded by `if target:`; `docx_import._empty_proof` uses `by_id.get(...)` guarded by `if target`; every JavaScript reader uses `.find(...)?.` or `.some(...)`.
+
+**The dangerous inverse is `scope_has_location`**, which returns `bool(scope.target_ids)` and never resolves them — so a finding holding nothing but dangling IDs reads as "has a location", gates `/edit` open, and passes `finding_is_complete`. Its JavaScript twin has the same shape. The survivor filter and `validate_references` are therefore **jointly** load-bearing for that predicate's truthfulness, which is the exact reason neither (a) nor (b) can ship alone. The plan reaches the right conclusion; it should carry this reason.
+
+**The precedent is verified.** Because `dropChannelEverywhere` removes the doomed IDs and their targets before the PUT, the app-type path already never reaches the strict branch — it is already living under the proposed regime, and has been since that purge landed.
+
+---
+
+### 4. Files and tests the planner missed
+
+1. **[tests/test_storage.py](../../tests/test_storage.py) is absent from the §1 blast-radius table** although §5 adds three tests to it — and it is the wrong file. It contains exactly one test, `test_atomic_write_retries_transient_permission_error`, and imports nothing from `workspace`. Every existing legacy-migration test lives in [tests/test_app.py](../../tests/test_app.py): `test_workspace_restores_legacy_app_types_and_repairs_empty_lists`, `test_the_retired_test_type_token_migrates_on_every_entry_path`, `test_legacy_duplicate_fragment_repair`. The three proposed tests belong there.
+2. **[docs/FORM_DEPENDENCIES.md](../FORM_DEPENDENCIES.md) is not listed.** Its row recording `scope_targets[].target_id/value → vulnerabilities[].scope.target_ids/location_values` as **one-way** stops being true once both purges exist. The plan lists only `docs/DATA_MAP.md`.
+3. **The `scope_text` seeding block in [app.js#L1181](../../app/web/static/app.js#L1181) is unlisted.** It derives `scope_text` from `scope_targets` when absent and is the thing that makes the scope-text purge implementable. Correctly unchanged, but it should appear in the "checked, not overlooked" column.
+4. **The `Scope(...)` count in [tests/test_browser.py](../../tests/test_browser.py) is wrong** — six constructions (L468, L797, L1068, L1083, L1097, L1299), not five, plus a dict scope literal in the `ready_report` fixture at L70. All are already `custom`, so the conclusion stands.
+5. **Second half of a twinned rule, half-caught.** The plan's app.js row correctly drops `scopeHasLocation`'s `mode === "custom" &&` guard. What it does not say is that the Python half has no such guard — `scope_has_location`'s custom branch already ORs `target_ids` with typed locations unconditionally. The two are *currently asymmetric*, and dropping the JS guard is what brings them into line. That asymmetry is the live subject of `test_typed_endpoints_reach_the_report_even_when_the_finding_covers_everything`.
+6. **Nothing under `scripts/` or `resources/` reads `scope.mode`** — verified, and worth stating rather than leaving open.
+
+**Three §5 test items are mis-scoped.**
+
+- Deleting the `Scope(mode="all")` stanza from `test_affected_channels_resolve_the_proof_of_concept_variants` is **not** "two lines and their comment". The next assertion, `applicable_poc_variants(finding, report, {"api": [1]}) == ["api"]` at [test_app.py#L406](../../tests/test_app.py#L406), sets no scope of its own and runs against the scope that stanza installs. Delete the stanza and it falls back to the typed-endpoint custom scope four lines earlier, resolves web-only, and returns `[]`. The rewrite has to give it its own scope.
+- `test_coverage_change_that_strands_a_mode_scoped_finding_is_rejected` has a **third** stanza the plan's prose never mentions — [test_app.py#L720](../../tests/test_app.py#L720) onward, "Narrowing that leaves the finding a location is still allowed", which re-widens non-production scope text and asserts 200. The rewrite must carry it or explicitly drop it.
+- `test_generator_locations_use_typed_endpoints_grouped_by_channel` **would pass unchanged** after a correctly-sorted migration, and it is currently the only assertion in the suite pinning printed `(channel, order)` ordering. Leaving it alone is cheaper than rewriting it and makes it a free before/after equivalence check.
+
+**And the "five incidental" `{"mode": "all"}` uses split two ways.** L896, L924 and L1045-1046 pass unchanged. L797 and L831 do not — both narrow an environment via `scope_text` on a later PUT and assert 200, which is exactly the save the strict branch refuses. They are already the regression tests for step 1, not cosmetic.
+
+One minor correction to the planner's own audit: the claim that none of the eight scope-less `Vulnerability(...)` constructions "builds a `Report`" is wrong for the one at [test_app.py#L386](../../tests/test_app.py#L386), though the planner's own note that it is assigned an explicit scope four lines later covers the case.
+
+---
+
+### 5. On-disk drafts
+
+**Nothing on disk breaks.** Every `scope.mode` value in `data/apps/` is either `"all"` (fourteen findings in `2026-09_Annual_Pentest_c6ff01abda9e/draft.json` and fourteen in its backup) or `"custom"` (everything else). No `all_production` or `all_non_production` exists anywhere. All fourteen `"all"` findings already carry all four target IDs, every one of which resolves, so they migrate to `custom` with exactly the IDs they hold, `validate_references` passes, `_finding_locations` output is unchanged, and nothing is demoted to the legacy list.
+
+**The `draft.bak.json` case the plan is built around does not exist.** That backup holds `"mode": "all"` with all four IDs, identical to the live draft; there is no `"target_ids": []` under that directory. The resolve-first design is still correct defensive practice for imports and hand-edits, but the plan's fidelity argument currently cites data that has rolled over and should be rewritten around the environment modes.
+
+**Does the in-memory-only decision leave bytes and behaviour disagreeing in a way that matters?** Three divergences, one of which matters.
+
+- `repair_duplicate_fragment_ids` reads the raw draft and writes it back — **this is the one that matters**, and call site 3 is exactly the fix, provided the mutation actually lands in `draft` (see 2e).
+- `load_path` writes **before** it validates, so a draft that trips one of the two existing legacy repairs gets its *un-migrated* bytes written and its *migrated* model returned in the same call. That is the intended behaviour, but it deserves a line in the sharp-edges section so nobody inspects a freshly rewritten file, sees `"mode": "all"`, and concludes the migration failed.
+- `export_bundle` dumps the validated model and `Workspace.duplicate` copies it, so an export or a duplicate is migrated while its source file is not. Harmless, and identical to how the retired `test_type` migration already behaves.
+
+---
+
+### Invariants in play
+
+- **Every custom finding's `target_ids` must resolve against `scope_targets`.** Enforced only by `Report.validate_references`. Violate it and the save dies as an `invalid_report` 422 — which is precisely what relaxing the strict branch without the survivor filter would produce.
+- **`scope_has_location` is a presence check, not a resolution check.** Its truthfulness is borrowed entirely from the invariant above plus the survivor filter. Violate either and `/edit` opens on a finding with no printable location, and `generation_issues` declares a report ready that `_finding_locations` renders empty.
+- **Printed location order is `(channel, order)` over the globally sorted target list, bucketed by environment.** A migration that stores IDs in any other order silently reorders every previously non-custom finding's Location cell.
+- **The before-validator must be shape-tolerant.** It runs on kwargs mappings, import payloads, and raw drafts alike. Violate it and `create_report` raises, taking the New Report button with it.
+- **`load_path` writes before it validates.** Depend on the opposite order and an in-memory migration becomes an accidental disk migration.
+- **`scope_text` is request-only.** The server consumes it into `scope_targets` and never echoes it; the client re-derives it from `scope_targets` when absent.
+
+---
+
+### Both-sides warning
+
+Every rule this plan touches exists twice and must change in the same commit:
+
+| Rule | Python | JavaScript |
+|---|---|---|
+| a finding claims a location at all | `scope_has_location` | `scopeHasLocation`, `scopeTargetIds` |
+| a scope still reaches a surviving target | `_scope_reaches_a_location` | `scopeReaches` |
+| affected environments | `affected_environments` | `affectedEnvironments`, `scopeEnvironments` |
+| affected app types | `affected_channels` | `affectedChannels` |
+| finding completeness | `finding_is_complete` | `validateFindingsPage`, `updateFindingSummary` |
+| which targets survive a coverage change | the target loop in `reconcile_targets` | `findingsStrandedBy`, `dropChannelEverywhere` (and whatever step 1 generalises it into) |
+| canonical app-type order | `CHANNELS` in `models.py`; `docx_report.CHANNEL_ORDER` is a `list()` copy | `CHANNELS`, module scope in `app.js` |
+
+Only `generation_issues` has a contract test. The scope rows above have **no drift guard** — if the two sides disagree, nothing in the suite notices.
+
+---
+
+### Map drift
+
+Corrected in [docs/DATA_MAP.md](../DATA_MAP.md), section 12, and the "Last verified" line bumped:
+
+- The "scope resolves to a location" row paired `scope_has_location` with `_scope_reaches_a_location` as though they implemented one rule. They answer different questions — presence versus resolution — and the row is now split into two, with the presence row marked as not checking that IDs resolve.
+- "canonical app-type order" said `CHANNELS` is "imported by `docx_report.CHANNEL_ORDER`". `CHANNEL_ORDER` is a `list()` copy, not a re-export — value-identical, not the same object, and `models.py` cannot import it back without a cycle.
+
 ## Round 2 - Planner: revised plan
+
+## Understanding
+
+`Scope.mode` stops being a resolution instruction and becomes a historical marker. Every scope becomes `mode: "custom"` carrying the explicit `target_ids` its old mode resolved to, filtered to targets that actually exist in the same mapping, and sorted so the generated document prints byte-identically. After that, roughly a dozen per-mode branches across Python and JavaScript collapse to one, the Findings page can draw ticks that match the rule it enforces, and `/edit` stops letting a finding through on the strength of a mode nobody can produce. The migration itself is small; the work is in `reconcile_targets`, because moving every finding onto the strict "any missing id strands you" branch would make a currently-rare 422 routine, and that has to be fixed **first**, as its own shippable step.
+
+---
+
+## Blast radius
+
+| File | What changes | Why |
+|---|---|---|
+| [models.py](../../app/models.py#L130) | `Scope.mode` default flips to `"custom"`; `Literal` narrows to `Literal["custom"]`; new `field_validator("mode", mode="before")` on `Scope` coercing exactly the three retired tokens; new module function `normalise_scope_modes(report_mapping)` that **mutates in place**, called from inside `normalise_app_types` (renamed `normalise_legacy_shapes`), between the `isinstance(data, dict)` guard at [L271](../../app/models.py#L271) and the `engagement` guard at [L274](../../app/models.py#L274) | The `Report` `mode="before"` validator is the only hook every entry path shares, and only a report-level hook can see `scope_targets`, which the filter needs |
+| [report_service.py](../../app/report_service.py#L253) | `affected_environments` loses three branches; `affected_channels` loses its `else`; `_scope_reaches_a_location` loses two branches; `scope_has_location` loses two branches; `reconcile_targets` loses its `mode == "custom"` test and its trailing non-custom block, and **gains a survivor filter** on `target_ids` | The first four are dead-branch deletion. `reconcile_targets` is the only behavioural change, and it is the whole risk |
+| [main.py](../../app/main.py#L661) | `save_report` calls `normalise_scope_modes(payload)` **after** `reconcile_targets` and before `Report.model_validate`; the `"all"` comment above `insert_library`'s `Scope(mode="custom")` is rewritten | Placement is a decision, not an accident — see the "first Setup save after migration" risk row |
+| [workspace.py](../../app/workspace.py#L238) | `repair_duplicate_fragment_ids` calls `normalise_scope_modes(draft)` before `Report.model_validate(draft)`. `load_path` is deliberately **not** touched | That method persists the raw dict after validating. `load_path` writes *before* it validates, so an in-place mutation there provably cannot reach disk |
+| [docx_report.py](../../app/docx_report.py#L1003) | `_finding_locations` loses its `else` branch and its `{...}[mode]` dict lookup | That dict is a latent `KeyError`, and it is the only mode branch whose output reaches the document |
+| [app.js](../../app/web/static/app.js#L952) | `scopeTargetIds` collapses to an accessor; `scopeHasLocation` drops its `mode === "custom" &&` guard; `scopeEnvironments` and `affectedChannels` drop their mode tests; `scopeReaches` drops two branches; the Findings-page backfill is **deleted**; the `renderFindings` ternary is **deleted**; new `dropTargetsEverywhere(targetIds)` (per-finding purge only) extracted from `dropChannelEverywhere` and called from the environment checkbox and the scope-text commit; `findingsStrandedBy` and `scopeTextStrandedFindings` change predicate; three dialogs reworded | Both halves of every duplicated rule move in one edit. Dropping the `mode === "custom" &&` guard is what brings `scopeHasLocation` **into line with Python**, whose `scope_has_location` has no such guard and already ORs ids with typed locations unconditionally |
+| [tests/test_app.py](../../tests/test_app.py) | One test deleted, three rewritten, **eleven new** — including all three legacy-migration tests | Every existing legacy-migration test already lives here (`test_workspace_restores_legacy_app_types_and_repairs_empty_lists`, `test_the_retired_test_type_token_migrates_on_every_entry_path`, `test_legacy_duplicate_fragment_repair`) |
+| [tests/test_browser.py](../../tests/test_browser.py) | One new contract test. The six existing `Scope(...)` constructions (L468, L797, L1068, L1083, L1097, L1299) and the dict scope literal in `ready_report` at [L70](../../tests/test_browser.py#L70) need no change — all already custom | The scope-survival row is the row that already drifted and has no drift guard |
+| [docs/DATA_MAP.md](../DATA_MAP.md) | Section 6 (the `validate_references` bullet), section 7 (the `reconcile_targets` row), section 8 (new legacy-repair entry), section 12 (six rows plus both client-only notes), section 13 (new sharp edge), "Last verified" | The maintenance contract at the top of that file requires it in the same change |
+| [docs/FORM_DEPENDENCIES.md](../FORM_DEPENDENCIES.md) | The `scope_targets[].target_id/value → vulnerabilities[].scope.target_ids/location_values` row stops being **One-way**; rows 8 and 9 need their "the save is refused if one is stranded anyway" wording changed to match the new predicate | Once both purges exist, a Setup change writes back into finding scopes |
+| [tests/test_storage.py](../../tests/test_storage.py) | **No change.** Explicitly *not* the home for the migration tests | It holds one test, `test_atomic_write_retries_transient_permission_error`, and imports nothing from `workspace` |
+| [docx_import.py](../../app/docx_import.py#L364) | **No change** | Both branches already write `{"mode": "custom", ...}` |
+| The `scope_text` seeding block in [app.js#L1181](../../app/web/static/app.js#L1181) | **No change** | It derives `scope_text` from `scope_targets` when absent, and it is the thing that makes the scope-text purge implementable. Checked, not overlooked |
+| [tests/test_docx.py](../../tests/test_docx.py#L585), [tests/test_docx_import.py](../../tests/test_docx_import.py#L75) | **No change** | Both already build `Scope(mode="custom", target_ids=[...])` |
+| `scripts/`, `resources/` | **No change** | Verified: nothing under either reads `scope.mode` |
+
+---
+
+## Data risks
+
+| Failure mode | Verdict | Reasoning and what handles it |
+|---|---|---|
+| Stale write | **clear** | The migration adds no mutation path. It runs inside validation on paths that already carry `saved_at` in the PUT body, or that never send one. In-memory only, so `saved_at` is untouched on load and no open tab is spuriously 409'd |
+| Lost update | **clear** | No new read-modify-write. Both persisting call sites — `repair_duplicate_fragment_ids` and the ordinary save path — already run inside `Workspace._locked` |
+| Orphan reference | **RISK** | Rewriting mode to custom makes [models.py#L302](../../app/models.py#L302) enforce `target_ids ⊆ scope_targets` on data never checked before. Handled by filtering inside the migration against the mapping's own `scope_targets`, which is why it must be report-level: a `Vulnerability` validator cannot see that set |
+| Silent stranding | **RISK** | A legacy finding on a report with no resolvable targets becomes locationless and blocks `/edit`. That is the fix, not a defect, but it is a visible state change. `updateFindingSummary` already counts it, `/edit` already redirects to `/findings?incomplete=findings`, and one tick clears it |
+| Schema break | **RISK** | An existing `draft.json` holding `"all"` must still load. Handled twice: the report-level migration rewrites `mode` before the `Literal` is checked, and the `Scope.mode` field coercion catches anything reaching `Scope` without passing that hook. **Precision note:** a `mode="before"` *field* validator does **not** run when `mode` is absent from the payload — there the field default supplies `"custom"`, not the coercion |
+| Request/response asymmetry | **RISK**, minor | `reconcileCanonicalObject` adopts a canonical value only when `sameValue(liveValue, sentValue)`. `scope.target_ids` is a plain string array with no stable item key, so it lands in that branch. A tester who ticks a box while a save is in flight loses the canonical migration for that finding and keeps `mode: "all"` on the live page. Self-heals on the next PUT |
+| Rule drift | **RISK** | The specific drift: `scope_has_location` returns `bool(scope.target_ids)` and **never checks the ids resolve**, while `_scope_reaches_a_location` intersects them against the surviving targets. Two different predicates wearing one name. `scope_has_location`'s honesty is borrowed entirely from `validate_references` (which fires only on custom) plus the survivor filter — which is the exact reason step 1's two halves cannot ship apart. Handled by moving both sides of all nine paired rules in one commit and adding the first contract test on a scope row |
+| Navigation trap | **clear** | `setup_issues` already requires at least one scope target per tested environment before `/findings` is reachable, so any tester who can see a newly-blocked finding can also see a checkbox that unblocks it. A deep link to `/edit` bounces once, not in a loop |
+| Derived-state fight | **RISK** | The Findings-page backfill is a client-side derived-state writer with no server counterpart; leaving it while the server owns normalisation means two writers for one field. Handled by deleting it. `provision_report` never reads or writes scope, so there is no fight on the save path |
+| Backup exhaustion | **RISK** | Worse than a single pass: `list_reports` calls `load_path` once per draft **and** `list_legacy_reports` calls it again per draft on the same manager render, so a persisting migration would rewrite every draft twice per page load and consume every one-of-one `draft.bak.json`. Handled by migrating in memory only. Recorded in the plan's favour: `load_path` writes **before** it validates, so an in-place before-validator mutation cannot leak to disk from there |
+| Migration fidelity | **RISK** | Re-evidenced. The empty-`target_ids` artefact that motivated this row has rolled over — both revisions of the fourteen-finding draft now carry `mode: "all"` with all four ids. The risk lives on in three populations the tree cannot demonstrate: the **two environment modes**, which hold no ids at all by construction, so relabelling them yields a locationless finding *every* time; hand-edited files; and `parse_report_docx` output. Handled by resolve → filter → sort → relabel, with a **synthetically built** fidelity test |
+| Legacy-invalid demotion | **RISK** | A `ValidationError` on load demotes a draft to `list_legacy_reports` rather than failing loudly. Two routes in: a stale id under a rewritten mode, and a retired token that dodges the migration. Handled by the filter and by the field coercion, which degrades to a recoverable state (custom, possibly no ids, visibly incomplete) instead of an unopenable one |
+| 422 reachability change | **RISK**, the largest | Every finding moves from the lenient before/after branch to the strict "any missing id" branch. On the fourteen-finding report, deleting one Setup line goes from a clean save to a refusal naming all fourteen, with no dialog first. Decided in step 1, not deferred |
+| Printed-output reordering | **RISK** | A migrated finding would print Location rows in stored `target_ids` order where it used to print them sorted. Handled by making the migration emit ids in exactly the printer's sort order — see step 2 |
+| Client/server stranding divergence | **RISK** | The client warns only on total loss of location; the server refuses on any lost id. `"all"` masks the gap today on the one report that would hit it. Handled in step 1 by collapsing the two into one predicate |
+| Evidence-slot narrowing | **RISK** | `sync_evidence_image_slots` never touches an uploaded or captioned image — confirmed. But `dropTargetsEverywhere` writes `target_ids` directly without routing through `settleScopeChange`, exactly as `dropChannelEverywhere` already does, so a finding that loses its only non-production location **keeps** its non-production images and `fragment_applies` then hides them from generation with no dialog. Defensible as the existing precedent; **hidden-not-deleted is the intended outcome** and the reworded dialog must say so. Open question 1 |
+| First Setup save after the migration | **RISK** | If the migration ran *before* `reconcile_targets`, the payload would still carry the pre-edit `scope_targets` — so a tester adding a scope line would get the target created **and** every legacy finding frozen to the ids that existed before that same save, silently excluding the new line on the one save where the old behaviour would have included it. **Eliminated by placing call site 2 *after* `reconcile_targets`**, which step 1 makes possible by deleting the `mode == "custom"` test that was the only reason to run earlier |
+| Undo replay reintroduces a retired mode | **clear** | `undoHistory` lives in `sessionStorage` and `restoreHistory` applies the diff, saves, then reloads — so a replayed `mode: "all"` reaches call site 2 within the same interaction. `sessionStorage` is not the only carrier: the `localStorage` local-draft envelope stores the whole `report` and restores it on reload. Both land on the same two nets — call site 2, then the field coercion |
+| Two findings, one `display_id` | **clear** | Nothing in the migration touches `display_id`, `uid`, `frag_id`, or `evidence_id` |
+
+---
+
+## Plan
+
+### Step 1 — Fix the 422, both sides, before anything else
+
+**Files:** `report_service.py` (`reconcile_targets`), `app.js` (`dropChannelEverywhere` → extracted `dropTargetsEverywhere`, the environment checkbox, the scope-text commit, `findingsStrandedBy`, `scopeTextStrandedFindings`, the three dialogs), `docs/FORM_DEPENDENCIES.md`.
+
+**The problem.** `reconcile_targets` strands a custom finding when **any** of its `target_ids` disappears, and a non-custom finding only when the report loses **every** location. The client warns only in the second case. Universal custom exposes that gap on every report at once.
+
+**Server.** Inside `reconcile_targets`, once the new `target_ids` set is known, filter each finding's `target_ids` down to survivors *before* the reach check, then strand only on `reached_before and not reaches_now`. The `mode == "custom"` test and the trailing non-custom block collapse into one path.
+
+**Client.** Extract **only the per-finding half** of `dropChannelEverywhere` into `dropTargetsEverywhere(targetIds)`: filter `scope.target_ids`, delete the matching `location_values`. It is *not* a straight extraction — `dropChannelEverywhere` also blanks `scope_text[environment][channel]`, prunes `custom_locations` by channel, and **removes the targets from `report.scope_targets`**. Those three stay where they are, because on the environment path the server rebuilds `scope_targets` from `scope_text` × `tested_environments`, and on the scope-text path the textarea is the source; neither may remove targets itself. Call the new helper from the environment checkbox after `confirmScopeLoss`, and from the scope-text commit after `confirmScopeTextLoss`, passing the ids `survivingAfterScopeText` just excluded. Change `findingsStrandedBy` and `scopeTextStrandedFindings` to count findings losing **any** selection, distinguishing those left with none, and reword the three dialogs to match — including the hidden-not-deleted sentence from open question 1.
+
+**Why both halves, and why neither ships alone.** `scope_has_location` is a presence check that never resolves its ids; its truthfulness is borrowed entirely from `validate_references` plus the survivor filter. Relax the strict branch without the filter and a payload naming deleted targets sails past `reconcile_targets` into `validate_references`, which returns a raw Pydantic blob under `invalid_report`; relax it *with* a server filter but no client purge and the server silently deletes tester selections with no prompt. The client purge is the tester-facing story with an undo behind it; the server purge is the guarantee for payloads the browser did not build — imports, stale tabs, undo replays.
+
+**Precedent, verified.** Because `dropChannelEverywhere` removes the doomed ids *and* their targets before the PUT, the app-type path already never reaches the strict branch. It has been living under the proposed regime since that purge landed. This step finishes a half-done job and is worth doing whether or not the migration ships.
+
+**Tests:** `test_removing_one_of_several_scope_lines_still_saves`; `test_removing_a_findings_only_location_is_still_refused`; `test_browser_scope_stranding_warning_matches_server_refusal`. The two existing tests at test_app.py L797 and L831 already are this step's regression guard — both narrow an environment via `scope_text` on a later PUT and assert 200, which is exactly the save the strict branch would refuse. Leave them unchanged and add a one-line comment saying why.
+
+**Invariant:** a save the client did not warn about must not be refused.
+
+### Step 2 — Add `normalise_scope_modes` and its three call sites
+
+**Files:** `models.py`, `main.py`, `workspace.py`.
+
+**The contract — in place, not pure.** `normalise_scope_modes(report_mapping) -> None`, mutating each finding's scope dict where it sits. This is the one decision that makes call sites 2 and 3 real: written as bare statements against a pure function they would be no-ops, and call site 3 would persist the un-migrated draft, defeating its own purpose. In-place is safe specifically because `load_path` writes **before** it validates, so a mutation there cannot leak to disk.
+
+**The order — resolve → filter → sort → relabel.** There is no union step.
+
+1. **Resolve.** `all` → every target id in the mapping; `all_production` → production target ids; `all_non_production` → non-production ids. The previously proposed union with any `target_ids` already present is dropped: for `mode: "all"` it is provably a no-op in every reachable case, because `renderFindings` draws every box unticked for a non-custom finding regardless of what the old backfill wrote, and any checkbox interaction runs `updateLocations`, which replaces the scope wholesale with custom. The only client writer that narrows `target_ids` without flipping mode is `dropChannelEverywhere`, and it removes the same targets from `scope_targets` in the same call, so the resolve step yields the narrowed set anyway. For the two environment modes the union is **not** a no-op and is a genuine widening — a stale id pointing at the other environment gets unioned in, adding an environment, an image slot, and a screenshot demand.
+2. **Filter.** Keep only ids present in the mapping's own `scope_targets`.
+3. **Sort.** By `(CHANNELS.index(channel), order)`. Write `CHANNELS.index(...)` in `models.py`: `docx_report.CHANNEL_ORDER = list(CHANNELS)` is a **copy, not a re-export**, and importing it back into `models.py` would invert the dependency. Two details make this reproduce printed order exactly: the printer's non-custom branch sorts the **whole** target collection once and only then buckets by environment, and `order` is a per-(environment, channel) index assigned by the `enumerate` in `reconcile_targets`, so cross-environment ties resolve by Python's stable sort and are invisible after bucketing. The same global sort applied per finding is byte-identical.
+4. **Relabel.** Set `mode` to `"custom"`. Leave `custom_locations` and `location_values` untouched.
+
+**Shape tolerance — a rule, not a vibe.** **If `scope_targets` is not a list of dicts, return the mapping untouched.** Call site 1 sits above the `engagement` guard, so it also runs on constructions where `scope_targets` holds `ScopeTarget` *instances*; treating those as absent would resolve to an empty id set and blank the finding's locations. Skip any vulnerability that is not a dict, any scope that is not a dict, and any `mode` outside the three retired tokens. The sort key must tolerate an unrecognised channel and a non-integer `order` rather than raising — same principle `resolve_tested_channels` already follows, letting the `Channel` literal do the rejecting so the validator never raises on its own.
+
+**Call site 1 — inside `normalise_app_types`, renamed `normalise_legacy_shapes`.** Between the `isinstance(data, dict)` return at L271 and the `engagement is not None and not isinstance(engagement, dict)` return at L274. Not a second `mode="before"` validator: ordering between multiple before-validators is not something this plan should depend on.
+
+**Call site 2 — `main.py`, on `payload`, immediately *after* `reconcile_targets`.** The only reason to run earlier was the `mode == "custom"` test that step 1 deletes. Running after means the migration resolves against the `scope_targets` `reconcile_targets` just wrote, so a legacy finding on a Setup save that adds a line gets that line — strictly better fidelity, and it removes the "first Setup save" risk row entirely. Consequence to accept: after step 4, a raw `mode: "all"` payload from a stale tab is evaluated by `_scope_reaches_a_location`'s custom branch inside `reconcile_targets`. With ids present it answers identically; with no ids `reached_before` is false, so the save is allowed and the migration then resolves it. Lenient in the safe direction.
+
+**Call site 3 — `workspace.py`, on `draft`, before `Report.model_validate`.** That method validates and then persists the **raw** dict, so without the call a manager repair writes the pre-migration shape back. An in-place mutation at call site 1 may happen to reach `draft` through the validator too; the plan does not rest on that, because it depends on Pydantic handing the before-validator the same dict object rather than a copy.
+
+**Paths and what happens to them:** `load_path` — migrated in memory, on-disk bytes keep `mode: "all"` until the next ordinary save (deliberate). `import_report`, both `parse_import` branches, `parse_report_docx` — covered by the same validator. `repair_duplicate_fragment_ids` — call site 3. `duplicate` — `model_copy` runs no validators, but its source came through `load`, so the copied model is already migrated. `create_report` — reached, because the call sits above the guard that would skip it; a no-op today.
+
+**Tests:** `test_a_legacy_all_scope_loads_as_explicit_custom_targets` (synthetic: `mode: "all"`, `target_ids: []`, four targets → custom with four ids in channel-sorted order); `test_a_legacy_scope_drops_target_ids_that_no_longer_exist`; `test_migrated_locations_print_exactly_as_they_did_before`; `test_the_environment_modes_freeze_to_the_targets_they_resolved_to`; `test_a_repaired_draft_keeps_its_migrated_scope_on_disk`; `test_an_imported_bundle_arrives_with_custom_scopes`; `test_a_setup_save_that_adds_a_line_includes_it_in_a_migrated_finding`. **All in tests/test_app.py**, alongside the existing legacy-migration tests.
+
+**Invariant:** purely additive — every existing test still passes, and no draft in `data/apps` moves to the legacy/invalid list.
+
+### Step 3 — Flip the default, narrow the `Literal`, add the field coercion
+
+**Files:** `models.py`.
+
+`mode: Literal["custom"] = "custom"`, plus a `field_validator("mode", mode="before")` mapping exactly `all`, `all_production`, and `all_non_production` to `"custom"`. Anything else keeps today's outcome — rejected by the `Literal` — so this adds no new leniency. **Keep the `mode` field itself**: the migration needs to *see* a retired token to know it should resolve, and `extra="ignore"` would drop that signal silently. The field can go in a later change once nothing on disk carries one.
+
+Pydantic caveats to record in the code comment: the field validator does **not** run when `mode` is absent (the default supplies `"custom"` there), and it does **not** run on `model_copy`, which `Workspace.duplicate` uses — covered only because its source came through `load`.
+
+**Tests:** `test_a_scope_mode_that_escapes_the_migration_still_loads`, asserting both that `Scope.model_validate({"mode": "all"})` coerces and that an absent `mode` lands on the default rather than the coercion. Plus the rewritten tests below.
+
+**Invariant:** `validate_references` passes for every draft in `data/apps`.
+
+### Step 4 — Delete the dead branches, both sides
+
+**Files:** `report_service.py`, `docx_report.py`, `app.js`.
+
+Delete rather than leave unreachable, because **these are the branches that already drifted**: `_finding_locations`' non-custom branch sorts where its custom branch does not, and `scopeReaches`' non-custom branches ignore the `coverage` argument its custom branch respects. Unreachable code carrying a second, different answer to the same question is the drift mechanism, not a safety net. `scopeTargetIds` keeps its name with a one-line body, because the editor's finding card is its only remaining caller. Dropping `scopeHasLocation`'s `mode === "custom" &&` guard brings it into line with `scope_has_location`, which has no such guard — that asymmetry is the live subject of one of the tests being rewritten here.
+
+**Tests:** existing suite plus the browser contract test.
+
+**Invariant:** a finding's ticked boxes and its completeness verdict agree.
+
+### Step 5 — Documentation
+
+`docs/DATA_MAP.md` sections 6, 7, 8, 12, 13 and the "Last verified" line; `docs/FORM_DEPENDENCIES.md` rows 8, 9, and 10.
+
+---
+
+## Test plan, corrected
+
+**Deleted (1).** `test_non_custom_scope_modes_resolve_report_targets` — it asserts three modes that can no longer exist let a report past `/edit`. Replaced by `test_the_environment_modes_freeze_to_the_targets_they_resolved_to`.
+
+**Rewritten (3).**
+
+| Test | Rewrite |
+|---|---|
+| The `Scope(mode="all")` stanza in `test_affected_channels_resolve_the_proof_of_concept_variants` | **Not a two-line deletion.** The next assertion sets no scope of its own and runs against the scope that stanza installs; delete it and the assertion falls back to the typed-endpoint web-only scope four lines earlier and returns `[]`. Replace the stanza with `Scope(mode="custom", target_ids=["tgt_web", "tgt_api"])` so the both-channels state survives for the "an app type the entry has no steps for is never offered" check |
+| `test_coverage_change_that_strands_a_mode_scoped_finding_is_rejected` | Keep the test, change its subject to the finding located **only** by `custom_locations` — the environment twin of the app-type test — as `test_removing_an_environment_that_held_a_findings_only_typed_location_is_rejected`. It has **three** stanzas, not two: the 200 setup save, the 422 on unchecking Non-Production, and "Narrowing that leaves the finding a location is still allowed". Carry all three |
+| `test_typed_endpoints_reach_the_report_even_when_the_finding_covers_everything` | Its premise is already false — the Findings page switches to custom on every commit. Drop the `scope.mode == "all"` round-trip assertion and the misleading docstring; keep the real value as `test_typed_endpoints_print_alongside_selected_targets` |
+
+**Left alone deliberately (4).**
+
+- `test_generator_locations_use_typed_endpoints_grouped_by_channel` — **would pass unchanged** after a correctly sorted migration, and it is the only assertion in the suite pinning printed `(channel, order)` ordering. Leaving it makes it a free before/after equivalence check.
+- test_app.py L797 and L831 — both narrow an environment via `scope_text` on a later PUT and assert 200. That is exactly the save the strict branch refuses, so they are step 1's regression tests, not cosmetic. They also become legacy-payload regression tests, since the `{"mode": "all"}` literal now exercises call site 2.
+- L896, L924, L1045-1046 — incidental, pass unchanged.
+- The eight scope-less `Vulnerability(...)` constructions — no change. Seven exercise `provision` and `apply_poc_variant`, neither of which reads `scope`; the eighth does build a `Report` but is assigned an explicit scope four lines later.
+
+**New (11).** Ten in tests/test_app.py: the seven listed in step 2, plus `test_a_scope_mode_that_escapes_the_migration_still_loads`, `test_removing_one_of_several_scope_lines_still_saves`, and `test_removing_a_findings_only_location_is_still_refused`. One in tests/test_browser.py: `test_browser_scope_stranding_warning_matches_server_refusal` — the first drift guard on any scope row, guarding the row that had already drifted.
+
+---
+
+## Open questions
+
+Three remain. The verdict settled the other three — do both the client and server purges, narrow the `Literal` now with a coercion behind it, keep the migration in memory only — so those are folded into the plan above as decisions rather than questions.
+
+**1. When a Setup change strips a finding's last location in one environment, should the browser prompt about that finding's screenshots for that environment, or stay silent and leave them hidden?**
+
+Today, unchecking an app type runs `dropChannelEverywhere`, which strips the doomed target ids straight out of every finding's `scope.target_ids` without routing through `settleScopeChange` — the function that exists precisely to notice "this finding just lost its only Non-Production location and it has Non-Production screenshots", prompt, then delete those image fragments and release the orphaned evidence. Because the app-type purge bypasses it, such a finding silently keeps its screenshots and `fragment_applies` hides them from the document. Nothing is destroyed; nothing is printed either. The new `dropTargetsEverywhere` would inherit that bypass unless told otherwise.
+
+- **Option A — follow the precedent (silent, hidden-not-deleted).** The purge strips ids only. Screenshots survive, stop appearing in the report, and reappear if the tester restores the location. Cost: a tester can produce a report missing evidence they uploaded, with only the readiness panel to hint at it.
+- **Option B — route through `settleScopeChange`.** Each affected finding prompts, then its unrenderable images are deleted and unreferenced evidence released. Cost: a Setup edit touching fourteen findings can raise fourteen prompts, and confirming deletes uploaded work. It also makes the app-type path inconsistent unless changed too.
+- **Option C — silent, but surfaced.** Option A plus a count in the Setup dialog: "3 findings will keep screenshots that stop appearing in the report." No deletion, no per-finding prompt.
+
+*Recommendation: C.* It preserves the precedent's data behaviour exactly — nothing uploaded is deleted without a per-finding prompt — while ending the silence that makes it a trap.
+
+**2. Prune `location_values` for filtered-out ids?** They become unreachable keys once their target is gone — never read, never validated, harmless. Pruning is two lines and makes the shape honest; leaving them means a re-added target silently restores the tester's old override text, which is arguably a feature. *Absent an answer:* leave them.
+
+**3. Tell the tester a migration happened?** The fourteen-finding report will open one day with 56 boxes newly ticked that were previously all unticked. Nothing will be wrong, but nothing will announce it either. *Absent an answer:* stay silent, consistent with how the `test_type` migration shipped.
+
+---
+
+## What I would not do
+
+**I would not put the migration in `load_path`.** It is the obvious home — it is where the other two legacy repairs live, and it already rewrites the file. But it is not the shared hook: `import_report` and both `parse_import` branches never go through it, so the migration would miss three entry paths and the `Literal` could never be narrowed. And because `list_reports` and `list_legacy_reports` each call it once per draft on the same manager render, persisting from there rewrites every report twice per page load, spending every one-of-one backup to change one string per finding.
+
+**I would not relabel without resolving.** Setting `mode: "custom"` and keeping `target_ids` as found is one line and passes every test in the suite, because the only report on disk with non-custom scopes already has its ids filled in. But the two environment modes hold **no ids at all by construction** — relabelling one yields a locationless finding every time — and the same is true of any hand-edited or imported draft. The data that makes the shortcut look safe is data the browser wrote by accident.
+
+**I would not ship the migration before the 422 fix.** The migration is precisely what converts that gap from theoretical to routine, and a tester who loses a save with no warning and no route forward will not care which commit introduced it.
 
 ## Answers
 
+1. **Stale screenshots — option D, a fourth option the planner did not offer.** When a Setup change strips a finding's last location in an environment, **clear the `environment` field** on that finding's images for it. They then fail the existing "image requires environment" check, which blocks generation and lists them in the readiness panel, so the tester must reassign them to a surviving environment or delete them.
+
+   Verified while answering: an image with **no** environment already blocks generation and already appears in the panel. `fragment_applies` returns `True` when `environment` is falsy (`not environment or environment in affected_environments(...)`), so such an image is not skipped — it reaches the `missing` list in `generation_issues` and its client twin, both of which report `environment` as required. The gap is only the **stale** image, whose environment is set to one the finding no longer affects; `fragment_applies` hides that one silently.
+
+   This is better than the three options offered because it destroys nothing, hides nothing, and adds no new prompt — it routes the stale image into an error path that already exists on both sides of the wire. Accepted cost: one Setup edit can make several findings incomplete at once, which the tester then clears from the panel. Rejected: A and C (silent, hidden-not-deleted — the trap being fixed), and B (per-finding prompt that deletes uploaded work).
+
+2. **Prune `location_values` for filtered-out ids.** Two lines. The stored shape stops carrying keys that point at nothing, and re-adding a location gives the plain target text rather than silently resurrecting an old override.
+
+3. **Migrate silently.** No one-time notice. Consistent with how the retired `test_type` migration shipped.
+
+Settled by the Round 2 verdict and therefore not asked: do both the client and server purges (not one alone), narrow the `Literal` now with a field coercion behind it, and keep the migration in memory only.
+
 ## Agreed plan
+
+**What this delivers.** A finding with no ticked location is blocked everywhere — the Findings page, `/edit`, and generation all agree. `Scope.mode` stops being a resolution instruction; every scope carries explicit `target_ids`. Roughly a dozen per-mode branches across Python and JavaScript collapse to one, including two that had already drifted into giving different answers.
+
+**Scope boundaries.** No new endpoint, no new persisted field, no schema migration on disk. Nothing in `data/apps/` breaks: all fourteen non-custom findings already carry ids that resolve, so they migrate byte-identically in the generated document. `scripts/` and `resources/` are untouched — verified, nothing there reads `scope.mode`.
+
+### Step 1 — Fix the 422 first, both sides
+
+Ships before anything makes the strict branch universal, and is worth doing on its own merits.
+
+**Server** — [report_service.py](../../app/report_service.py): inside `reconcile_targets`, once the new target set is known, filter each finding's `target_ids` to survivors *before* the reach check, then strand only on `reached_before and not reaches_now`. The `mode == "custom"` test and the trailing non-custom block collapse into one path.
+
+**Client** — [app.js](../../app/web/static/app.js): extract **only the per-finding half** of `dropChannelEverywhere` into `dropTargetsEverywhere(targetIds)` — filter `scope.target_ids`, **prune the matching `location_values`** (Answer 2), and **clear `environment` on images whose environment loses its last location** (Answer 1). It is not a straight extraction: `dropChannelEverywhere` also blanks `scope_text`, prunes `custom_locations`, and removes targets from `report.scope_targets`; those three stay where they are, because the environment path has the server rebuild `scope_targets` from `scope_text` × `tested_environments` and the scope-text path has the textarea as its source. Call it from the environment checkbox after `confirmScopeLoss` and from the scope-text commit after `confirmScopeTextLoss`. Change `findingsStrandedBy` and `scopeTextStrandedFindings` to count findings losing **any** selection, distinguishing those left with none, and reword the three dialogs to match.
+
+- **Tests:** `test_removing_one_of_several_scope_lines_still_saves`; `test_removing_a_findings_only_location_is_still_refused`; `test_images_lose_their_environment_when_their_last_location_goes`; `test_browser_scope_stranding_warning_matches_server_refusal`. The existing tests at test_app.py L797 and L831 are already this step's regression guard — both narrow an environment via `scope_text` and assert 200, exactly the save the strict branch refuses. Leave them, add a one-line comment saying why.
+- **Invariant:** a save the client did not warn about must not be refused. Nothing uploaded is deleted without a per-finding prompt.
+
+### Step 2 — Add `normalise_scope_modes` and its three call sites
+
+**Contract: mutates in place, returns nothing.** Written against a pure function, call sites 2 and 3 would be no-ops and call site 3 would persist the un-migrated draft. In-place is safe because `load_path` writes **before** it validates, so a mutation there cannot reach disk.
+
+**Order: resolve → filter → sort → relabel.** No union step — for `mode: "all"` it is a no-op in every reachable case, and for the two environment modes it is a genuine widening that would add an environment, an image slot, and a screenshot demand.
+
+1. **Resolve** — `all` → every target id; `all_production` / `all_non_production` → that environment's ids.
+2. **Filter** — keep only ids present in the mapping's own `scope_targets`.
+3. **Sort** — by `(CHANNELS.index(channel), order)`. Write `CHANNELS.index(...)` in [models.py](../../app/models.py); `docx_report.CHANNEL_ORDER` is a `list()` **copy**, and importing it back would invert the dependency.
+4. **Relabel** — `mode = "custom"`, leaving `custom_locations` and `location_values` alone.
+
+**Shape tolerance:** if `scope_targets` is not a list of dicts, return untouched. Skip any non-dict vulnerability or scope, and any mode outside the three retired tokens. Tolerate an unrecognised channel and a non-integer `order` rather than raising.
+
+**Call sites:** (1) inside `normalise_app_types` — renamed `normalise_legacy_shapes` — between the `isinstance(data, dict)` return and the `engagement` guard; (2) [main.py](../../app/main.py), on `payload`, immediately **after** `reconcile_targets`, which step 1 makes possible and which removes the "first Setup save" risk entirely; (3) [workspace.py](../../app/workspace.py), on `draft`, before `Report.model_validate` in `repair_duplicate_fragment_ids`.
+
+- **Tests, all in [tests/test_app.py](../../tests/test_app.py)** alongside the existing legacy-migration tests — **not** test_storage.py, which holds one unrelated test: `test_a_legacy_all_scope_loads_as_explicit_custom_targets` (built **synthetically**, since the empty-`target_ids` backup rolled over); `test_a_legacy_scope_drops_target_ids_that_no_longer_exist`; `test_migrated_locations_print_exactly_as_they_did_before`; `test_the_environment_modes_freeze_to_the_targets_they_resolved_to`; `test_a_repaired_draft_keeps_its_migrated_scope_on_disk`; `test_an_imported_bundle_arrives_with_custom_scopes`; `test_a_setup_save_that_adds_a_line_includes_it_in_a_migrated_finding`.
+- **Invariant:** purely additive — every existing test passes, and no draft in `data/apps` moves to the legacy/invalid list.
+
+### Step 3 — Flip the default, narrow the `Literal`, add the coercion
+
+`mode: Literal["custom"] = "custom"` plus a `field_validator("mode", mode="before")` mapping exactly the three retired tokens to `"custom"`. Anything else is still rejected by the `Literal`, so this adds no leniency. **Keep the `mode` field** — the migration must see a retired token to know it should resolve, and `extra="ignore"` would drop that signal silently.
+
+Record in the code comment: the field validator does **not** run when `mode` is absent (the default supplies it), and does **not** run on `model_copy`, which `Workspace.duplicate` uses — covered only because its source came through `load`.
+
+- **Test:** `test_a_scope_mode_that_escapes_the_migration_still_loads`, asserting both the coercion and that an absent `mode` lands on the default.
+- **Invariant:** `validate_references` passes for every draft in `data/apps`.
+
+### Step 4 — Delete the dead branches, both sides
+
+[report_service.py](../../app/report_service.py), [docx_report.py](../../app/docx_report.py), [app.js](../../app/web/static/app.js). Also delete the Findings-page `target_ids` backfill and the `renderFindings` `selectedTargets` ternary — the two halves of the display/rule disagreement being fixed.
+
+Delete rather than leave unreachable, because **these are the branches that already drifted**: `_finding_locations`' non-custom branch sorts where its custom branch does not, and `scopeReaches`' non-custom branches ignore the `coverage` argument its custom branch respects. Unreachable code carrying a second, different answer is the drift mechanism, not a safety net. Dropping `scopeHasLocation`'s `mode === "custom" &&` guard brings it into line with Python, which has no such guard.
+
+- **Invariant:** a finding's ticked boxes and its completeness verdict agree.
+
+### Step 5 — Documentation
+
+[docs/DATA_MAP.md](../DATA_MAP.md) sections 6, 7, 8, 12, 13 and the "Last verified" line. [docs/FORM_DEPENDENCIES.md](../FORM_DEPENDENCIES.md): the `scope_targets → scope.target_ids/location_values` row stops being **one-way** once both purges exist; rows 8 and 9 need their refusal wording updated.
+
+### Test changes beyond the new ones
+
+- **Deleted (1):** `test_non_custom_scope_modes_resolve_report_targets`.
+- **Rewritten (3):** the `Scope(mode="all")` stanza in `test_affected_channels_resolve_the_proof_of_concept_variants` — **not a two-line deletion**, since the next assertion runs against the scope that stanza installs and would silently resolve web-only; `test_coverage_change_that_strands_a_mode_scoped_finding_is_rejected`, retargeted at the typed-location-only finding and carrying **all three** of its stanzas; `test_typed_endpoints_reach_the_report_even_when_the_finding_covers_everything`, whose premise is already false.
+- **Left alone deliberately:** `test_generator_locations_use_typed_endpoints_grouped_by_channel` passes unchanged after a correctly sorted migration and is the only assertion pinning printed `(channel, order)` order — a free before/after equivalence check. L797 and L831 are step 1's regression tests. L896, L924, L1045-1046 are incidental. The eight scope-less `Vulnerability(...)` constructions are unaffected.
+
+### Deliberately not done
+
+- **No per-finding prompt and no deletion of screenshots** (Answer 1) — the environment is cleared instead, surfacing them as errors.
+- **No one-time migration notice** (Answer 3).
+- **The migration is not persisted from `load_path`** — `list_reports` and `list_legacy_reports` each call it once per draft on the same manager render, so persisting there would rewrite every report twice per page load and spend every one-of-one backup to change one string per finding. On-disk bytes keep `mode: "all"` until the next ordinary save; record that lag as a sharp edge.
+- **`Scope.mode` is not deleted** — only narrowed. Removing the field belongs in a later change, once nothing on disk carries a retired token.

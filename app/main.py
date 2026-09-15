@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import ValidationError
 
-from app.models import Content, EvidenceItem, LibraryRef, Report, Scope, Vulnerability
+from app.models import Content, EvidenceItem, LibraryRef, Report, Scope, Vulnerability, normalise_scope_modes
 from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, render_report_docx
@@ -672,6 +672,9 @@ async def save_report(report_id: str, request: Request):
         )
     payload["report_id"] = report_id
     payload["app_id"] = prior.app_id
+    # After reconcile_targets, so a legacy finding resolves against the targets this save just
+    # wrote rather than the ones it replaced.
+    normalise_scope_modes(payload)
     try:
         report = await run_in_threadpool(Report.model_validate, payload)
     except ValidationError as error:

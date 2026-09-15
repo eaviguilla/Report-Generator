@@ -13,6 +13,7 @@ Channel = Literal["web", "api", "mobile"]
 # The one canonical app-type order. Lives here because docx_report and report_service both import
 # from this module, so putting it anywhere else would invert the dependency direction.
 CHANNELS: tuple[Channel, ...] = ("web", "api", "mobile")
+RETIRED_SCOPE_MODES = ("all", "all_production", "all_non_production")
 # The retired compound token set, kept only to read drafts written before app types became a list.
 LEGACY_TEST_TYPE_CHANNELS: dict[str, list[str]] = {"web": ["web"], "api": ["api"], "mobile": ["mobile"], "web_api": ["web", "api"]}
 # Only labels the Proof of Concept evidence groups; it never renames the environment itself.
@@ -128,11 +129,23 @@ class Content(BaseModel):
 
 
 class Scope(BaseModel):
-    mode: Literal["all", "all_production", "all_non_production", "custom"] = "all"
+    # One legal value: a finding's locations are always the explicit targets it selected. The field
+    # survives so normalise_scope_modes can still see a retired token and resolve it; extra="ignore"
+    # would drop that signal and leave the finding with no locations at all.
+    mode: Literal["custom"] = "custom"
     target_ids: list[str] = Field(default_factory=list)
     location_values: dict[str, str] = Field(default_factory=dict)
     # Keyed environment then channel, mirroring scope_text, so a typed-in location still knows its app type.
     custom_locations: dict[Environment, dict[Channel, list[str]]] = Field(default_factory=dict)
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def accept_retired_modes(cls, value):
+        """Last resort for a scope that reached validation without passing normalise_scope_modes --
+        a bare Scope.model_validate, or an undo replay. Coercing leaves the finding visibly
+        incomplete; raising would demote the whole draft to the manager's legacy list instead.
+        Note this never runs when mode is absent: the default supplies "custom" there."""
+        return "custom" if value in RETIRED_SCOPE_MODES else value
 
 
 class ScopeTarget(BaseModel):
@@ -233,6 +246,43 @@ def _migrate_poc_variant(vulnerability):
     return migrated
 
 
+def normalise_scope_modes(report_mapping) -> None:
+    """Freeze a retired scope mode into the explicit target IDs it resolved to, **in place**.
+
+    Mutating rather than returning a copy is the contract: two of the three call sites hold the
+    mapping that later reaches disk, so a fresh dict would be silently discarded. Resolution order
+    matches docx_report's non-custom branch, so a migrated finding prints the locations it always
+    printed. Resolving from scope_targets is also what filters out stale IDs, which were never
+    validated while the mode was not custom.
+    """
+    if not isinstance(report_mapping, dict):
+        return
+    targets = report_mapping.get("scope_targets")
+    vulnerabilities = report_mapping.get("vulnerabilities")
+    # ScopeTarget instances reach here from direct construction; treating them as absent would
+    # resolve to nothing and blank the finding instead of leaving it alone.
+    if not isinstance(targets, list) or not isinstance(vulnerabilities, list):
+        return
+    if not all(isinstance(target, dict) for target in targets):
+        return
+
+    def sort_key(target):
+        channel = target.get("channel")
+        order = target.get("order")
+        return (CHANNELS.index(channel) if channel in CHANNELS else len(CHANNELS), order if isinstance(order, int) else 0)
+
+    ordered = sorted((target for target in targets if target.get("target_id")), key=sort_key)
+    for vulnerability in vulnerabilities:
+        if not isinstance(vulnerability, dict):
+            continue
+        scope = vulnerability.get("scope")
+        if not isinstance(scope, dict) or scope.get("mode") not in RETIRED_SCOPE_MODES:
+            continue
+        environment = {"all_production": "production", "all_non_production": "non_production"}.get(scope["mode"])
+        scope["target_ids"] = [target["target_id"] for target in ordered if environment is None or target.get("environment") == environment]
+        scope["mode"] = "custom"
+
+
 class EvidenceItem(BaseModel):
     file: str
     original_name: str = ""
@@ -265,11 +315,14 @@ class Report(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def normalise_app_types(cls, data):
-        """Migrate the retired test_type token here rather than in load_path, because import_report
-        and parse_import build a Report without ever going through it."""
+    def normalise_legacy_shapes(cls, data):
+        """Migrate retired tokens here rather than in load_path, because import_report and
+        parse_import build a Report without ever going through it."""
         if not isinstance(data, dict):
             return data
+        # Above the engagement guard: a caller passing a pre-built Engagement still needs its scopes
+        # migrated, and this is the only hook every entry path shares.
+        normalise_scope_modes(data)
         engagement = data.get("engagement")
         if engagement is not None and not isinstance(engagement, dict):
             return data

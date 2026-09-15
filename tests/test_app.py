@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from app import main
 from app.docx_report import _finding_locations, _metadata, generation_issues
 from app.library import Library
-from app.report_service import affected_channels, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
+from app.report_service import affected_channels, affected_environments, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
 from app.models import ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, TestWindow, Vulnerability, resolve_tested_channels
@@ -291,6 +291,66 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(migrated.engagement.tested_channels, ["web", "mobile"])
         self.assertEqual(len(migrated.vulnerabilities[0].contents[0].fragments[0].items), 1)
 
+    def test_a_legacy_all_scope_loads_as_explicit_custom_targets(self) -> None:
+        """A retired mode carrying no IDs resolved its locations on every read. Relabelling it
+        without resolving first would leave the finding with no location at all."""
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        draft["scope_targets"] = [
+            {"target_id": "tgt_api", "environment": "production", "channel": "api", "value": "POST /v1/pay", "order": 0},
+            {"target_id": "tgt_web", "environment": "production", "channel": "web", "value": "https://prod.example.test", "order": 0},
+        ]
+        draft["vulnerabilities"] = [{"uid": "v_legacy", "title": "Legacy", "scope": {"mode": "all", "target_ids": []}}]
+        atomic_write_json(path, draft)
+
+        scope = main.workspace.load(report_id).vulnerabilities[0].scope
+        self.assertEqual(scope.mode, "custom")
+        # Channel order, not storage order, so the generated document prints what it always printed.
+        self.assertEqual(scope.target_ids, ["tgt_web", "tgt_api"])
+
+    def test_a_legacy_scope_drops_target_ids_that_no_longer_exist(self) -> None:
+        """target_ids were never validated while the mode was not custom, so a stale one could
+        accumulate. Carrying it into a custom scope would demote the whole draft to the legacy list."""
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        draft["scope_targets"] = [{"target_id": "tgt_live", "environment": "production", "channel": "web", "value": "https://prod.example.test", "order": 0}]
+        draft["vulnerabilities"] = [{"uid": "v_stale", "title": "Stale", "scope": {"mode": "all", "target_ids": ["tgt_gone"]}}]
+        atomic_write_json(path, draft)
+
+        scope = main.workspace.load(report_id).vulnerabilities[0].scope
+        self.assertEqual(scope.target_ids, ["tgt_live"])
+
+    def test_a_scope_mode_that_escapes_the_migration_still_loads(self) -> None:
+        """The field coercion is the net under the report-level migration. It degrades to a visibly
+        incomplete finding rather than a ValidationError, which would hide the report entirely."""
+        self.assertEqual(Scope.model_validate({"mode": "all"}).mode, "custom")
+        # The coercion never runs when mode is absent; the default supplies it there.
+        self.assertEqual(Scope().mode, "custom")
+
+    def test_a_repaired_draft_keeps_its_migrated_scope_on_disk(self) -> None:
+        """repair_duplicate_fragment_ids validates and then persists the raw draft, so a migration
+        living only in the model would be written straight back out."""
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        draft["scope_targets"] = [{"target_id": "tgt_one", "environment": "production", "channel": "web", "value": "https://prod.example.test", "order": 0}]
+        draft["vulnerabilities"] = [{
+            "uid": "v_dupe", "title": "Dupe", "scope": {"mode": "all", "target_ids": []},
+            "contents": [{"type": "description", "fragments": [
+                {"frag_id": "f_same", "type": "paragraph", "runs": []},
+                {"frag_id": "f_same", "type": "paragraph", "runs": []},
+            ]}],
+        }]
+        atomic_write_json(path, draft)
+
+        main.workspace.repair_duplicate_fragment_ids(report_id)
+
+        written = read_json(path)["vulnerabilities"][0]["scope"]
+        self.assertEqual(written["mode"], "custom")
+        self.assertEqual(written["target_ids"], ["tgt_one"])
+
     def test_the_retired_test_type_token_migrates_on_every_entry_path(self) -> None:
         report_id = self.new_report()
         path = main.workspace.find_path(report_id)
@@ -398,9 +458,8 @@ class ReportApiTests(unittest.TestCase):
         finding.scope = Scope(mode="custom", custom_locations={"production": {"web": ["https://typed.example.test"]}})
         self.assertEqual(applicable_poc_variants(finding, report, entry), ["web"])
 
-        # No draft on disk exercises the non-custom modes, so they are covered here deliberately.
-        finding.scope = Scope(mode="all")
-        self.assertEqual(applicable_poc_variants(finding, report, entry), ["web", "api"])
+        # Both app types selected, so the next assertion has a two-channel finding to narrow.
+        finding.scope = Scope(mode="custom", target_ids=["tgt_web", "tgt_api"])
 
         # An app type the entry has no steps for is never offered.
         self.assertEqual(applicable_poc_variants(finding, report, {"api": [1]}), ["api"])
@@ -537,7 +596,9 @@ class ReportApiTests(unittest.TestCase):
             report.engagement.report_type = report_type
             self.assertEqual(main.report_export_filename(report), f"Asia - Payments Portal APAC - {label} 2026.zip")
 
-    def test_non_custom_scope_modes_resolve_report_targets(self) -> None:
+    def test_the_environment_modes_freeze_to_the_targets_they_resolved_to(self) -> None:
+        """The retired modes re-resolved against the report's targets on every read, so a finding
+        could silently widen when Setup grew. They now freeze to the IDs they stood for."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
@@ -565,6 +626,13 @@ class ReportApiTests(unittest.TestCase):
         } for mode in ("all", "all_production", "all_non_production")]
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
         self.assertEqual(self.client.get(f"/reports/{report_id}/edit").status_code, 200)
+
+        stored = main.workspace.load(report_id)
+        by_environment = {target.environment: target.target_id for target in stored.scope_targets}
+        resolved = {finding.title: (finding.scope.mode, finding.scope.target_ids) for finding in stored.vulnerabilities}
+        self.assertEqual(resolved["all"], ("custom", [by_environment["production"], by_environment["non_production"]]))
+        self.assertEqual(resolved["all_production"], ("custom", [by_environment["production"]]))
+        self.assertEqual(resolved["all_non_production"], ("custom", [by_environment["non_production"]]))
 
     def test_mobile_scope_uses_character_allowlist_instead_of_url_validation(self) -> None:
         report_id = self.new_report()
@@ -693,9 +761,9 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 422)
         self.assertIn("Scoped finding", rejected.json()["detail"])
 
-    def test_coverage_change_that_strands_a_mode_scoped_finding_is_rejected(self) -> None:
-        """A finding scoped to "all non-production" holds no target IDs, so only a
-        before-and-after location check can notice that Setup just stranded it."""
+    def test_coverage_change_that_strands_a_finding_is_rejected(self) -> None:
+        """Losing every location is the one outcome a save still refuses. Losing some of several is
+        purged instead, so the refusal has to survive only for the finding left with none."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({"app_name": "Coverage Test", "ci_number": "CI-COVER", "tested_environments": ["production", "non_production"]})
@@ -721,6 +789,61 @@ class ReportApiTests(unittest.TestCase):
         widened = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         widened["scope_text"] = {"production": {"web": "https://prod.example.test"}, "non_production": {"web": "https://uat.example.test\nhttps://staging.example.test"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=widened).status_code, 200)
+
+    def test_removing_one_of_several_scope_lines_still_saves(self) -> None:
+        """A finding holding four locations used to be refused outright when any one of them went,
+        with no dialog first and no way forward but unticking it by hand on every finding."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Partial", "ci_number": "CI-PART", "tested_channels": ["web"], "tested_environments": ["production"]})
+        report["scope_text"] = {"production": {"web": "https://one.example.test\nhttps://two.example.test\nhttps://three.example.test"}}
+        saved = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(saved.status_code, 200)
+
+        current = saved.json()["report"]
+        all_ids = [target["target_id"] for target in current["scope_targets"]]
+        current["vulnerabilities"] = [{
+            "uid": "v_many", "title": "Many locations", "likelihood": "low", "impact": "low", "severity": "low",
+            "status": "open_new", "scope": {"mode": "custom", "target_ids": all_ids, "location_values": {}, "custom_locations": {}},
+        }]
+        saved = self.client.put(f"/reports/{report_id}", json=current)
+        self.assertEqual(saved.status_code, 200)
+
+        narrowed = saved.json()["report"]
+        narrowed["scope_text"] = {"production": {"web": "https://one.example.test\nhttps://two.example.test"}}
+        accepted = self.client.put(f"/reports/{report_id}", json=narrowed)
+        self.assertEqual(accepted.status_code, 200)
+
+        stored = main.workspace.load(report_id)
+        surviving = {target.target_id for target in stored.scope_targets}
+        self.assertEqual(len(surviving), 2)
+        # The dropped ID is gone rather than left dangling, which validate_references would reject.
+        self.assertEqual(set(stored.vulnerabilities[0].scope.target_ids), surviving)
+
+    def test_removing_a_findings_only_location_is_still_refused(self) -> None:
+        """The relaxation must not reach the case it was never about: a finding left with nothing."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Only", "ci_number": "CI-ONLY", "tested_channels": ["web"], "tested_environments": ["production"]})
+        report["scope_text"] = {"production": {"web": "https://only.example.test\nhttps://other.example.test"}}
+        saved = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(saved.status_code, 200)
+
+        current = saved.json()["report"]
+        only_id = next(target["target_id"] for target in current["scope_targets"] if target["value"] == "https://only.example.test")
+        current["vulnerabilities"] = [{
+            "uid": "v_one", "title": "Single location", "likelihood": "low", "impact": "low", "severity": "low",
+            "status": "open_new", "scope": {"mode": "custom", "target_ids": [only_id], "location_values": {}, "custom_locations": {}},
+        }]
+        saved = self.client.put(f"/reports/{report_id}", json=current)
+        self.assertEqual(saved.status_code, 200)
+
+        narrowed = saved.json()["report"]
+        narrowed["scope_text"] = {"production": {"web": "https://other.example.test"}}
+        rejected = self.client.put(f"/reports/{report_id}", json=narrowed)
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["error"]["code"], "referenced_scope_removed")
+        self.assertIn("Single location", rejected.json()["detail"])
 
     def test_narrowing_the_surface_drops_typed_locations_for_removed_channels(self) -> None:
         """A typed API endpoint left on a web-only engagement would print a location that is out of scope."""
@@ -990,9 +1113,8 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual([metadata["non-prod-start"], metadata["non-prod-end"], metadata["non-prod-time"]], ["N/A", "N/A", "N/A"])
         self.assertIn("non_production", stored.engagement.test_windows, "the window must survive for a re-check")
 
-    def test_typed_endpoints_reach_the_report_even_when_the_finding_covers_everything(self) -> None:
-        """The Findings page labels them "additional", and writes them without switching the
-        scope to custom, so an all-scoped finding must still print what the tester typed."""
+    def test_typed_endpoints_print_alongside_selected_targets(self) -> None:
+        """A typed-in endpoint is "additional" to whatever the finding selected, so both print."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({"app_name": "Additional", "ci_number": "CI-ADD", "tested_channels": ["web"], "tested_environments": ["production"]})
@@ -1000,18 +1122,103 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
 
         current = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        target_id = current["scope_targets"][0]["target_id"]
         current["vulnerabilities"] = [{
             "uid": "v_all", "title": "Everywhere", "likelihood": "low", "impact": "low", "severity": "low",
-            "scope": {"mode": "all", "target_ids": [], "location_values": {},
+            "scope": {"mode": "custom", "target_ids": [target_id], "location_values": {},
                       "custom_locations": {"production": {"web": ["https://main.example.test/admin"]}}},
         }]
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
         stored = main.workspace.load(report_id)
-        self.assertEqual(stored.vulnerabilities[0].scope.mode, "all")
         self.assertEqual(
             _finding_locations(stored, stored.vulnerabilities[0])["production"],
             ["https://main.example.test", "https://main.example.test/admin"],
         )
+
+    def _report_with_one_target(self, name: str, channels=("web",), environments=("production",)) -> tuple[str, str]:
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({
+            "app_name": name, "ci_number": "CI-LOC", "segment": "JH", "report_type": "annual_pentest",
+            "tester": "QA Tester", "tested_channels": list(channels), "tested_environments": list(environments),
+            "test_windows": {environment: {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Any time"} for environment in environments},
+        })
+        report["scope_text"] = {
+            environment: {channel: f"https://{channel}.{environment}.test" for channel in channels}
+            for environment in environments
+        }
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+        return report_id, main.workspace.load(report_id).scope_targets[0].target_id
+
+    def _located_finding(self, custom=None, target_ids=None) -> dict:
+        return {
+            "uid": "v_loc", "title": "Located finding", "likelihood": "low", "impact": "low", "severity": "low",
+            "status": "open_new",
+            "scope": {"mode": "custom", "target_ids": target_ids or [], "location_values": {}, "custom_locations": custom or {}},
+            "contents": [
+                {"type": "description", "fragments": [{"frag_id": "f_d", "type": "paragraph", "runs": [{"text": "d"}]}]},
+                {"type": "recommended_remediation", "fragments": [{"frag_id": "f_r", "type": "paragraph", "runs": [{"text": "r"}]}]},
+                {"type": "proof_of_concept", "fragments": [{"frag_id": "f_l", "type": "numbered_list", "items": [{"runs": [{"text": "s"}]}]}]},
+            ],
+        }
+
+    def test_a_commented_additional_location_is_a_note_not_a_location(self) -> None:
+        """The scope textarea treats a "#" line as a note. The additional-locations box is the same
+        box to a tester, so a note there must not stand in for an affected location or print as one."""
+        report_id, _ = self._report_with_one_target("Noted")
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [self._located_finding(custom={"production": {"web": ["# ask the app owner which host"]}})]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        stored = main.workspace.load(report_id)
+        finding = stored.vulnerabilities[0]
+        self.assertFalse(scope_has_location(finding, stored), "a note is not a location")
+        self.assertEqual(_finding_locations(stored, finding)["production"], [], "a note must not print as a location")
+        self.assertEqual(
+            self.client.get(f"/reports/{report_id}/edit", follow_redirects=False).status_code,
+            303,
+            "the Content page is closed to a finding whose only location is a note",
+        )
+        # The note itself is kept, so the tester's reminder survives the round trip.
+        self.assertEqual(finding.scope.custom_locations["production"]["web"], ["# ask the app owner which host"])
+
+    def test_additional_locations_collapse_repeats_and_stray_spacing(self) -> None:
+        """Scope targets already dedupe and trim. The same place typed twice in the other box would
+        otherwise print twice in the document."""
+        report_id, _ = self._report_with_one_target("Repeats")
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [self._located_finding(
+            custom={"production": {"web": ["https://dupe.test", "https://dupe.test", "  https://dupe.test  ", ""]}})]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        stored = main.workspace.load(report_id)
+        self.assertEqual(_finding_locations(stored, stored.vulnerabilities[0])["production"], ["https://dupe.test"])
+
+    def test_an_additional_location_outside_the_coverage_is_not_a_location(self) -> None:
+        """Only Setup decides what was tested. A line left under an environment or app type the
+        engagement no longer covers must not carry a finding into the Content page."""
+        report_id, _ = self._report_with_one_target("Uncovered")
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [self._located_finding(custom={"non_production": {"web": ["https://uat.example.test"]}})]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        stored = main.workspace.load(report_id)
+        finding = stored.vulnerabilities[0]
+        self.assertEqual(affected_environments(finding, stored), [])
+        self.assertFalse(scope_has_location(finding, stored))
+        self.assertEqual(self.client.get(f"/reports/{report_id}/edit", follow_redirects=False).status_code, 303)
+
+    def test_an_additional_location_alone_opens_the_content_page(self) -> None:
+        """The counterpart to the three above: a typed endpoint really is an affected location, and
+        a finding that has only one must not be held back."""
+        report_id, _ = self._report_with_one_target("Typed only")
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [self._located_finding(custom={"production": {"web": ["https://web.production.test/admin"]}})]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        stored = main.workspace.load(report_id)
+        self.assertTrue(scope_has_location(stored.vulnerabilities[0], stored))
+        self.assertEqual(self.client.get(f"/reports/{report_id}/edit", follow_redirects=False).status_code, 200)
 
     def test_repeated_scope_lines_collapse_and_stay_saveable(self) -> None:
         """Target IDs are reused by value, so a pasted duplicate line once made every

@@ -13,7 +13,7 @@ from typing import Iterator
 
 from pydantic import ValidationError
 
-from app.models import Engagement, FolderHint, Report
+from app.models import Engagement, FolderHint, Report, normalise_scope_modes
 from .report_service import REPORT_TYPE_LABELS, RESOLVED_REMEDIATION
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 
@@ -235,6 +235,8 @@ class Workspace:
                         fragment_ids.add(fragment["frag_id"])
             if not repaired:
                 raise ValueError("This draft has no duplicate fragment IDs to repair")
+            # This method persists the raw draft, so the model's own migration would be thrown away.
+            normalise_scope_modes(draft)
             Report.model_validate(draft)
             atomic_write_json(path, draft)
             return self.load(report_id)

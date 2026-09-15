@@ -31,10 +31,19 @@
     });
     return [...groups.values()];
   };
+  // Drawn rather than lettered, so four actions per row stop shouting in red and blue.
+  const ACTION_PATHS = {
+    rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    duplicate: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+    export: '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+    delete: '<path d="M4 6h16"/><path d="M9 6V4h6v2"/><path d="M6 6l1 14h10l1-14"/>',
+    save: '<path d="m5 13 4 4L19 7"/>',
+  };
+  const actionIcon = key => `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ACTION_PATHS[key]}</svg>`;
   const row = report => {
     const reportId = escapeHtml(report.report_id);
     const reportUrlId = encodeURIComponent(report.report_id);
-    return `<article class="report-row"><a class="report-name" href="/reports/${reportUrlId}/setup"><b>${escapeHtml(report.app_name)}</b><small>${reportId}</small></a><time datetime="${escapeHtml(report.saved_at)}">${formatDate(report.saved_at)}</time><span>${report.finding_count}</span><div class="report-actions"><button type="button" data-rename="${reportId}" data-name="${escapeHtml(report.app_name)}" title="Rename application">Rename</button><button type="button" data-duplicate="${reportId}" title="Duplicate report">Duplicate</button><a href="/reports/${reportUrlId}/export" title="Export ZIP">Export</a><button type="button" data-delete="${reportId}" title="Delete report">Delete</button></div></article>`;
+    return `<article class="report-row"><a class="report-name" href="/reports/${reportUrlId}/setup"><b>${escapeHtml(report.app_name)}</b><small>${reportId}</small></a><time datetime="${escapeHtml(report.saved_at)}">${formatDate(report.saved_at)}</time><span class="report-findings">${report.finding_count}</span><div class="report-actions"><button type="button" data-rename="${reportId}" data-name="${escapeHtml(report.app_name)}" aria-label="Rename" title="Rename application">${actionIcon("rename")}</button><button type="button" data-duplicate="${reportId}" aria-label="Duplicate" title="Duplicate report">${actionIcon("duplicate")}</button><a href="/reports/${reportUrlId}/export" aria-label="Export" title="Export ZIP">${actionIcon("export")}</a><button class="report-delete" type="button" data-delete="${reportId}" aria-label="Delete" title="Delete report">${actionIcon("delete")}</button></div></article>`;
   };
   const load = async () => {
     const [response, legacyResponse] = await Promise.all([fetch("/reports"), fetch("/reports/legacy")]);
@@ -42,7 +51,7 @@
     if (!legacyResponse.ok) throw await responseError(legacyResponse, "list_legacy_reports", "Unable to load legacy reports");
     const [reports, legacy] = await Promise.all([response.json(), legacyResponse.json()]);
     const groups = groupReportsByFolder(reports).sort((left, right) => (left[0].app_folder || "Unassigned").localeCompare(right[0].app_folder || "Unassigned"));
-    rows.innerHTML = groups.length ? groups.map(group => { const folder = group[0].app_folder || "Unassigned"; return `<details class="app-group" data-app-name="${escapeHtml(folder)}"${openAppFolders.has(folder) ? " open" : ""}><summary><span class="app-group-name">${escapeHtml(folder)}</span><span>${group.length} report${group.length === 1 ? "" : "s"}</span></summary><div class="app-group-columns"><span>Report</span><span>Last saved</span><span>Findings</span><span aria-label="Actions"></span></div><div class="app-group-rows">${group.map(row).join("")}</div></details>`; }).join("") : '<div class="empty-reports">No reports yet.</div>';
+    rows.innerHTML = groups.length ? groups.map(group => { const folder = group[0].app_folder || "Unassigned"; return `<details class="app-group" data-app-name="${escapeHtml(folder)}"${openAppFolders.has(folder) ? " open" : ""}><summary><span class="app-caret" aria-hidden="true"></span><span class="app-group-name">${escapeHtml(folder)}</span><span class="app-group-count">${group.length}</span></summary><div class="app-group-body"><div class="app-group-columns"><span>Report</span><span>Last saved</span><span>Findings</span><span aria-label="Actions"></span></div><div class="app-group-rows">${group.map(row).join("")}</div></div></details>`; }).join("") : '<div class="empty-reports">No reports yet.</div>';
     rows.querySelectorAll(".app-group").forEach(group => group.addEventListener("toggle", () => {
       if (group.open) openAppFolders.add(group.dataset.appName);
       else openAppFolders.delete(group.dataset.appName);
@@ -86,7 +95,10 @@
         };
         currentName.replaceWith(input);
         button.dataset.editing = "true";
-        button.textContent = "Save";
+        // The accessible name lives on aria-label now, so the icon alone would keep announcing "Rename".
+        button.setAttribute("aria-label", "Save");
+        button.title = "Save application name";
+        button.innerHTML = actionIcon("save");
         input.focus();
         input.select();
         return;

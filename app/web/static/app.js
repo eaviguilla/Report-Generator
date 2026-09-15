@@ -556,8 +556,48 @@
     notice.hidden = !messages.length;
     notice.textContent = messages.length ? `${messages.join(". ")}.` : "";
   };
+  // Each Setup card reports its own state on the right of its header strip, the way a Content
+  // section reports its fragment count.
+  const setupSectionSummary = section => {
+    if (section.querySelector("#test-windows")) {
+      const chosen = [...section.querySelectorAll('#test-windows input[type="checkbox"]')].filter(box => box.checked).length;
+      return chosen ? `${chosen} selected` : "none selected";
+    }
+    if (section.querySelector("#test-accounts")) {
+      const rows = section.querySelectorAll("#test-accounts tr").length;
+      return `${rows} account${rows === 1 ? "" : "s"}`;
+    }
+    if (section.querySelector(".limitations-field")) {
+      return section.querySelector("textarea")?.value.trim() ? "set" : "empty";
+    }
+    if (section.querySelector("#scope-grid")) {
+      const targets = [...section.querySelectorAll("#scope-grid textarea")]
+        .flatMap(input => input.value.split("\n"))
+        .filter(line => line.trim() && !line.trimStart().startsWith("#")).length;
+      return `${targets} target${targets === 1 ? "" : "s"}`;
+    }
+    const fields = [...section.querySelectorAll(".fields input, .fields select")];
+    return fields.length ? `${fields.filter(field => field.value.trim()).length} of ${fields.length}` : "";
+  };
+  const updateSetupSectionSummaries = () => {
+    if (root.dataset.step !== "setup") return;
+    root.querySelectorAll(":scope > section").forEach(section => {
+      const strip = section.querySelector(":scope > .scope-heading") || section.querySelector(":scope > h2");
+      if (!strip) return;
+      let count = strip.querySelector(".section-count");
+      if (!count) {
+        count = document.createElement("small");
+        count.className = "section-count";
+        strip.append(count);
+      }
+      count.textContent = setupSectionSummary(section);
+    });
+  };
   root.addEventListener("input", updateSetupValidationNotice);
   root.addEventListener("change", updateSetupValidationNotice);
+  root.addEventListener("input", updateSetupSectionSummaries);
+  root.addEventListener("change", updateSetupSectionSummaries);
+  document.addEventListener("reportchange", updateSetupSectionSummaries);
   const routeGate = new URLSearchParams(window.location.search).get("incomplete");
   if (routeGate === "setup") {
     const notice = document.querySelector("#setup-validation-note");
@@ -1444,6 +1484,16 @@
       const summary = document.querySelector("#finding-summary");
       const note = document.querySelector("#finding-validation-note");
       if (!summary) return;
+      const heading = document.querySelector('#setup[data-step="findings"] .section-title h1');
+      if (heading) {
+        let total = heading.querySelector(".nav-count");
+        if (!total) {
+          total = document.createElement("span");
+          total.className = "nav-count";
+          heading.append(total);
+        }
+        total.textContent = report.vulnerabilities.length;
+      }
       const counts = Object.fromEntries(severity.map(level => [level, 0]));
       report.vulnerabilities.forEach(finding => { if (counts[finding.severity] !== undefined) counts[finding.severity] += 1; });
       summary.innerHTML = `Finding Summary: ${severity.map(level => `<b class="summary-${level}">${counts[level]} ${level}</b>`).join("")}`;
@@ -2146,7 +2196,7 @@
   }
   // Renders one content fragment with its type-specific editing controls.
   function renderFragment(fragment, content, rerender, finding) {
-    const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger" type="button">Delete</button></div>`;
+    const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger fragment-delete" type="button" aria-label="Delete fragment" title="Delete">&#215;</button></div>`;
     const removeButton = card.querySelector(".danger");
     const blockedReason = deletionBlockedReason(fragment, content, finding);
     if (blockedReason) {
@@ -2424,8 +2474,25 @@
         const proof = finding.contents.find(content => content.type === "proof_of_concept");
         const images = (proof?.fragments || []).filter(fragment => fragment.type === "image");
         const missingEvidence = affectedEnvironments(finding).filter(environment => !images.some(image => image.environment === environment && image.evidence_id));
-        const environmentIssues = missingEvidence.map(environment => ({finding, message:`${environment === "production" ? "Production" : "Non-Production"} evidence image required`}));
-        return [...(missing.length ? [{finding, message:missing.join(", ")}] : []), ...environmentIssues, ...fragmentIssues(finding).map(issue => ({finding, ...issue}))];
+        const environmentIssues = missingEvidence.map(environment => ({
+          finding,
+          contentType: "proof_of_concept",
+          contentLabel: contentNames.proof_of_concept,
+          fragmentLabel: "evidence",
+          // Points at the slot the tester has to fill, so the jump lands on the tile and not the section.
+          fragmentId: images.find(image => image.environment === environment && !image.evidence_id)?.frag_id,
+          message: `${environment === "production" ? "Production" : "Non-Production"} evidence image required`,
+        }));
+        // Ordered by section so every proof of concept row sits with the others.
+        const order = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"];
+        const rank = issue => {
+          const type = issue.contentType || Object.keys(contentNames).find(key => contentNames[key] === issue.contentLabel);
+          const index = order.indexOf(type);
+          return index < 0 ? -1 : index;
+        };
+        const perFinding = [...environmentIssues, ...fragmentIssues(finding).map(issue => ({finding, ...issue}))]
+          .sort((left, right) => rank(left) - rank(right));
+        return [...(missing.length ? [{finding, message:missing.join(", ")}] : []), ...perFinding];
       });
       count.textContent = issues.length ? `${issues.length} to fill in` : "Ready";
       count.dataset.state = issues.length ? "issues" : "ready";
@@ -2433,6 +2500,20 @@
       // tester scrolling the page does not have to read the panel to find the gaps.
       const incomplete = new Set(issues.filter(issue => issue.fragmentId && (issue.level || "error") === "error").map(issue => issue.fragmentId));
       pane.querySelectorAll("[data-fragment-id]").forEach(node => node.classList.toggle("is-incomplete", incomplete.has(node.dataset.fragmentId)));
+      // Each section carries its own count, so a tester scrolling the page sees the gap without the panel.
+      const typeByLabel = Object.fromEntries(Object.entries(contentNames).map(([type, label]) => [label, type]));
+      const openByType = {};
+      issues.filter(issue => issue.finding?.uid === selectedFindingUid).forEach(issue => {
+        const type = issue.contentLabel ? typeByLabel[issue.contentLabel] : (/evidence image required/.test(issue.message) ? "proof_of_concept" : null);
+        if (type) openByType[type] = (openByType[type] || 0) + 1;
+      });
+      pane.querySelectorAll("[data-content-type]").forEach(block => {
+        const flag = block.querySelector(".content-flag");
+        if (!flag) return;
+        const open = openByType[block.dataset.contentType] || 0;
+        flag.hidden = !open;
+        flag.textContent = open ? `${open} to fill in` : "";
+      });
       const generateButton = document.querySelector("#generate-report");
       if (generateButton) {
         generateButton.disabled = Boolean(issues.length) || generateButton.dataset.busy === "true";
@@ -2458,14 +2539,24 @@
       });
       const renderGroup = group => {
         const errors = group.issues.filter(issue => (issue.level || "error") === "error").length;
-        const suggestions = group.issues.length - errors;
-        // Counted apart so the card cannot claim seven things to fill in when three are suggestions.
-        const counts = [errors && `<b data-level="error">${errors} to fill in</b>`, suggestions && `<b data-level="warning">${suggestions} to review</b>`].filter(Boolean).join(" &middot; ");
-        return `<details class="review-group" data-level="${errors ? "error" : "warning"}" open><summary><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count">${counts}</span></summary>${group.issues.map(({finding, message, fragmentId, contentType, contentLabel, fragmentLabel, level:rowLevel}) => `<div class="review-item" data-level="${rowLevel || "error"}"><span class="review-icon" aria-hidden="true">!</span><div><span class="review-detail">${contentLabel ? `${escape(contentLabel)}: ${escape(fragmentLabel)} ${escape(message)}` : escape(message)}</span><button type="button" data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}${contentType ? ` data-review-content="${escape(contentType)}"` : ""}>Go to</button></div></div>`).join("")}</details>`;
+        const level = errors ? "error" : "warning";
+        const cells = group.issues.map(({finding, message, fragmentId, contentType, contentLabel, fragmentLabel, level: rowLevel}) => {
+          const target = `data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}${contentType ? ` data-review-content="${escape(contentType)}"` : ""}`;
+          return `<tr class="review-row" data-level="${rowLevel || "error"}"><td class="review-content"><i aria-hidden="true"></i>${escape(contentLabel || "Finding")}${fragmentLabel ? `<small>${escape(fragmentLabel)}</small>` : ""}</td><td class="review-need">${escape(message)}</td><td class="review-arrow"><button type="button" ${target} title="Go to" aria-label="Go to ${escape(contentLabel || "finding")}">&#8594;</button></td></tr>`;
+        }).join("");
+        // Suggestions are never counted with gaps, or the badge would disagree with the Generate button.
+        return `<details class="review-group" data-level="${level}" open><summary><span class="review-caret" aria-hidden="true"></span><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count" data-level="${level}">${errors || group.issues.length}</span></summary><table class="review-table"><thead><tr><th>Content</th><th>Needs</th><th></th></tr></thead><tbody>${cells}</tbody></table></details>`;
       };
       panel.innerHTML = rows.length
         ? groups.map(renderGroup).join("")
         : '<div class="review-empty">Every finding is complete. The report is ready to generate.</div>';
+      // The whole row is the target; the arrow stays a real button so keyboard and AT still reach it.
+      panel.querySelectorAll(".review-row").forEach(row => {
+        row.onclick = event => {
+          if (event.target.closest("button")) return;
+          row.querySelector("[data-review-finding]")?.click();
+        };
+      });
       panel.querySelectorAll("[data-review-finding]").forEach(button => button.onclick = () => {
         const findingUid = button.dataset.reviewFinding;
         const fragmentId = button.dataset.reviewFragment;
@@ -2486,7 +2577,7 @@
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const target = fragmentId ? pane.querySelector(`[data-fragment-id="${fragmentId}"]`)
-              : contentType ? pane.querySelector(`[data-offer-for="${contentType}"]`)
+              : contentType ? pane.querySelector(`[data-offer-for="${contentType}"]`) || pane.querySelector(`[data-content-type="${contentType}"]`)
               : document.getElementById(`finding-${findingUid}`);
             target?.scrollIntoView({behavior:"smooth", block:"center"});
             target?.focus?.({preventScroll:true});
@@ -2532,14 +2623,14 @@
       }
       const navHeading = document.createElement("div");
       navHeading.className = "finding-nav-heading";
-      navHeading.innerHTML = `<b>Findings (${findings.length})</b><small>Sorted by severity, then name</small>`;
+      navHeading.innerHTML = `<b>Findings</b><span class="nav-count">${findings.length}</span>`;
       nav.append(navHeading);
       findings.forEach(finding => {
         const findingId = `finding-${finding.uid}`;
         const jump = document.createElement("button");
         jump.className = `finding-nav severity-${finding.severity || "informational"}${finding.uid === selectedFindingUid ? " active" : ""}`;
         jump.dataset.findingId = findingId;
-        jump.innerHTML = `<span class="finding-nav-title">${escape(finding.title || "Untitled finding")}</span><span class="finding-nav-meta"><span>${escape(finding.display_id || "No ID")}</span><i aria-label="${escape(finding.severity || "informational")} severity"></i></span>`;
+        jump.innerHTML = `<span class="finding-nav-title">${escape(finding.title || "Untitled finding")}</span><span class="finding-nav-meta"><em>${escape(finding.severity || "informational")}</em><i aria-hidden="true">&middot;</i><span>${escape(finding.display_id || "No ID")}</span></span>`;
         jump.onclick = () => { selectedFindingUid = finding.uid; expandedContentTypes = undefined; render(); };
         nav.append(jump);
         // A long list can leave the open finding scrolled out of the rail, which is the other half
@@ -2563,8 +2654,8 @@
         return `<div class="engagement-context-env"><b>${escape(contextLabels[environment])}</b><small>${escape(dates)} &middot; ${escape(testWindow.test_time || "Any time")}</small>${list}</div>`;
       }).join("");
       context.innerHTML = `<summary>Engagement scope</summary><div class="engagement-context-body">${body || `<p class="engagement-context-empty">No environments selected</p>`}</div>`;
-      nav.append(context);
       const selectedFinding = findings.find(finding => finding.uid === selectedFindingUid);
+      nav.append(context);
       if (selectedFinding) [selectedFinding].forEach(finding => {
         const index = findings.indexOf(finding);
         const findingId = `finding-${finding.uid}`;
@@ -2581,9 +2672,16 @@
         if (finding.scope?.mode === "custom") Object.entries(finding.scope?.custom_locations || {}).forEach(([environment, byChannel]) => locationsByEnvironment[environment]?.push(...Object.values(byChannel || {}).flat().filter(value => value.trim())));
         const locationGroups = [["production", "Production"], ["non_production", "Non-Production"]]
           .filter(([environment]) => locationsByEnvironment[environment].length)
-          .map(([environment, label]) => `<span><em>${label}</em><b>${locationsByEnvironment[environment].map(escape).join(", ")}</b></span>`)
+          .map(([environment, label]) => {
+            const values = locationsByEnvironment[environment];
+            const summary = `${values.length} endpoint${values.length === 1 ? "" : "s"}`;
+            // The full list is the chip's own accessible name too, so the hover popover stays a convenience.
+            return `<span class="fchip fchip-locations" tabindex="0" aria-label="${escape(label)}: ${escape(values.join(", "))}">${label} &middot; ${summary}<span class="fchip-pop" aria-hidden="true"><b>${label}</b><ul>${values.map(value => `<li>${escape(value)}</li>`).join("")}</ul></span></span>`;
+          })
           .join("");
-        box.innerHTML = `<header class="finding-header"><div class="section-title finding-title"><h1>${escape(finding.title || "Untitled finding")}</h1></div><div class="finding-summary finding-assessment"><div><span>Likelihood</span><b class="summary-${escape(finding.likelihood || "informational")}">${escape(finding.likelihood || "Not set")}</b></div><div><span>Impact</span><b class="summary-${escape(finding.impact || "informational")}">${escape(finding.impact || "Not set")}</b></div><div><span>Severity</span><b class="summary-${escape(finding.severity || "informational")}">${escape(finding.severity || "Not set")}</b></div><div><span>Vuln ID</span><b class="finding-id-value">${escape(finding.display_id || "No ID")}</b></div><div class="finding-status"><span>Status</span><b>${escape(statuses.find(status => status[0] === finding.status)?.[1] || finding.status)}</b></div></div></header><div class="finding-locations"><span>Affected locations</span><div>${locationGroups || "Not set"}</div></div>`;
+        const severityWord = finding.severity || "informational";
+        const statusWord = statuses.find(status => status[0] === finding.status)?.[1] || finding.status;
+        box.innerHTML = `<header class="finding-header"><div class="section-title finding-title"><h1>${escape(finding.title || "Untitled finding")}</h1></div><div class="finding-chips"><span class="fchip fchip-sev" data-severity="${escape(severityWord)}"><i aria-hidden="true"></i>${escape(severityWord)}</span><span class="fchip">Likelihood <b>${escape(finding.likelihood || "not set")}</b></span><span class="fchip">Impact <b>${escape(finding.impact || "not set")}</b></span><span class="fchip">${escape(statusWord)}</span><span class="fchip fchip-mono">${escape(finding.display_id || "No ID")}</span>${locationGroups || '<span class="fchip">No locations</span>'}</div></header>`;
         const titleHeading = box.querySelector(".finding-title h1");
         const titleButton = document.createElement("button");
         titleButton.className = "edit-title";
@@ -2631,7 +2729,7 @@
           titleInput.onblur = () => setTimeout(finishTitle, 150);
         };
         if (expandedContentTypes === undefined) expandedContentTypes = new Set(finding.contents.map(content => content.type));
-        finding.contents.forEach(content => {
+        const buildContentBlock = content => {
           const block = document.createElement("div");
           const isExpanded = expandedContentTypes.has(content.type);
           block.className = `content-block${isExpanded ? " is-expanded" : ""}`;
@@ -2640,7 +2738,7 @@
           heading.className = "content-toggle";
           heading.type = "button";
           heading.setAttribute("aria-expanded", String(isExpanded));
-          heading.innerHTML = `<span>${contentNames[content.type]}</span><small>${content.fragments.length} fragment${content.fragments.length === 1 ? "" : "s"}</small>`;
+          heading.innerHTML = `<span>${contentNames[content.type]}</span><span class="content-flag" aria-hidden="true" hidden></span><small>${content.fragments.length} fragment${content.fragments.length === 1 ? "" : "s"}</small>`;
           // Rebuilding the pane loses the reading position, so the toggled block is put back where it sat.
           heading.onclick = () => {
             const paneTop = pane.getBoundingClientRect().top;
@@ -2653,7 +2751,7 @@
             moved.querySelector(".content-toggle")?.focus({preventScroll:true});
           };
           block.append(heading);
-          if (!isExpanded) { box.append(block); return; }
+          if (!isExpanded) return block;
           if (content.type === "in_conclusion") {
             const guidance = document.createElement("p");
             guidance.className = "content-guidance";
@@ -2790,7 +2888,27 @@
             }
             appendFragmentMenu();
           }
-          box.append(block);
+          return block;
+        };
+        // Description sits beside its remediation, and on a retest last year's proof sits beside
+        // this year's, because those are the pairs a reader compares. Everything else runs full width.
+        const blocks = new Map(finding.contents.map(content => [content.type, buildContentBlock(content)]));
+        const paired = new Set();
+        const pairUp = (left, right) => {
+          const first = blocks.get(left);
+          const second = blocks.get(right);
+          if (!first || !second) return;
+          const row = document.createElement("div");
+          row.className = "content-row";
+          row.append(first, second);
+          box.append(row);
+          paired.add(left);
+          paired.add(right);
+        };
+        pairUp("description", "recommended_remediation");
+        pairUp("previous_proof_of_concept", "proof_of_concept");
+        finding.contents.forEach(content => {
+          if (!paired.has(content.type)) box.append(blocks.get(content.type));
         });
         pane.append(box);
       });
@@ -2805,5 +2923,6 @@
     render();
   }
   root.id === "setup" ? setup() : continuousEditor();
+  updateSetupSectionSummaries();
   updateEngagementName(serverReport);
 })();

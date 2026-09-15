@@ -191,13 +191,8 @@ button.danger { color: var(--danger); }
 .finding-nav.severity-medium { border-left-color: var(--medium); }
 .finding-nav.severity-low { border-left-color: var(--low); }
 .finding-nav.severity-informational { border-left-color: var(--informational); }
-.finding-nav-title { overflow: hidden; font-weight: 600; line-height: 1.25; text-overflow: ellipsis; }
-.finding-nav-meta { display: flex; align-items: center; justify-content: space-between; color: #5170a3; font-family: "JetBrains Mono", Consolas, monospace !important; font-size: 9px; font-weight: 400; }
-.finding-nav-meta i { width: 7px; height: 7px; border-radius: 50%; background: #aeb8c7; }
-.finding-nav.severity-critical .finding-nav-meta i { background: var(--critical); }
-.finding-nav.severity-high .finding-nav-meta i { background: var(--high); }
-.finding-nav.severity-medium .finding-nav-meta i { background: var(--medium); }
-.finding-nav.severity-low .finding-nav-meta i { background: var(--low); }
+.finding-nav-title { overflow: visible; font-weight: 400; line-height: 1.3; white-space: normal; overflow-wrap: anywhere; }
+.finding-nav-meta { display: flex; align-items: center; gap: 7px; color: #5170a3; font-family: "JetBrains Mono", Consolas, monospace !important; font-size: 9px; font-weight: 400; }
 #finding-editor { min-width: 0; max-width: none; margin: 0; padding: 18px 24px 32px; background: #fbfcfe; }
 .finding-card { padding: 0; border-color: var(--line); border-radius: 5px; box-shadow: none; }
 .finding-header { display: grid; height: auto; min-height: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; padding: 0; align-items: stretch; border-bottom: 1px solid var(--line); background: var(--surface-raised); }
@@ -225,7 +220,7 @@ button.danger { color: var(--danger); }
 .finding-assessment .finding-id-value { color: var(--ink-soft); background: var(--canvas-deep); font-family: "JetBrains Mono", Consolas, monospace; }
 .finding-assessment .finding-status b { color: var(--ink-soft); background: var(--canvas-deep); }
 .finding-meta { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; padding: 13px 14px; border-bottom: 1px solid var(--line); }
-.content-block { padding: 0 14px 14px; border-top: 0 !important; }
+.content-block { padding: 0 14px 14px; }
 .content-toggle { display: flex; width: 100%; min-height: 38px; align-items: center; justify-content: space-between; margin: 0 -14px 12px; padding: 0 14px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; color: #31415c; background: #f8faff; font-size: 11px; font-weight: 700; text-align: left; }
 .content-toggle::before { width: 7px; height: 7px; margin-right: 8px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; content: ""; transform: rotate(-45deg); }
 .content-block.is-expanded .content-toggle::before { transform: rotate(45deg); }
@@ -272,16 +267,16 @@ button.danger { color: var(--danger); }
 .add-vulnerability-divider { margin: 18px 0; }
 .add-vulnerability-divider::before, .add-vulnerability-divider::after, .finding-divider { border-color: var(--line); }
 
-.review-panel { position: sticky; top: 40px; align-self: start; height: calc(100vh - 88px); overflow-y: auto; padding: 14px 10px; border-left: 1px solid var(--line); background: #fff; }
+.review-panel { position: static; align-self: stretch; padding: 14px 10px; border-left: 1px solid var(--line); background: var(--surface-raised); }
 .review-heading { position: sticky; top: -14px; z-index: 1; display: flex; align-items: center; justify-content: space-between; margin: 0 -10px 11px; padding: 14px 10px 11px; border-bottom: 1px solid var(--line); color: var(--ink); background: #fff; font-size: 11px; font-weight: 700; }
 .review-heading b { padding: 3px 6px; border-radius: 8px; color: #fff; background: var(--danger); font-size: 9px; }
-.review-item { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 7px; margin-bottom: 8px; padding: 9px 10px; border-radius: 3px; color: #c82d2a; background: #fff0ef; font-size: 10px; line-height: 1.3; }
+.review-item { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 7px; margin-bottom: 8px; padding: 9px 10px; border-radius: 3px; color: var(--ink-soft); background: transparent; font-size: 10px; line-height: 1.3; }
 .review-item b { font-weight: 600; }
-.review-item span:not(.review-icon) { color: #c82d2a; }
-.review-icon { display: grid; width: 11px; height: 11px; place-items: center; margin-top: 1px; border-radius: 50%; color: #fff; background: #c82d2a; font-size: 8px; font-weight: 700; line-height: 1; }
-.review-item button { display: block; margin-top: 3px; padding: 0; border: 0; border-radius: 0; color: #b92321; background: transparent; font-size: 9px; font-weight: 700; line-height: 1.2; text-align: left; text-decoration: underline; }
-.review-item button:hover { color: #8f1a18; }
-.review-item.warning { color: #8d520d; background: #fff8e8; }
+.review-item span:not(.review-icon) { color: var(--ink-soft); }
+.review-icon { display: grid; width: 11px; height: 11px; place-items: center; margin-top: 1px; border-radius: 50%; color: #fff; background: var(--warning); font-size: 8px; font-weight: 700; line-height: 1; }
+.review-item button { display: block; margin-top: 3px; padding: 0; border: 0; border-radius: 0; color: var(--accent); background: transparent; font-size: 9px; font-weight: 700; line-height: 1.2; text-align: left; text-decoration: underline; }
+.review-item button:hover { color: var(--accent-strong); }
+.review-item.warning { color: var(--ink-soft); background: transparent; }
 .review-empty { padding: 9px; border-left: 3px solid var(--accent); color: #42629c; background: var(--accent-soft); font-size: 11px; line-height: 1.35; }
 .review-note { margin: 14px 0 0; color: var(--muted); font-size: 10px; font-style: italic; line-height: 1.4; }
 
@@ -321,7 +316,6 @@ input[data-path*="scope"],
 
 @media (max-width: 1050px) {
   .editor-workspace { grid-template-columns: 190px minmax(0, 1fr); }
-  .review-panel { grid-column: 1 / -1; display: none; }
 }
 
 @media (max-width: 760px) {
@@ -352,6 +346,5 @@ input[data-path*="scope"],
   .finding-locations { grid-template-columns: 1fr; gap: 3px; }
   .finding-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .finding-card .finding-title h1 { font-size: 15px; }
-  .review-panel { display: none; }
   #setup[data-step="findings"] .table-wrap { overflow-x: auto !important; overflow-y: visible !important; }
 }

@@ -1030,7 +1030,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             header.evaluate("head => [...head.children].map(child => child.className || child.tagName)"),
-            ["fragment-drag-handle", "tag", "toolbar", "fragment-move-up", "fragment-move-down", "danger"],
+            ["fragment-drag-handle", "tag", "toolbar", "fragment-move-up", "fragment-move-down", "danger fragment-delete"],
         )
         self.assertEqual(header.locator(".toolbar").get_by_role("button").count(), 3)
         self.assertEqual(

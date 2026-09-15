@@ -563,18 +563,51 @@ input[data-path*="scope"],
   max-width: var(--shell-max);
 }
 
-#setup > section {
-  display: grid;
-  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
-  column-gap: clamp(24px, 4vw, 52px);
-  margin: 0;
-  padding: 28px 0 34px;
+/* Setup sections use the Content page's card: the name on the left of a header strip, the
+   section's own state on the right, and the fields taking the full width back. */
+#setup[data-step="setup"] > section {
+  display: block;
+  margin: 0 0 14px;
+  padding: 0;
   overflow: visible;
-  border: 0;
-  border-top: 1px solid var(--line-strong);
-  border-radius: 0;
-  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
   box-shadow: none;
+}
+
+#setup[data-step="setup"] > section > h2,
+#setup[data-step="setup"] > section > .scope-heading {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--ink);
+  background: var(--surface-bar);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#setup[data-step="setup"] > section > .scope-heading h2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+}
+
+.section-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 #setup > section:first-child {
@@ -597,8 +630,10 @@ input[data-path*="scope"],
 }
 
 .scope-heading {
-  display: grid;
-  gap: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
 }
 
 .scope-heading h1,
@@ -612,8 +647,16 @@ input[data-path*="scope"],
 #setup > section > .scope-grid,
 #setup > section > .setup-table-wrap,
 #setup > section > .limitations-field {
-  grid-column: 2;
-  margin: 0;
+  grid-column: auto;
+  margin: 14px 16px 16px;
+}
+
+#setup[data-step="setup"] > section > .muted {
+  margin-bottom: 10px;
+}
+
+#setup[data-step="setup"] > section > .muted + .scope-grid {
+  margin-top: 0;
 }
 
 /* Starts at one line and grows with its content. */
@@ -649,13 +692,12 @@ label,
   margin: 0;
 }
 
-#setup > section:has(.scope-heading) {
-  grid-template-rows: auto auto;
-  row-gap: 8px;
+#setup[data-step="setup"] > section > .scope-heading {
+  padding-block: 9px;
 }
 
-#setup > section:has(.scope-heading) > .scope-heading {
-  grid-row: 1 / span 2;
+#setup[data-step="setup"] > section:has(.scope-heading) > .scope-heading {
+  grid-row: auto;
 }
 
 #setup > section:has(.scope-heading) > .muted {
@@ -794,9 +836,12 @@ label,
   background: var(--accent-soft);
 }
 
+/* The Findings table borrows the Content page's card: column labels as the header strip, hairline
+   rows, and the assessment stated in the Content page's own vocabulary. */
 .table-wrap {
-  border-top: 2px solid var(--ink);
-  background: var(--surface-sunken);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
 }
 
 #setup[data-step="findings"] table {
@@ -804,22 +849,170 @@ label,
 }
 
 #setup[data-step="findings"] th {
-  padding: 11px 12px;
-  border-color: var(--line-strong);
+  padding: 10px 12px;
+  border-color: var(--line);
   color: var(--muted);
-  background: var(--canvas-deep);
-  font-size: 11px;
-  text-transform: none;
+  background: var(--surface-bar);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#setup[data-step="findings"] thead th:first-child {
+  border-top-left-radius: var(--radius);
+}
+
+#setup[data-step="findings"] thead th:last-child {
+  border-top-right-radius: var(--radius);
 }
 
 #setup[data-step="findings"] td {
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-color: var(--line);
-  background: var(--surface-raised);
+  background: transparent;
 }
 
 #setup[data-step="findings"] tr:hover > td {
-  background: var(--accent-faint);
+  background: var(--surface-quiet);
+}
+
+/* Likelihood, impact, id and status are facts, not warnings: quiet monospace, still live controls.
+   Sized to the cell, because a select left on auto takes the width of its longest option and pushes
+   into the next column. */
+#setup[data-step="findings"] td:nth-child(2) select,
+#setup[data-step="findings"] td:nth-child(3) select,
+#setup[data-step="findings"] td:nth-child(6) select {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  padding: 2px 4px !important;
+  border: 0 !important;
+  color: var(--muted) !important;
+  background: transparent !important;
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  text-align: left;
+}
+
+#setup[data-step="findings"] th:nth-child(4),
+#setup[data-step="findings"] td:nth-child(4) {
+  width: 124px;
+}
+
+#setup[data-step="findings"] td:nth-child(4) select {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  padding: 3px 10px 3px 21px !important;
+  border: 1px solid currentColor !important;
+  border-radius: var(--radius-pill) !important;
+  background-color: transparent !important;
+  background-image: radial-gradient(circle at 11px 50%, currentColor 3px, transparent 3px) !important;
+  background-repeat: no-repeat !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-align: left;
+}
+
+#setup[data-step="findings"] td:nth-child(4) select.assessment-critical { color: var(--critical) !important; }
+#setup[data-step="findings"] td:nth-child(4) select.assessment-high { color: var(--high) !important; }
+#setup[data-step="findings"] td:nth-child(4) select.assessment-medium { color: var(--medium) !important; }
+#setup[data-step="findings"] td:nth-child(4) select.assessment-low { color: var(--low) !important; }
+#setup[data-step="findings"] td:nth-child(4) select.assessment-informational { color: var(--informational) !important; }
+
+#setup[data-step="findings"] .section-title h1 .nav-count {
+  margin-left: 10px;
+  color: var(--muted);
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 13px;
+  font-weight: 400;
+  vertical-align: middle;
+}
+
+/* Below this the six columns cannot hold their controls and the last three fall off the screen
+   with no way to scroll to them. The row becomes a field grid that refills the line at every
+   width, so the assessment stays side by side instead of one field per line. */
+@media (max-width: 980px) {
+  #setup[data-step="findings"] table,
+  #setup[data-step="findings"] tbody,
+  #setup[data-step="findings"] tr,
+  #setup[data-step="findings"] td {
+    display: block;
+    width: auto !important;
+    min-width: 0 !important;
+  }
+
+  #setup[data-step="findings"] thead {
+    display: none;
+  }
+
+  #setup[data-step="findings"] tbody > tr:not(.finding-location-row) {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+    gap: 12px;
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  #setup[data-step="findings"] td {
+    display: grid;
+    align-content: start;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 0;
+    border: 0;
+  }
+
+  #setup[data-step="findings"] td::before {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  #setup[data-step="findings"] td:nth-child(1),
+  #setup[data-step="findings"] td:nth-child(7) {
+    grid-column: 1 / -1;
+  }
+
+  #setup[data-step="findings"] td:nth-child(1) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #setup[data-step="findings"] td:nth-child(1) > :not(.finding-fold-toggle) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  #setup[data-step="findings"] td:nth-child(7) {
+    justify-items: start;
+  }
+
+  #setup[data-step="findings"] td:nth-child(2)::before { content: "Likelihood"; }
+  #setup[data-step="findings"] td:nth-child(3)::before { content: "Impact"; }
+  #setup[data-step="findings"] td:nth-child(4)::before { content: "Severity"; }
+  #setup[data-step="findings"] td:nth-child(5)::before { content: "Vuln ID"; }
+  #setup[data-step="findings"] td:nth-child(6)::before { content: "Status"; }
+
+  /* Each control owns its column, so no field leaves a strip of empty row beside it. */
+  #setup[data-step="findings"] td select,
+  #setup[data-step="findings"] td:nth-child(5) input,
+  #setup[data-step="findings"] td:nth-child(5) .finding-id-display {
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    text-align: left !important;
+  }
+
+  #setup[data-step="findings"] .finding-location-row td {
+    padding: 0 12px 14px !important;
+  }
 }
 
 .finding-title-display span {
@@ -890,33 +1083,28 @@ button.finding-title-display:hover:not(:disabled) span {
 }
 
 .summary-critical,
-.assessment-critical,
 .finding-assessment .summary-critical {
   background: var(--critical) !important;
 }
 
 .summary-high,
-.assessment-high,
 .finding-assessment .summary-high {
   color: #fff !important;
   background: #b4500f !important;
 }
 
 .summary-medium,
-.assessment-medium,
 .finding-assessment .summary-medium {
   color: #fff !important;
   background: #bd7100 !important;
 }
 
 .summary-low,
-.assessment-low,
 .finding-assessment .summary-low {
   background: var(--low) !important;
 }
 
 .summary-informational,
-.assessment-informational,
 .finding-assessment .summary-informational {
   color: #fff !important;
   background: #5f6d81 !important;
@@ -930,7 +1118,7 @@ button.finding-title-display:hover:not(:disabled) span {
 }
 
 .editor-workspace {
-  grid-template-columns: clamp(206px, 15vw, 236px) minmax(0, 1fr) clamp(240px, 17vw, 276px);
+  grid-template-columns: clamp(206px, 15vw, 238px) minmax(0, 1fr) clamp(236px, 17vw, 272px);
   height: calc(100dvh - var(--header-height) - var(--stepper-height) - var(--footer-height));
   min-height: 0;
   background: transparent;
@@ -966,11 +1154,13 @@ button.finding-title-display:hover:not(:disabled) span {
 
 .finding-nav {
   --rail: var(--informational);
-  gap: 7px;
-  min-height: 64px;
-  margin: 0 0 5px;
-  padding: 11px 10px !important;
-  border-left-width: 3px;
+  gap: 3px;
+  min-height: 0;
+  margin: 0 0 2px;
+  padding: 8px 10px !important;
+  border: 0 !important;
+  border-left: 3px solid var(--rail) !important;
+  border-radius: 0;
   color: var(--ink) !important;
   background: transparent;
 }
@@ -984,8 +1174,8 @@ button.finding-title-display:hover:not(:disabled) span {
 button.finding-nav,
 button.finding-nav:hover:not(:disabled),
 button.finding-nav.active:not(:disabled) {
-  border-color: transparent;
-  border-left-color: var(--rail);
+  border: 0;
+  border-left: 3px solid var(--rail);
 }
 
 /* Hover only previews a move, so it stays quieter than the finding actually open. */
@@ -1025,7 +1215,7 @@ button.finding-nav.active:not(:disabled)::after {
 
 button.finding-nav.active:not(:disabled) .finding-nav-title {
   color: var(--accent-strong) !important;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 button.finding-nav.active:not(:disabled) .finding-nav-meta,
@@ -1035,12 +1225,25 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 
 .finding-nav-title {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .finding-nav-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
+}
+
+/* Severity is spelled out in its own colour, so the rail is not the only thing carrying it. */
+.finding-nav-meta em {
+  color: var(--rail);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 #finding-editor {
@@ -1122,8 +1325,265 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   font-size: 11px;
 }
 
+/* Every section is its own card, at full width or paired. Grid so inset children all stretch to
+   one width instead of each picking their own. */
 .content-block {
-  padding: 0 24px 28px;
+  display: grid;
+  align-content: start;
+  overflow: clip;
+  margin-bottom: 14px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.content-block > .content-toggle {
+  position: static;
+  width: 100%;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 13px;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas-deep);
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.content-block > *:not(.content-toggle) {
+  margin-inline: 13px;
+}
+
+.content-block > .content-toggle + * {
+  margin-top: 11px;
+}
+
+.content-block > :last-child {
+  margin-bottom: 12px;
+}
+
+/* The margins set the width; a percentage would add to them and overshoot the card edge. */
+.content-block > .add-fragment {
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+/* ---- Finding header: title, then its details underneath. No card wraps the whole finding. ---- */
+.finding-card {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.finding-card .finding-header {
+  display: grid;
+  gap: 9px;
+  min-height: 0;
+  padding: 0 0 10px;
+  border-bottom: 0;
+}
+
+.finding-card .finding-title {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+}
+
+.finding-card .finding-title h1 {
+  font-size: clamp(16px, 1.3vw, 19px);
+  line-height: 1.24;
+}
+
+.finding-chips {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.fchip-locations {
+  cursor: default;
+}
+
+/* Anchored to the chip row, not the chip, so a chip near the right edge cannot push it out of the
+   pane -- which clips, because overflow-y makes overflow-x compute to auto. */
+.fchip-pop {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 6;
+  display: grid;
+  gap: 5px;
+  width: max-content;
+  max-width: min(520px, 100%);
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 90ms ease;
+}
+
+.fchip-locations:hover .fchip-pop,
+.fchip-locations:focus-visible .fchip-pop {
+  opacity: 1;
+  visibility: visible;
+}
+
+.fchip-pop b {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fchip-pop ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fchip-pop li {
+  color: var(--ink);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.fchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  background: var(--canvas-deep);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fchip b {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.fchip-mono {
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 10px;
+}
+
+/* Severity is the only chip that earns colour, so it is the one the eye finds first. */
+.fchip-sev {
+  --sev: var(--informational);
+  border-color: color-mix(in srgb, var(--sev) 45%, transparent);
+  color: var(--sev);
+  background: color-mix(in srgb, var(--sev) 12%, transparent);
+  text-transform: capitalize;
+}
+
+.fchip-sev i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sev);
+}
+
+.fchip-sev[data-severity="critical"] { --sev: var(--critical); }
+.fchip-sev[data-severity="high"] { --sev: var(--high); }
+.fchip-sev[data-severity="medium"] { --sev: var(--medium); }
+.fchip-sev[data-severity="low"] { --sev: var(--low); }
+
+.finding-card .finding-locations {
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+/* ---- Fragment chrome recedes until the card is reached for. ---- */
+.fragment-head > .fragment-drag-handle,
+.fragment-head > .tag {
+  opacity: 0.4;
+  transition: opacity 0.12s ease-out;
+}
+
+.fragment:hover .fragment-head > .fragment-drag-handle,
+.fragment:focus-within .fragment-head > .fragment-drag-handle,
+.fragment:hover .fragment-head > .tag,
+.fragment:focus-within .fragment-head > .tag {
+  opacity: 1;
+}
+
+/* One border per fragment: the card already draws it, so the field inside does not repeat it. */
+.fragment .rich,
+.fragment .list-textarea,
+.fragment textarea,
+.fragment .code-block {
+  border-color: transparent;
+}
+
+.fragment .rich:hover,
+.fragment .list-textarea:hover,
+.fragment textarea:hover,
+.fragment .code-block:hover {
+  border-color: var(--line);
+}
+
+/* ---- Readiness rows read as unfinished work, not as failures. ---- */
+.review-group .review-item {
+  margin: 8px 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.review-group .review-item[data-level="warning"] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.review-group .review-item + .review-item {
+  border-top: 0;
+}
+
+.review-group .review-item .review-detail {
+  color: var(--ink-soft);
+}
+
+.review-group .review-item button {
+  color: var(--warning);
+  text-decoration: underline;
+}
+
+.review-group .review-item[data-level="warning"] button {
+  color: var(--accent-strong);
+}
+
+/* Two sections share a row; the card styling already comes from .content-block. */
+.content-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.content-row > .content-block {
+  margin-bottom: 14px;
 }
 
 .content-toggle {
@@ -1166,36 +1626,36 @@ button.content-toggle:hover:not(:disabled) small {
 }
 
 .fragment {
-  margin-bottom: 18px;
-  padding: 18px;
+  margin-bottom: 8px;
+  padding: 7px 9px 9px;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius-sm);
   background: var(--surface-raised);
 }
 
 .fragment:hover {
-  border-left-color: var(--accent);
+  border-color: var(--line-strong);
   box-shadow: var(--shadow-small);
 }
 
 .fragment-head {
-  margin-bottom: 10px;
+  margin-bottom: 4px;
 }
 
 .tag {
-  padding: 3px 7px;
+  padding: 1px 6px;
   border-radius: var(--radius-sm);
   color: var(--ink-soft);
   background: var(--canvas-deep);
-  font-size: 11px;
+  font-size: 9.5px;
 }
 
 .rich {
-  min-height: 44px;
-  padding: 12px 14px;
+  min-height: 32px;
+  padding: 7px 9px;
   overflow-wrap: anywhere;
   font-size: 13px;
-  line-height: 1.75;
+  line-height: 1.6;
 }
 
 .add-fragment {
@@ -1525,12 +1985,18 @@ button.content-toggle:hover:not(:disabled) small {
   font-size: 11px;
 }
 
-#issue-count[data-state="issues"] {
-  background: var(--danger);
+/* The count sits in the panel heading, tinted rather than filled. */
+#issue-count {
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  font-size: 10px;
 }
 
 #issue-count[data-state="ready"] {
-  background: var(--success);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
 .review-item {
@@ -1559,13 +2025,13 @@ button.content-toggle:hover:not(:disabled) small {
   margin-top: 1px;
   border: 0;
   color: #fff;
-  background: var(--danger);
+  background: var(--warning);
   font-size: 9px;
 }
 
 .review-group .review-item[data-level="warning"] .review-icon {
   color: #fff;
-  background: var(--warning);
+  background: var(--accent);
 }
 
 .review-group .review-item button {
@@ -1580,18 +2046,18 @@ button.content-toggle:hover:not(:disabled) small {
   background: transparent;
 }
 
-/* Red earns a scannable rail down the left edge instead of flooding the card. */
+/* Unfinished is amber, never red: nothing here is broken, it is only not written yet. */
 .review-group {
   overflow: hidden;
   margin-bottom: 8px;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--danger);
+  border-left: 3px solid var(--warning);
   border-radius: var(--radius);
   background: var(--surface-raised);
 }
 
 .review-group[data-level="warning"] {
-  border-left-color: var(--warning);
+  border-left-color: var(--accent);
 }
 
 .review-group > summary {
@@ -1637,11 +2103,11 @@ button.content-toggle:hover:not(:disabled) small {
 
 /* Each half of the count carries its own verdict, so neither hides behind a neutral grey. */
 .review-group-count b[data-level="error"] {
-  color: var(--danger);
+  color: var(--warning);
 }
 
 .review-group-count b[data-level="warning"] {
-  color: var(--warning);
+  color: var(--accent-strong);
 }
 
 .review-empty {
@@ -1703,61 +2169,36 @@ button.content-toggle:hover:not(:disabled) small {
   padding-top: var(--shell-pad-top);
 }
 
-.manager-heading {
-  align-items: flex-start;
-  margin-bottom: 30px;
-}
-
-.manager-heading h1 {
-  color: var(--ink);
-  font-size: 28px;
-  line-height: 1;
-}
-
-.manager-heading p {
-  max-width: 52ch;
-  margin-top: 10px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.manager-actions {
-  gap: 10px;
-}
-
-.icon-command,
-.manager-actions .primary {
-  display: inline-flex;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 13px;
-  line-height: 1;
-  font-size: 12px;
+.manager-bar {
+  border-color: var(--line);
+  background: var(--surface-raised);
 }
 
 .manager-search {
-  max-width: 440px;
-  margin-bottom: 18px;
-}
-
-.manager-search label {
-  color: var(--ink-soft);
-  font-size: 11px;
-  text-transform: none;
+  max-width: none;
+  margin-bottom: 0;
+  border-color: var(--line);
+  background: var(--canvas-deep);
 }
 
 .manager-search input {
-  height: 38px;
-  font-size: 12px;
+  height: 27px;
+  font-size: 11px;
 }
 
+/* Folders stand on the page; only the app bar keeps a card. */
 .report-list {
-  overflow: hidden;
-  border-color: var(--line-strong);
-  border-radius: var(--radius);
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-group {
+  border-color: var(--line);
+  border-radius: var(--radius-sm);
   background: var(--surface-raised);
-  box-shadow: var(--shadow);
 }
 
 .app-group + .app-group {
@@ -1765,41 +2206,45 @@ button.content-toggle:hover:not(:disabled) small {
 }
 
 .app-group summary {
-  min-height: 48px;
-  padding: 0 16px;
-  color: var(--muted);
-  background: var(--canvas-deep);
-  font-size: 11px;
+  min-height: 0;
+  padding: 7px 11px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  font-size: 11.5px;
   text-transform: none;
+}
+
+.app-group summary:hover {
+  background: var(--canvas-deep);
 }
 
 .app-group-name {
-  color: var(--ink-soft);
-  font-size: 11px;
+  color: var(--ink);
+  font-size: 11.5px;
 }
 
 .app-group-columns {
-  padding: 9px 16px;
+  padding: 5px 11px;
   border-color: var(--line);
-  color: var(--muted);
-  background: var(--surface-raised);
-  text-transform: none;
+  color: var(--muted-light);
+  background: transparent;
+  text-transform: uppercase;
 }
 
 .report-row {
-  min-height: 68px;
-  padding: 11px 16px;
+  min-height: 0;
+  padding: 7px 11px;
   border-color: var(--line);
-  background: var(--surface-raised);
+  background: transparent;
 }
 
 .report-row:hover {
-  background: var(--accent-faint);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 .report-name b {
   color: var(--ink);
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .report-name small,
@@ -1807,12 +2252,18 @@ button.content-toggle:hover:not(:disabled) small {
   color: var(--muted);
 }
 
+/* Neutral until reached for, the same as every other icon control in the app. */
 .report-actions a,
 .report-actions button {
-  color: var(--accent-strong);
+  color: var(--muted);
 }
 
-.report-actions button {
+.report-actions a:hover,
+.report-actions button:hover {
+  color: var(--ink);
+}
+
+.report-actions .report-delete:hover {
   color: var(--danger);
 }
 
@@ -1849,10 +2300,15 @@ body > main {
 @media (max-width: 1180px) {
   .editor-workspace {
     grid-template-columns: 210px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   }
 
-  .review-panel {
-    display: none;
+  /* Three panels into two columns: the sidebar stacks the findings list over the review list, and the
+     editor spans both rows. Without the span the review panel opens an implicit second row that
+     halves the editor and leaves the space beside the review list empty. */
+  #finding-editor {
+    grid-column: 2;
+    grid-row: 1 / -1;
   }
 
   #setup .fields {
@@ -1948,6 +2404,14 @@ body > main {
   .review-panel {
     height: auto;
     overflow-y: visible;
+  }
+
+  /* The page scrolls here, not the pane, so a pinned header would slide under the app chrome. */
+  .finding-card .finding-header {
+    position: static;
+    width: auto;
+    margin: 0;
+    padding: 0 0 10px;
   }
 
   #finding-nav {
@@ -2046,15 +2510,13 @@ body > main {
     font-size: 12px;
   }
 
-  .manager-heading {
-    gap: 18px;
+  .manager-bar {
+    flex-wrap: wrap;
+    gap: 9px;
   }
 
-  .manager-actions {
-    width: 100%;
-  }
-
-  .manager-actions > * {
+  .manager-bar > .icon-command,
+  .manager-bar > .primary {
     flex: 1;
     justify-content: center;
   }
@@ -2183,11 +2645,39 @@ textarea,
   margin-left: auto;
 }
 
+/* One height for every control in the row, so Delete stops setting the row's height on its own. */
+.fragment-head > .fragment-drag-handle,
+.fragment-head > .fragment-move-up,
+.fragment-head > .fragment-move-down,
+.fragment-head > .toolbar button,
+.fragment-head > button.danger {
+  min-height: 22px;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.fragment-head > .fragment-delete {
+  display: grid;
+  width: 22px;
+  place-items: center;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* A control that cannot act still shows where it is, so the row never loses a slot. */
+.fragment-head .fragment-move-up:disabled,
+.fragment-head .fragment-move-down:disabled {
+  color: var(--muted-light);
+  opacity: 1;
+}
+
 .fragment-head .toolbar,
 .fragment-head .fragment-move-up,
 .fragment-head .fragment-move-down,
 .fragment-head button.danger {
-  opacity: 0;
+  opacity: 0.34;
   transition: opacity 0.12s ease-out;
 }
 
@@ -2428,4 +2918,739 @@ textarea,
 * {
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
+}
+
+/* ============================================================================
+   Content page, matched to the approved reference composition.
+   Kept last so it owns these values outright instead of racing earlier rules.
+   ============================================================================ */
+
+#finding-nav {
+  padding: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface-raised);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.finding-nav-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas-deep);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.finding-nav-heading b {
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.finding-nav-heading .nav-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 9.5px;
+  font-weight: 400;
+}
+
+.finding-nav-heading .nav-count[data-state="issues"] {
+  color: var(--warning);
+  font-family: inherit !important;
+  font-weight: 700;
+}
+
+/* The right panel was left behind when this block restyled the left one, so its label sat 34px
+   lower and 5px further in. Same insets, same min-height, same type as .finding-nav-heading. */
+.review-panel {
+  padding: 0 0 14px;
+  border-left: 1px solid var(--line);
+  background: var(--surface-raised);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.review-heading {
+  top: 0;
+  gap: 7px;
+  min-height: 33px;
+  margin: 0;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas-deep);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+#editor-notifications {
+  margin: 10px 10px 0;
+}
+
+.review-note {
+  margin: 12px 10px 0;
+}
+
+button.finding-nav,
+button.finding-nav:hover:not(:disabled),
+button.finding-nav.active:not(:disabled) {
+  gap: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 7px 9px 7px 10px !important;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--rail);
+  border-radius: 0;
+}
+
+button.finding-nav.active:not(:disabled)::after {
+  content: none;
+}
+
+.finding-nav-title {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.finding-nav-meta {
+  gap: 5px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: inherit !important;
+  font-size: 9.5px;
+}
+
+.finding-nav-meta em {
+  font-size: 9px;
+}
+
+.finding-nav-meta i {
+  font-style: normal;
+}
+
+/* ---- Editor pane ---- */
+#finding-editor {
+  padding: 14px 16px;
+  background: var(--canvas);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.finding-card .finding-header {
+  /* Pinned so the finding's name and assessment stay readable while its sections scroll under them.
+     Chrome pins against the pane's content box, so top cancels the whole 14px inset -- anything less
+     leaves a strip above the header that scrolling content shows through. The inline pull-out and
+     matching padding are that same inset, so the pinned bar spans the full pane width. */
+  position: sticky;
+  top: -14px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  width: calc(100% + 32px);
+  margin: -14px -16px 0;
+  padding: 14px 16px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas);
+}
+
+.finding-card .finding-title h1 {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.finding-title .edit-title {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+/* The reference section head carries no disclosure caret. */
+.content-block > .content-toggle::before {
+  content: none;
+}
+
+.fchip {
+  min-height: 22px;
+  padding: 0 9px;
+  gap: 5px;
+  font-size: 10.5px;
+}
+
+.finding-card .finding-locations {
+  margin-bottom: 13px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  font-size: 10.5px;
+}
+
+/* ---- Section cards ---- */
+/* The pair answers to the pane, not the window: the side panels collapse at their own breakpoints,
+   so a 1100px window can leave the pane wider than a 1280px one does. */
+.finding-card {
+  container-type: inline-size;
+  container-name: editor-pane;
+}
+
+.content-row {
+  gap: 13px;
+  margin-bottom: 13px;
+}
+
+/* Under this each column's text falls below a 65ch measure, so remediation reads below description. */
+@container editor-pane (max-width: 900px) {
+  .content-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.content-row > .content-block {
+  margin-bottom: 0;
+}
+
+.content-block {
+  margin-top: 0;
+  margin-bottom: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.content-block > .content-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+  padding: 7px 11px;
+  border-radius: 0;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.content-block > .content-toggle small {
+  margin-left: auto;
+  font-size: 9.5px;
+}
+
+.content-flag {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 17%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+/* Unfinished fields wear the same amber as the readiness list, not an error red. */
+.is-incomplete input:placeholder-shown,
+.is-incomplete textarea:placeholder-shown,
+.is-incomplete .rich:empty,
+.is-incomplete .evidence-environment.is-unset {
+  border-color: var(--warning);
+}
+
+.evidence-tile.is-incomplete:not(.has-evidence) .evidence-thumb {
+  box-shadow: inset 0 0 0 1px var(--warning);
+}
+
+/* Disabled move buttons stay visible but inert, as in the reference. */
+.fragment-head .fragment-move-up:disabled,
+.fragment-head .fragment-move-down:disabled {
+  opacity: 0.3;
+  visibility: visible;
+}
+
+/* One group at the right edge: formatting, then move, then delete, with no gap between them. */
+.fragment-head > .toolbar {
+  margin-left: auto;
+}
+
+.fragment-head > .fragment-move-up {
+  margin-left: auto;
+}
+
+.fragment-head > .fragment-move-down,
+.fragment-head > button.danger {
+  margin-left: 0;
+}
+
+/* Delete is neutral until reached for; red on a resting control reads as an error. */
+.fragment-head > button.danger:not(:disabled) {
+  color: var(--muted);
+}
+
+.fragment-head > button.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.content-block > *:not(.content-toggle) {
+  margin-inline: 11px;
+}
+
+.content-block > .content-toggle + * {
+  margin-top: 10px;
+}
+
+.content-block > :last-child {
+  margin-bottom: 11px;
+}
+
+/* ---- Fragment cards ---- */
+.fragment {
+  margin-bottom: 8px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.fragment:hover {
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.fragment-head {
+  gap: 6px;
+  margin: 0;
+  padding: 4px 7px;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas-deep);
+  font-size: 9px;
+}
+
+.fragment-head > .tag {
+  padding: 0;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.fragment-head > .fragment-drag-handle {
+  color: var(--muted-light);
+  font-size: 10px;
+}
+
+.fragment-head button,
+.fragment-head .toolbar button {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  font-size: 10px;
+}
+
+.fragment-head button.danger {
+  width: auto;
+  min-width: 20px;
+  margin-left: 0;
+  padding: 0 6px;
+}
+
+/* Formatting, then move and delete, both pinned right as in the reference. */
+.fragment-head > .toolbar {
+  margin-left: auto;
+}
+
+.fragment > .rich,
+.fragment .rich {
+  min-height: 34px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.fragment .list-text-editor {
+  padding: 7px 9px 8px;
+}
+
+/* The hidden measure sizes each line, so it has to carry the textarea's exact metrics.
+   Whole pixels, because a fractional line height rounds the gutter and the textarea differently. */
+.fragment .list-textarea,
+.fragment .list-line-measure {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+/* A code block keeps its shaded body, the way it prints in the report. */
+.fragment .code-block {
+  min-height: 34px;
+  margin: 0;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 0;
+  background: var(--canvas-deep);
+  font-size: 11px;
+  line-height: 1.6;
+  resize: none;
+}
+
+/* The gutter numbers each line, so its metrics have to match the textarea exactly. */
+.fragment .list-gutter {
+  padding-top: 0;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.fragment .list-marker {
+  line-height: 19px;
+}
+
+/* ---- Add a fragment ---- */
+.add-fragment {
+  min-height: 34px;
+  margin: 10px 11px 11px;
+  padding: 1px 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  text-align-last: center;
+  appearance: none;
+}
+
+.add-fragment:hover,
+.add-fragment:focus {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+/* ---- Readiness: a foldable card per finding, holding a dense Content/Needs table ---- */
+.review-group {
+  overflow: hidden;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.review-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border-bottom: 0;
+  color: var(--ink);
+  background: var(--canvas-deep);
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.review-group[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.review-group > summary::after,
+.review-group[open] > summary::after {
+  content: none;
+}
+
+.review-caret {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--muted);
+  transition: transform 0.12s ease-out;
+}
+
+.review-group[open] .review-caret {
+  transform: rotate(90deg);
+}
+
+.review-group-title {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-group-count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.review-group-count[data-level="warning"] {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9.5px;
+  table-layout: fixed;
+}
+
+.review-table th {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted-light);
+  background: transparent;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.review-table th:last-child {
+  width: 20px;
+}
+
+.review-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  line-height: 1.35;
+  vertical-align: top;
+}
+
+.review-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.review-row {
+  cursor: pointer;
+}
+
+.review-row:hover td {
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.review-row[data-level="warning"]:hover td {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.review-content {
+  width: 92px;
+  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.review-content i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--warning);
+  vertical-align: 1px;
+}
+
+.review-row[data-level="warning"] .review-content i {
+  background: var(--accent);
+}
+
+.review-content small {
+  display: block;
+  overflow: hidden;
+  margin-left: 11px;
+  color: var(--muted);
+  font-family: "Cascadia Code", Consolas, monospace !important;
+  font-size: 8px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-arrow {
+  width: 20px;
+  padding-left: 0 !important;
+  text-align: right;
+}
+
+.review-arrow button {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--warning);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.review-row[data-level="warning"] .review-arrow button {
+  color: var(--accent);
+}
+
+.review-row:hover .review-arrow button {
+  color: var(--accent-strong);
+}
+
+/* ---- Evidence register, inset inside its fragment like every other body ---- */
+.evidence-fragment > .evidence-set {
+  gap: 9px;
+  margin: 0;
+  padding: 9px;
+}
+
+.evidence-tile {
+  grid-template-columns: 32px minmax(0, 1fr);
+  border-radius: var(--radius-sm);
+}
+
+.evidence-main {
+  grid-template-columns: 128px minmax(0, 1fr);
+}
+
+.evidence-thumb {
+  min-height: 92px;
+  padding: 9px;
+}
+
+.evidence-thumb .image-preview {
+  max-height: 78px;
+}
+
+.evidence-meta {
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.evidence-caption {
+  font-size: 12px;
+}
+
+.evidence-acts > * {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+}
+
+/* Delete stays neutral until reached for, matching the fragment head. */
+.evidence-acts .danger:not(:disabled) {
+  color: var(--muted);
+}
+
+.evidence-acts .danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.evidence-fragment > .evidence-set > .evidence-add {
+  min-height: 32px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+/* ---- Table fragment, same border language as the rest ---- */
+.fragment .table-fragment {
+  border-color: var(--line);
+  font-size: 12px;
+}
+
+.fragment .table-fragment th,
+.fragment .table-fragment td {
+  border-color: var(--line);
+}
+
+.fragment .table-fragment th {
+  background: var(--canvas-deep);
+  font-size: 10px;
+}
+
+.fragment .table-cell-input {
+  min-height: 30px;
+  height: 30px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.fragment .table-controls button,
+.fragment .table-remove-select {
+  min-height: 28px;
+  font-size: 10.5px;
+}
+
+/* Table controls are secondary, so they wear the neutral button, not the primary green. */
+.fragment .table-controls button {
+  width: auto;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+  font-weight: 600;
+}
+
+.fragment .table-controls button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.fragment .table-remove-select {
+  width: auto;
+  min-width: 150px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+}
+
+.fragment .remove-table-row {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fragment .remove-table-row:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* The environment picker reads as the same chip whether it is a value or a select.
+   macOS ignores background-color on a native select, so the caret is drawn here instead. */
+.evidence-facts .evidence-environment {
+  min-height: 24px;
+  padding: 1px 17px 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  background-color: var(--canvas-deep);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 7px center, right 4px center;
+  background-repeat: no-repeat;
+  background-size: 3px 3px, 3px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  appearance: none;
 }

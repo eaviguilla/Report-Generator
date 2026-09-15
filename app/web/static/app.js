@@ -952,20 +952,35 @@
     syncConclusion(vulnerability);
     syncEvidenceImageSlots(vulnerability);
   }
-  const scopeTargetIds = scope => {
-    const mode = scope?.mode || "custom";
-    if (mode === "custom") return scope?.target_ids || [];
-    if (mode === "all") return report.scope_targets.map(target => target.target_id);
-    const environment = mode === "all_production" ? "production" : "non_production";
-    return report.scope_targets.filter(target => target.environment === environment).map(target => target.target_id);
+  const scopeTargetIds = scope => scope?.target_ids || [];
+  // Twin of report_service.location_lines: blanks are nothing, a "#" line is a note to the tester,
+  // and a repeat is the same place said twice. The raw text stays in the draft; it just never counts.
+  const locationLines = values => {
+    const cleaned = [];
+    (values || []).forEach(value => {
+      const text = String(value ?? "").trim();
+      if (text && !text.startsWith("#") && !cleaned.includes(text)) cleaned.push(text);
+    });
+    return cleaned;
   };
-  const customLocationValues = scope => Object.values(scope?.custom_locations || {}).flatMap(byChannel => Object.values(byChannel || {}).flat());
-  const scopeHasLocation = finding => scopeTargetIds(finding.scope).length > 0 || (finding.scope?.mode === "custom" && customLocationValues(finding.scope).some(value => value.trim()));
+  const customLocationValues = scope => Object.entries(scope?.custom_locations || {})
+    .filter(([environment]) => report.engagement.tested_environments.includes(environment))
+    .flatMap(([, byChannel]) => Object.entries(byChannel || {})
+      .filter(([channel]) => report.engagement.tested_channels.includes(channel))
+      .flatMap(([, locations]) => locationLines(locations)));
+  // Twin of report_service.scope_has_location. Selected targets are a presence check; a typed line
+  // counts only while the engagement still covers what it was typed under.
+  const scopeHasLocation = finding => scopeTargetIds(finding.scope).length > 0 || customLocationValues(finding.scope).length > 0;
   const scopeEnvironments = scope => {
     const environments = [];
     const add = environment => { if (environment && !environments.includes(environment)) environments.push(environment); };
     scopeTargetIds(scope).forEach(targetId => add(report.scope_targets.find(target => target.target_id === targetId)?.environment));
-    if ((scope?.mode || "custom") === "custom") Object.entries(scope?.custom_locations || {}).forEach(([environment, byChannel]) => { if (Object.values(byChannel || {}).flat().some(value => value.trim())) add(environment); });
+    Object.entries(scope?.custom_locations || {}).forEach(([environment, byChannel]) => {
+      // A line typed under coverage the engagement has since dropped is out of scope, whatever it says.
+      if (!report.engagement.tested_environments.includes(environment)) return;
+      const covered = Object.entries(byChannel || {}).filter(([channel]) => report.engagement.tested_channels.includes(channel));
+      if (covered.some(([, locations]) => locationLines(locations).length)) add(environment);
+    });
     return environments;
   };
   const affectedEnvironments = finding => scopeEnvironments(finding.scope);
@@ -977,13 +992,13 @@
     const scope = finding.scope;
     const channels = [];
     const add = channel => { if (channel && !channels.includes(channel)) channels.push(channel); };
-    if ((scope?.mode || "custom") === "custom") {
-      (scope?.target_ids || []).forEach(targetId => add(report.scope_targets.find(target => target.target_id === targetId)?.channel));
-      Object.values(scope?.custom_locations || {}).forEach(byChannel => Object.entries(byChannel || {}).forEach(([channel, locations]) => { if ((locations || []).some(value => value.trim())) add(channel); }));
-    } else {
-      const environments = scopeEnvironments(scope);
-      report.scope_targets.filter(target => environments.includes(target.environment)).forEach(target => add(target.channel));
-    }
+    (scope?.target_ids || []).forEach(targetId => add(report.scope_targets.find(target => target.target_id === targetId)?.channel));
+    Object.entries(scope?.custom_locations || {}).forEach(([environment, byChannel]) => {
+      if (!report.engagement.tested_environments.includes(environment)) return;
+      Object.entries(byChannel || {}).forEach(([channel, locations]) => {
+        if (report.engagement.tested_channels.includes(channel) && locationLines(locations).length) add(channel);
+      });
+    });
     return channels;
   };
   const libraryEntryFor = finding => library.find(candidate => candidate.library_id === finding.library_ref?.library_id) || null;
@@ -1234,19 +1249,13 @@
     // Mirrors the server's removal guard so Setup can warn before a save is rejected. A typed-in
     // location only counts while the engagement still covers both its environment and its app type.
     const scopeReaches = (scope, targets, coverage) => {
-      const mode = scope?.mode || "custom";
-      if (mode === "custom") {
-        if ((scope?.target_ids || []).some(targetId => targets.some(target => target.target_id === targetId))) return true;
-        return Object.entries(scope?.custom_locations || {})
-          .filter(([environment]) => !coverage || coverage.environments.includes(environment))
-          .flatMap(([, byChannel]) => Object.entries(byChannel || {})
-            .filter(([channel]) => !coverage || coverage.channels.includes(channel))
-            .flatMap(([, values]) => values || []))
-          .some(value => value.trim());
-      }
-      if (mode === "all") return targets.length > 0;
-      const environment = mode === "all_production" ? "production" : "non_production";
-      return targets.some(target => target.environment === environment);
+      if ((scope?.target_ids || []).some(targetId => targets.some(target => target.target_id === targetId))) return true;
+      return Object.entries(scope?.custom_locations || {})
+        .filter(([environment]) => !coverage || coverage.environments.includes(environment))
+        .flatMap(([, byChannel]) => Object.entries(byChannel || {})
+          .filter(([channel]) => !coverage || coverage.channels.includes(channel))
+          .flatMap(([, values]) => locationLines(values)))
+        .length > 0;
     };
     const findingsStrandedBy = (environments, channels) => {
       const surviving = (report.scope_targets || []).filter(target => environments.includes(target.environment) && channels.includes(target.channel));
@@ -1255,11 +1264,21 @@
         .map(finding => finding.title || "Untitled finding");
     };
     const confirmScopeLoss = async (environments, channels, change) => {
+      const doomed = new Set((report.scope_targets || [])
+        .filter(target => !environments.includes(target.environment) || !channels.includes(target.channel))
+        .map(target => target.target_id));
       const stranded = findingsStrandedBy(environments, channels);
-      if (!stranded.length) return true;
+      const impact = scopeChangeImpact(doomed);
+      if (!stranded.length && !impact.findings) return true;
+      const lines = [];
+      if (impact.findings) lines.push(`${impact.findings} finding${impact.findings === 1 ? "" : "s"} lose a selected location.`);
+      if (stranded.length) lines.push(`${stranded.length} will be left with no affected location at all, and the report cannot be saved until you give ${stranded.length === 1 ? "it" : "them"} one.`);
+      // Screenshots are kept, not deleted -- but an unlabelled one blocks generation until it is
+      // reassigned or removed, so the tester hears it here rather than from the readiness panel.
+      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their file but lose their environment, and must be reassigned or deleted before the report can be generated.`);
       return window.vrDialog.confirm({
         title: `${change}?`,
-        message: `${stranded.length} finding${stranded.length === 1 ? "" : "s"} will be left with no affected location, and the report cannot be saved until you give ${stranded.length === 1 ? "it" : "them"} one.`,
+        message: lines.join(" "),
         list: stranded,
         confirmLabel: "Make the change anyway",
         cancelLabel: "Keep the current coverage",
@@ -1280,20 +1299,72 @@
         endpoints: (report.vulnerabilities || []).reduce((total, finding) => total + endpointsIn(finding), 0),
       };
     };
-    // The tester agreed to lose these, so clear them here too rather than leaving the page holding
-    // selections and typed endpoints the next save would silently drop.
+    // The tester agreed to lose these targets, so clear the selections pointing at them rather than
+    // leaving the page holding IDs the next save would drop. An image for an environment the finding
+    // no longer reaches keeps its file but loses its label, so the readiness panel asks for a new one
+    // instead of the report silently omitting it.
+    const dropTargetsEverywhere = targetIds => {
+      if (!targetIds.size) return;
+      const targetById = new Map((report.scope_targets || []).map(target => [target.target_id, target]));
+      const environmentsOf = ids => [...new Set(ids.map(targetId => targetById.get(targetId)?.environment).filter(Boolean))];
+      (report.vulnerabilities || []).forEach(finding => {
+        const scope = finding.scope || {};
+        const had = environmentsOf(scope.target_ids || []);
+        scope.target_ids = (scope.target_ids || []).filter(targetId => !targetIds.has(targetId));
+        targetIds.forEach(targetId => { delete scope.location_values?.[targetId]; });
+        const kept = environmentsOf(scope.target_ids);
+        // A typed-in endpoint keeps its environment alive even with no target selected there.
+        const typed = Object.entries(scope.custom_locations || {})
+          .filter(([, byChannel]) => Object.values(byChannel || {}).flat().some(value => value.trim()))
+          .map(([environment]) => environment);
+        const lost = had.filter(environment => !kept.includes(environment) && !typed.includes(environment));
+        if (!lost.length) return;
+        (finding.contents || []).forEach(content => {
+          // Previous proof of concept records an earlier engagement, so its labels are history.
+          if (content.type === "previous_proof_of_concept") return;
+          (content.fragments || []).forEach(fragment => {
+            if (fragment.type === "image" && lost.includes(fragment.environment)) fragment.environment = null;
+          });
+        });
+      });
+    };
+    // What a scope change costs the findings, for a dialog that has to say so before it happens.
+    const scopeChangeImpact = targetIds => {
+      const targetById = new Map((report.scope_targets || []).map(target => [target.target_id, target]));
+      const environmentsOf = ids => [...new Set(ids.map(targetId => targetById.get(targetId)?.environment).filter(Boolean))];
+      let findings = 0;
+      let images = 0;
+      (report.vulnerabilities || []).forEach(finding => {
+        const scope = finding.scope || {};
+        const selected = scope.target_ids || [];
+        if (!selected.some(targetId => targetIds.has(targetId))) return;
+        findings += 1;
+        const kept = environmentsOf(selected.filter(targetId => !targetIds.has(targetId)));
+        const typed = Object.entries(scope.custom_locations || {})
+          .filter(([, byChannel]) => Object.values(byChannel || {}).flat().some(value => value.trim()))
+          .map(([environment]) => environment);
+        const lost = environmentsOf(selected).filter(environment => !kept.includes(environment) && !typed.includes(environment));
+        if (!lost.length) return;
+        (finding.contents || []).forEach(content => {
+          if (content.type === "previous_proof_of_concept") return;
+          images += (content.fragments || []).filter(fragment => fragment.type === "image" && lost.includes(fragment.environment)).length;
+        });
+      });
+      return {findings, images};
+    };
     const dropChannelEverywhere = channel => {
       const targetIds = new Set((report.scope_targets || []).filter(target => target.channel === channel).map(target => target.target_id));
       Object.values(report.scope_text || {}).forEach(byChannel => { if (byChannel) byChannel[channel] = ""; });
+      // Typed endpoints go first, so an environment kept alive only by one under this app type
+      // counts as lost when the image labels are reconsidered.
       (report.vulnerabilities || []).forEach(finding => {
         const scope = finding.scope || {};
-        scope.target_ids = (scope.target_ids || []).filter(targetId => !targetIds.has(targetId));
-        targetIds.forEach(targetId => { delete scope.location_values?.[targetId]; });
         Object.entries(scope.custom_locations || {}).forEach(([environment, byChannel]) => {
           delete byChannel?.[channel];
           if (!Object.keys(byChannel || {}).length) delete scope.custom_locations[environment];
         });
       });
+      dropTargetsEverywhere(targetIds);
       report.scope_targets = (report.scope_targets || []).filter(target => target.channel !== channel);
     };
     const confirmChannelRemoval = async channel => {
@@ -1329,11 +1400,18 @@
     };
     strandedByScopeEdit = scopeTextStrandedFindings;
     const confirmScopeTextLoss = async () => {
+      const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
+      const doomed = new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id));
       const stranded = scopeTextStrandedFindings();
-      if (!stranded.length) return true;
+      const impact = scopeChangeImpact(doomed);
+      if (!stranded.length && !impact.findings) return true;
+      const lines = [];
+      if (impact.findings) lines.push(`${impact.findings} finding${impact.findings === 1 ? "" : "s"} point at a target you are removing or renaming, and lose it.`);
+      if (stranded.length) lines.push(`${stranded.length} will be left with no location at all, and the report cannot be saved until ${stranded.length === 1 ? "it gets" : "they get"} another.`);
+      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their file but lose their environment, and must be reassigned or deleted before the report can be generated.`);
       return window.vrDialog.confirm({
         title: "Change these scope targets?",
-        message: `${stranded.length} finding${stranded.length === 1 ? "" : "s"} still point${stranded.length === 1 ? "s" : ""} at a target you are removing or renaming, and the report cannot be saved until ${stranded.length === 1 ? "it gets" : "they get"} another location.`,
+        message: lines.join(" "),
         list: stranded,
         confirmLabel: "Change them anyway",
         cancelLabel: "Keep the current targets",
@@ -1404,6 +1482,9 @@
             event.target.checked = true;
             return;
           }
+          // The server rebuilds scope_targets from the surviving environments, so clear the
+          // selections that pointed into this one before they reach a save that would drop them.
+          if (!event.target.checked) dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => target.environment === environment).map(target => target.target_id)));
           report.engagement.tested_environments = next;
           renderCoverage();
           scheduleSave();
@@ -1457,7 +1538,12 @@
           // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
           textarea.onchange = async () => {
             if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) return;
-            if (await confirmScopeTextLoss()) { textarea.dataset.scopeTextBefore = textarea.value; return; }
+            if (await confirmScopeTextLoss()) {
+              const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
+              dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id)));
+              textarea.dataset.scopeTextBefore = textarea.value;
+              return;
+            }
             textarea.value = textarea.dataset.scopeTextBefore;
             report.scope_text[environment][channel] = textarea.value;
             grow();
@@ -1485,9 +1571,6 @@
     }
     const findingBody = document.querySelector("#findings");
     if (findingBody) {
-    report.vulnerabilities.forEach(finding => {
-      if (finding.scope?.mode !== "custom") finding.scope.target_ids = scopeTargetIds(finding.scope);
-    });
     const libraryMatches = query => library.filter(entry => entry.title.toLowerCase().includes(query.toLowerCase()) || entry.tags.join(" ").toLowerCase().includes(query.toLowerCase()));
     const locationGroups = {production:[], non_production:[]};
     report.scope_targets.forEach(target => locationGroups[target.environment]?.push(target));
@@ -1498,7 +1581,7 @@
       if (control.matches("select.validation-error") && control.value) control.classList.remove("validation-error");
       if (control.matches("[data-location], [data-custom-location]")) {
         const locationRow = control.closest("tr");
-        const hasLocation = locationRow?.querySelector("[data-location]:checked") || [...(locationRow?.querySelectorAll("[data-custom-location]") || [])].some(input => input.value.trim());
+        const hasLocation = locationRow?.querySelector("[data-location]:checked") || [...(locationRow?.querySelectorAll("[data-custom-location]") || [])].some(input => locationLines(input.value.split(/\r?\n/)).length);
         if (hasLocation) locationRow.querySelectorAll(".location-group.validation-error").forEach(group => group.classList.remove("validation-error"));
         requestAnimationFrame(showFindingValidationErrors);
       }
@@ -1526,7 +1609,7 @@
         row.querySelector(".finding-title-cell input")?.classList.toggle("validation-error", !row.querySelector(".finding-title-cell input").value.trim());
         row.querySelectorAll("select").forEach(control => control.classList.toggle("validation-error", !control.value));
         const locationRow = row.nextElementSibling;
-        const hasLocation = locationRow?.querySelector("[data-location]:checked") || [...(locationRow?.querySelectorAll("[data-custom-location]") || [])].some(input => input.value.trim());
+        const hasLocation = locationRow?.querySelector("[data-location]:checked") || [...(locationRow?.querySelectorAll("[data-custom-location]") || [])].some(input => locationLines(input.value.split(/\r?\n/)).length);
         locationRow?.querySelectorAll(".location-group").forEach(group => group.classList.toggle("validation-error", !hasLocation));
       });
     };
@@ -1797,7 +1880,7 @@
         });
       });
     };
-    const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.mode === "custom" ? finding.scope.target_ids : []; const locationValues = finding.scope.location_values || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
+    const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.target_ids || []; const locationValues = finding.scope.location_values || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
       let titleBeforeEdit = finding.title || "";
       const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = async () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (!entry || finding.library_ref?.library_id === entry.library_id) { clearResults(); return; } if (await replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); } }); };
       titleInput.oninput = event => { finding.title = event.target.value; syncConclusion(finding); renderRowResults(); scheduleSave(); }; titleInput.onfocus = () => { titleBeforeEdit = finding.title || ""; renderRowResults(); }; titleInput.onkeydown = event => { if (event.key === "Escape") clearResults(); };

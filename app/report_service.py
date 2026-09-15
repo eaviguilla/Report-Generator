@@ -255,6 +255,21 @@ def provision(vulnerability: Vulnerability) -> None:
             ]
 
 
+def location_lines(values) -> list[str]:
+    """Single owner of which typed lines in an "additional affected locations" box name a real place.
+
+    Same cleaning the scope textarea gets in reconcile_targets: blanks are nothing, a "#" line is a
+    note to the tester, and a repeat is the same place said twice. The raw text stays in the draft
+    so the note survives an edit; it just never counts as a location or reaches the document."""
+    cleaned: list[str] = []
+    for value in values or []:
+        text = str(value).strip()
+        if not text or text.startswith("#") or text in cleaned:
+            continue
+        cleaned.append(text)
+    return cleaned
+
+
 def affected_environments(vulnerability: Vulnerability, report: Report) -> list[Environment]:
     """Resolve the environments represented by a finding's selected or custom locations."""
     ordered: list[Environment] = []
@@ -264,22 +279,16 @@ def affected_environments(vulnerability: Vulnerability, report: Report) -> list[
         if environment not in ordered:
             ordered.append(environment)
 
-    if vulnerability.scope.mode == "custom":
-        for target_id in vulnerability.scope.target_ids:
-            target = target_by_id.get(target_id)
-            if target:
-                add(target.environment)
-        for environment, by_channel in vulnerability.scope.custom_locations.items():
-            if any(location.strip() for locations in by_channel.values() for location in locations):
-                add(environment)
-    elif vulnerability.scope.mode == "all":
-        for target in report.scope_targets:
+    for target_id in vulnerability.scope.target_ids:
+        target = target_by_id.get(target_id)
+        if target:
             add(target.environment)
-    elif vulnerability.scope.mode == "all_production":
-        if any(target.environment == "production" for target in report.scope_targets):
-            add("production")
-    elif any(target.environment == "non_production" for target in report.scope_targets):
-        add("non_production")
+    for environment, by_channel in vulnerability.scope.custom_locations.items():
+        # A line typed under coverage the engagement has since dropped is out of scope, whatever it says.
+        if environment not in report.engagement.tested_environments:
+            continue
+        if any(location_lines(locations) for channel, locations in by_channel.items() if channel in report.engagement.tested_channels):
+            add(environment)
     return ordered
 
 
@@ -292,20 +301,16 @@ def affected_channels(vulnerability: Vulnerability, report: Report) -> list[Chan
         if channel not in ordered:
             ordered.append(channel)
 
-    if vulnerability.scope.mode == "custom":
-        for target_id in vulnerability.scope.target_ids:
-            target = target_by_id.get(target_id)
-            if target:
-                add(target.channel)
-        for by_channel in vulnerability.scope.custom_locations.values():
-            for channel, locations in by_channel.items():
-                if any(location.strip() for location in locations):
-                    add(channel)
-    else:
-        environments = affected_environments(vulnerability, report)
-        for target in report.scope_targets:
-            if target.environment in environments:
-                add(target.channel)
+    for target_id in vulnerability.scope.target_ids:
+        target = target_by_id.get(target_id)
+        if target:
+            add(target.channel)
+    for environment, by_channel in vulnerability.scope.custom_locations.items():
+        if environment not in report.engagement.tested_environments:
+            continue
+        for channel, locations in by_channel.items():
+            if channel in report.engagement.tested_channels and location_lines(locations):
+                add(channel)
     return ordered
 
 
@@ -443,16 +448,14 @@ def apply_poc_variant(vulnerability: Vulnerability, fragments: list, variants: l
 
 
 def _scope_reaches_a_location(scope: dict, targets: list[dict]) -> bool:
-    """Answer scope_has_location for a raw payload scope against a raw target list."""
-    mode = scope.get("mode", "custom")
-    if mode == "custom":
-        if set(scope.get("target_ids") or []) & {target["target_id"] for target in targets}:
-            return True
-        return any(str(value).strip() for by_channel in (scope.get("custom_locations") or {}).values() for values in (by_channel or {}).values() for value in values)
-    if mode == "all":
-        return bool(targets)
-    environment = "production" if mode == "all_production" else "non_production"
-    return any(target["environment"] == environment for target in targets)
+    """Answer scope_has_location for a raw payload scope against a raw target list.
+
+    Runs before the migration on the save path, so a payload still carrying a retired mode is read
+    as custom: with IDs present that answers identically, and with none it reports no location,
+    which lets the save through for the migration to resolve rather than refusing it."""
+    if set(scope.get("target_ids") or []) & {target["target_id"] for target in targets}:
+        return True
+    return any(location_lines(values) for by_channel in (scope.get("custom_locations") or {}).values() for values in (by_channel or {}).values())
 
 
 def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
@@ -526,16 +529,18 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             }
             scope["custom_locations"] = {key: value for key, value in scope["custom_locations"].items() if value}
         title = vulnerability.get("title") or "Untitled finding"
-        if scope.get("mode") == "custom":
-            if set(scope.get("target_ids", [])) - target_ids:
-                removed_references.append(title)
-            # Dropping the only app type a typed-in location belonged to strands the finding exactly
-            # as removing a selected target does, so it has to be reported the same way.
-            elif reached_before and not _scope_reaches_a_location(scope, targets):
-                removed_references.append(title)
-            continue
-        # An "all production"-style finding holds no target IDs, so only losing every
-        # location it could resolve to shows that the scope change stranded it.
+        # A removed target is dropped, not refused. The browser purges the same IDs after its own
+        # prompt, so refusing here would block a save the tester was told was safe; and leaving them
+        # would fail validate_references with a raw error blob instead of this named one.
+        submitted_ids = scope.get("target_ids") or []
+        kept_ids = [target_id for target_id in submitted_ids if target_id in target_ids]
+        if len(kept_ids) != len(submitted_ids):
+            scope["target_ids"] = kept_ids
+            location_values = scope.get("location_values")
+            if isinstance(location_values, dict):
+                scope["location_values"] = {key: value for key, value in location_values.items() if key in target_ids}
+        # Losing every location is the only unsafe outcome left, and it reads the same for a finding
+        # that held target IDs and one located only by typed-in endpoints.
         if reached_before and not _scope_reaches_a_location(scope, targets):
             removed_references.append(title)
     return removed_references
@@ -570,14 +575,23 @@ def setup_is_complete(report: Report) -> bool:
 
 
 def scope_has_location(vulnerability: Vulnerability, report: Report) -> bool:
-    """Return whether a finding's scope mode resolves to an affected location."""
+    """Return whether a finding claims any location at all.
+
+    Selected targets are a presence check: whether the IDs still exist is left to
+    Report.validate_references and to reconcile_targets' survivor filter. A typed line is held to
+    more than that, because nothing else ever revisits it -- it counts only while the engagement
+    still covers the environment and app type it was typed under, so a finding cannot pass the
+    Content gate on a location the report does not test."""
     scope = vulnerability.scope
-    if scope.mode == "custom":
-        return bool(scope.target_ids) or any(value.strip() for by_channel in scope.custom_locations.values() for values in by_channel.values() for value in values)
-    if scope.mode == "all":
-        return bool(report.scope_targets)
-    environment = "production" if scope.mode == "all_production" else "non_production"
-    return any(target.environment == environment for target in report.scope_targets)
+    if scope.target_ids:
+        return True
+    return any(
+        location_lines(locations)
+        for environment, by_channel in scope.custom_locations.items()
+        if environment in report.engagement.tested_environments
+        for channel, locations in by_channel.items()
+        if channel in report.engagement.tested_channels
+    )
 
 
 def finding_is_complete(vulnerability: Vulnerability, report: Report) -> bool:

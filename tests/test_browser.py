@@ -875,6 +875,34 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_url(f"**/reports/{report_id}/edit")
         self.assertEqual(page.get_by_role("heading", name=replacement).text_content(), replacement)
 
+    def test_a_note_in_the_additional_locations_box_does_not_open_the_content_page(self) -> None:
+        """A finding complete in every other way must still be held at Findings until it has a real
+        affected location, and a typed endpoint is a real one."""
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_role("button", name="Add finding").click()
+        row = page.locator("#findings tr").first
+        row.locator(".finding-title-cell input").fill("Located by typing")
+        for select, value in zip(row.locator("select").all(), ["low", "low", "low"]):
+            select.select_option(value)
+
+        endpoints = page.locator("[data-custom-location]").first
+        endpoints.fill("# ask the app owner which host")
+        page.locator("#next").click()
+        page.wait_for_timeout(300)
+        self.assertTrue(page.url.endswith("/findings"), "a note is not an affected location")
+
+        endpoints.fill("# ask the app owner which host\nhttps://typed.example.test/admin")
+        page.locator("#next").click()
+        page.wait_for_url("**/edit", timeout=10_000)
+        stored = read_json(main.workspace.find_path(report_id))["vulnerabilities"][0]
+        self.assertEqual(
+            stored["scope"]["custom_locations"]["production"]["web"],
+            ["# ask the app owner which host", "https://typed.example.test/admin"],
+            "the note is kept alongside the location it stands next to",
+        )
+
     def test_invalid_findings_block_navigation_but_content_allows_back(self) -> None:
         findings_report_id = self.ready_report()
         page = self.page

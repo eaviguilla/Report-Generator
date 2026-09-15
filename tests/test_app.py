@@ -162,7 +162,7 @@ class ReportApiTests(unittest.TestCase):
             ("bsn_number", "BSN.123", 'BSN number contains invalid character: "." (period)'),
             ("app_owner", "Owner 2", 'Application owner contains invalid character: "2" (digit two)'),
             ("tester", "QA_Tester", 'Tester contains invalid character: "_" (underscore)'),
-            ("limitations", "No testing: production", 'Limitations contains invalid character: ":" (colon)'),
+            ("limitations", "No testing @ production", 'Limitations contains invalid character: "@" (at sign)'),
         ]
         for field, value, expected_issue in field_cases:
             with self.subTest(field=field):
@@ -1386,6 +1386,27 @@ class ReportApiTests(unittest.TestCase):
             [fragment["type"] for fragment in remediation["fragments"]],
             ["bulleted_list", "note"],
         )
+
+    def test_a_library_insert_does_not_offer_back_the_content_it_just_copied(self) -> None:
+        """The finding arrives holding the entry's own description and remediation, so the Content
+        page must not greet the tester with an offer to install what is already there. The
+        proof-of-concept offer is tracked by poc_variants instead, so it is not this field's to mark."""
+        report_id = self.new_report()
+        finding = self.client.post(f"/reports/{report_id}/library/VDB-047").json()["finding"]
+
+        entry = main.library.get("VDB-047")
+        supplied = [
+            content["type"]
+            for content in entry["contents"]
+            if content["type"] in ("description", "recommended_remediation") and content["fragments"]
+        ]
+        self.assertIn("recommended_remediation", supplied, "the fixture no longer exercises this")
+        for content_type in supplied:
+            self.assertEqual(
+                finding["content_offer_resolved"].get(content_type),
+                "VDB-047",
+                f"{content_type} would be offered content it already holds",
+            )
 
     def test_a_library_finding_still_needs_an_affected_location(self) -> None:
         """Scope defaults to "all", which would read as a deliberate every-target choice and walk

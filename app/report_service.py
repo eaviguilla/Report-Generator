@@ -98,14 +98,17 @@ def _has_allowed_characters(
     )
 
 
+APP_NAME_SYMBOLS = "-:;.()"
+
+
 def valid_application_name(value: str) -> bool:
-    return _has_allowed_characters(value, "-:()")
+    return _has_allowed_characters(value, APP_NAME_SYMBOLS)
 
 
 def setup_input_issues(engagement: Engagement) -> list[str]:
     """Return invalid Setup values without treating blank draft fields as errors."""
     issues = []
-    if engagement.app_name and (issue := invalid_character_issue("Application name", engagement.app_name, "-:()")):
+    if engagement.app_name and (issue := invalid_character_issue("Application name", engagement.app_name, APP_NAME_SYMBOLS)):
         issues.append(issue)
     for label, value in (("CI number", engagement.ci_number), ("BSN number", engagement.bsn_number)):
         if value and (issue := invalid_character_issue(label, value, "-", allow_spaces=False)):
@@ -128,12 +131,8 @@ def setup_input_issues(engagement: Engagement) -> list[str]:
         if account.username and account.username != "N/A" and not USERNAME_PATTERN.fullmatch(account.username):
             issue = invalid_character_issue(f"Username {index}", account.username, "._@\\-", allow_spaces=False)
             issues.append(issue or f"Username {index} must start and end with a letter or number")
-    if engagement.limitations and not _has_allowed_characters(
-        engagement.limitations,
-        "/,.()&'\"-",
-        allow_line_breaks=True,
-    ):
-        issues.append(invalid_character_issue("Limitations", engagement.limitations, "/,.()&'\"-", allow_line_breaks=True))
+    if engagement.limitations and (issue := invalid_character_issue("Limitations", engagement.limitations, "/,.;:()&'\"-", allow_line_breaks=True)):
+        issues.append(issue)
     return issues
 
 

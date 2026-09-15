@@ -2217,7 +2217,7 @@
       "default_likelihood": "low",
       "default_impact": "low",
       "default_severity": "low",
-      "requires_tester_input": true,
+      "requires_tester_input": false,
       "status": "approved",
       "contents": [
         {

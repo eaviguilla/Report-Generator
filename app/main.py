@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import ValidationError
 
-from app.models import Content, EvidenceItem, LibraryRef, Report, Vulnerability
+from app.models import Content, EvidenceItem, LibraryRef, Report, Scope, Vulnerability
 from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, render_report_docx
@@ -714,7 +714,9 @@ def insert_library(request: Request, report_id: str, library_id: str):
     entry = library.get(library_id)
     if entry is None:
         raise HTTPException(404, "Library entry not found")
-    vulnerability = Vulnerability(uid=f"v_{uuid.uuid4().hex[:8]}", title=entry["title"], likelihood=entry.get("default_likelihood"), impact=entry.get("default_impact"), severity=entry.get("default_severity") or "informational", library_ref=LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=datetime.now().astimezone()), contents=copy.deepcopy(entry.get("contents", [])))
+    # Scope defaults to "all", which would read as a deliberate every-target choice and let the
+    # finding past the affected-location gate before the tester has picked anything.
+    vulnerability = Vulnerability(uid=f"v_{uuid.uuid4().hex[:8]}", title=entry["title"], likelihood=entry.get("default_likelihood"), impact=entry.get("default_impact"), severity=entry.get("default_severity") or "informational", scope=Scope(mode="custom"), library_ref=LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=datetime.now().astimezone()), contents=copy.deepcopy(entry.get("contents", [])))
     assign_fresh_fragment_ids(vulnerability)
     provision(vulnerability)
     report.vulnerabilities.append(vulnerability)

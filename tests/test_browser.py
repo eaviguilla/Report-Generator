@@ -1119,6 +1119,71 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#issue-count")
         self.assertEqual(page.locator(".poc-offer").count(), 0, "the finding no longer touches api, so its steps are not offered")
 
+    def test_changing_a_finding_status_in_the_browser_keeps_last_years_proof(self) -> None:
+        """The editor hides the previous proof when a finding becomes "open new". Deleting it would
+        make a mis-click on a dropdown unrecoverable, so the work has to come back with the status."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+        next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Last year's step")]
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#findings tr")
+        status = page.locator("#findings tr").first.locator("select").last
+        saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
+        with page.expect_response(saved_put):
+            status.select_option("open_new")
+            page.click('[data-dialog-action="confirm"]')
+
+        hidden = read_json(main.workspace.find_path(report_id))
+        carried = [
+            content for content in hidden["vulnerabilities"][0]["contents"]
+            if content["type"] == "previous_proof_of_concept"
+        ]
+        self.assertTrue(carried, "the section is kept out of sight, not thrown away")
+
+        with page.expect_response(saved_put):
+            status.select_option("open_previously_discovered")
+
+        restored = read_json(main.workspace.find_path(report_id))
+        previous_content = next(
+            content for content in restored["vulnerabilities"][0]["contents"]
+            if content["type"] == "previous_proof_of_concept"
+        )
+        steps = [
+            run["text"]
+            for fragment in previous_content["fragments"] if fragment["type"] == "numbered_list"
+            for item in fragment["items"] for run in item["runs"]
+        ]
+        self.assertIn("Last year's step", steps, "the tester's previous proof survived the round trip")
+
+    def test_a_status_change_with_nothing_written_asks_for_no_confirmation(self) -> None:
+        """The warning is about losing work. An untouched finding has none, so stopping to ask
+        trains the tester to dismiss the dialog that will one day matter."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#findings tr")
+        status = page.locator("#findings tr").first.locator("select").last
+        status.select_option("open_new")
+        # A modal would swallow this click, so arriving at the editor is itself the assertion that
+        # no dialog stood in the way.
+        page.locator("#next").click()
+        page.wait_for_url("**/edit", timeout=10_000)
+        self.assertEqual(page.locator('[data-dialog-action="confirm"]').count(), 0, "nothing was written, so nothing needed confirming")
+        self.assertEqual(read_json(main.workspace.find_path(report_id))["vulnerabilities"][0]["status"], "open_new")
+
     def test_the_fragments_provisioning_guarantees_cannot_be_deleted(self) -> None:
         """Provisioning puts these back on the next save, so offering a delete would look like the
         editor silently discarded the change."""

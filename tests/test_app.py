@@ -20,12 +20,12 @@ from PIL import Image
 from pydantic import ValidationError
 
 from app import main
-from app.docx_report import _finding_locations, _metadata
+from app.docx_report import _finding_locations, _metadata, generation_issues
 from app.library import Library
-from app.report_service import affected_channels, applicable_poc_variants, apply_poc_variant, provision
+from app.report_service import affected_channels, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
-from app.models import ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, Vulnerability, resolve_tested_channels
+from app.models import ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, TestWindow, Vulnerability, resolve_tested_channels
 from app.tester_identity import Identity, load_or_bootstrap
 
 
@@ -747,6 +747,194 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(scope.custom_locations, {"production": {"web": ["https://web.example.test/a"]}})
         self.assertEqual(affected_channels(main.workspace.load(report_id).vulnerabilities[0], main.workspace.load(report_id)), ["web"])
 
+    def test_dropping_an_app_type_that_held_a_findings_only_location_is_rejected(self) -> None:
+        """A finding located only by typed API endpoints loses every location when API is dropped,
+        which strands it exactly as removing a selected target would."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Typed Only", "ci_number": "CI-ONLY", "tested_channels": ["web", "api"], "tested_environments": ["production"]})
+        report["scope_text"] = {"production": {"web": "https://web.example.test", "api": "POST /v1/pay"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        current = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        current["vulnerabilities"] = [{
+            "uid": "v_api_only", "title": "API only finding", "likelihood": "high", "impact": "high", "severity": "high",
+            "scope": {"mode": "custom", "target_ids": [], "location_values": {},
+                      "custom_locations": {"production": {"api": ["POST /v1/only"]}}},
+        }]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
+
+        narrowed = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        narrowed["engagement"]["tested_channels"] = ["web"]
+        narrowed["scope_text"] = {"production": {"web": "https://web.example.test"}}
+        rejected = self.client.put(f"/reports/{report_id}", json=narrowed)
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["error"]["code"], "referenced_scope_removed")
+        self.assertIn("API only finding", rejected.json()["detail"])
+
+        # The draft on disk still has the finding and its location, so nothing was stranded.
+        kept = main.workspace.load(report_id)
+        self.assertTrue(scope_has_location(kept.vulnerabilities[0], kept))
+
+    def test_narrowing_the_environments_keeps_an_uploaded_screenshot_where_it_belongs(self) -> None:
+        """Relabelling a non-production screenshot as Production would file the tester's evidence
+        under a heading it never came from, and leave a second Production slot demanding another."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Evidence Home", "ci_number": "CI-EV", "tested_environments": ["production", "non_production"]})
+        report["scope_text"] = {"production": {"web": "https://prod.example.test"}, "non_production": {"web": "https://uat.example.test"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        buffer = BytesIO()
+        Image.new("RGB", (16, 16), "red").save(buffer, format="PNG")
+        upload = self.client.post(f"/reports/{report_id}/evidence", files={"file": ("shot.png", buffer.getvalue(), "image/png")})
+        self.assertEqual(upload.status_code, 200)
+        evidence_id = upload.json()["evidence"]["evidence_id"]
+
+        current = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        current["vulnerabilities"] = [{
+            "uid": "v_shot", "title": "Shot finding", "likelihood": "high", "impact": "high", "severity": "high",
+            "status": "open_new", "scope": {"mode": "all"},
+            "contents": [{"type": "proof_of_concept", "fragments": [
+                {"frag_id": "f_steps", "type": "numbered_list", "items": [{"runs": [{"text": "step"}]}]},
+                {"frag_id": "f_uat", "type": "image", "environment": "non_production", "evidence_id": evidence_id, "caption": "UAT screenshot", "width_mm": None},
+            ]}],
+        }]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
+
+        narrowed = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        narrowed["engagement"]["tested_environments"] = ["production"]
+        narrowed["scope_text"] = {"production": {"web": "https://prod.example.test"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=narrowed).status_code, 200)
+
+        finding = main.workspace.load(report_id).vulnerabilities[0]
+        carried = next(fragment for content in finding.contents for fragment in content.fragments if fragment.frag_id == "f_uat")
+        self.assertEqual(carried.environment, "non_production", "an uploaded screenshot keeps the environment it was taken in")
+        production_slots = [
+            fragment for content in finding.contents if content.type == "proof_of_concept"
+            for fragment in content.fragments
+            if isinstance(fragment, ImageFragment) and fragment.environment == "production"
+        ]
+        self.assertEqual(len(production_slots), 1, "narrowing must not leave two Production slots to fill")
+
+    def test_an_empty_slot_for_a_dropped_environment_stops_being_asked_for(self) -> None:
+        """An untouched slot for an environment the finding no longer affects is nobody's to fill."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Slot Drop", "ci_number": "CI-SLOT", "tested_environments": ["production", "non_production"]})
+        report["scope_text"] = {"production": {"web": "https://prod.example.test"}, "non_production": {"web": "https://uat.example.test"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        current = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        current["vulnerabilities"] = [{
+            "uid": "v_slots", "title": "Slot finding", "likelihood": "high", "impact": "high", "severity": "high",
+            "status": "open_new", "scope": {"mode": "all"},
+            "contents": [{"type": "proof_of_concept", "fragments": [
+                {"frag_id": "f_steps", "type": "numbered_list", "items": [{"runs": [{"text": "step"}]}]}]}],
+        }]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
+        both = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(
+            sorted(fragment.environment for content in both.contents for fragment in content.fragments if isinstance(fragment, ImageFragment)),
+            ["non_production", "production"],
+        )
+
+        narrowed = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        narrowed["engagement"]["tested_environments"] = ["production"]
+        narrowed["scope_text"] = {"production": {"web": "https://prod.example.test"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=narrowed).status_code, 200)
+
+        finding = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(
+            [fragment.environment for content in finding.contents for fragment in content.fragments if isinstance(fragment, ImageFragment)],
+            ["production"],
+        )
+
+    def test_a_status_change_does_not_destroy_the_previous_proof_or_conclusion(self) -> None:
+        """Switching a finding to "open new" hides last year's proof; it must not delete it, because
+        switching back is a correction the tester is allowed to make."""
+        finding = Vulnerability(uid="v_carry", title="Carried finding", status="open_previously_discovered")
+        provision(finding)
+        previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+        previous.fragments = [ListFragment(frag_id="f_last", type="numbered_list", items=[ListItem(runs=[Run(text="Last year's proof")])])]
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        conclusion.fragments = [ParagraphFragment(frag_id="f_note", type="paragraph", runs=[Run(text="Hand written conclusion")])]
+
+        finding.status = "open_new"
+        provision(finding)
+        self.assertNotIn("previous_proof_of_concept", [content.type for content in finding.contents[:3]])
+
+        finding.status = "open_previously_discovered"
+        provision(finding)
+        restored = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+        self.assertEqual(
+            [run.text for fragment in restored.fragments if isinstance(fragment, ListFragment) for item in fragment.items for run in item.runs],
+            ["Last year's proof"],
+        )
+        restored_conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        self.assertIn(
+            "Hand written conclusion",
+            [run.text for fragment in restored_conclusion.fragments for run in getattr(fragment, "runs", [])],
+        )
+
+    def test_a_carried_section_is_not_asked_to_be_completed(self) -> None:
+        """A section the status does not print is kept for safekeeping, so its empty fragments must
+        not block a document that will never contain them."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({
+            "app_name": "Carry", "ci_number": "CI-CARRY", "segment": "JH", "report_type": "annual_pentest",
+            "tester": "QA Tester", "tested_environments": ["production"],
+            "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Any time"}},
+        })
+        report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        current = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        current["vulnerabilities"] = [{
+            "uid": "v_carry", "title": "Carry finding", "likelihood": "low", "impact": "low", "severity": "low",
+            "status": "open_new", "scope": {"mode": "all"},
+            "contents": [
+                {"type": "description", "fragments": [{"frag_id": "f_d", "type": "paragraph", "runs": [{"text": "described"}]}]},
+                {"type": "recommended_remediation", "fragments": [{"frag_id": "f_r", "type": "paragraph", "runs": [{"text": "fix it"}]}]},
+                {"type": "in_conclusion", "fragments": [
+                    {"frag_id": "f_written", "type": "paragraph", "runs": [{"text": "kept text"}]},
+                    {"frag_id": "f_blank", "type": "note", "runs": []},
+                ]},
+            ],
+        }]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
+
+        saved = main.workspace.load(report_id)
+        self.assertIn("in_conclusion", [content.type for content in saved.vulnerabilities[0].contents])
+        self.assertNotIn("Carry finding: in_conclusion text is required", generation_issues(saved))
+
+    def test_the_previous_proof_slot_is_born_with_an_environment(self) -> None:
+        """Provisioning creates this slot, so provisioning owes it the environment that generation
+        then demands; nothing else ever assigns one."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({"app_name": "Prev Env", "ci_number": "CI-PREV", "tested_environments": ["production"]})
+        report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        current = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        current["vulnerabilities"] = [{
+            "uid": "v_prev", "title": "Previously discovered", "likelihood": "low", "impact": "low", "severity": "low",
+            "status": "open_previously_discovered", "scope": {"mode": "all"},
+        }]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
+
+        saved = main.workspace.load(report_id)
+        previous = next(content for content in saved.vulnerabilities[0].contents if content.type == "previous_proof_of_concept")
+        slots = [fragment for fragment in previous.fragments if isinstance(fragment, ImageFragment)]
+        self.assertTrue(slots, "provisioning creates a previous-proof image slot")
+        self.assertTrue(all(fragment.environment for fragment in slots), "an app-created slot must not be born without an environment")
+        self.assertNotIn(
+            "Previously discovered: environment/image/caption required for image fragment",
+            generation_issues(saved),
+        )
+
     def test_generator_locations_use_typed_endpoints_grouped_by_channel(self) -> None:
         """custom_locations is keyed by channel, so a flat read would print "web" and "api"
         instead of the endpoints, and per-channel ordering would interleave the two lists."""
@@ -991,6 +1179,28 @@ class ReportApiTests(unittest.TestCase):
             [fragment["type"] for fragment in remediation["fragments"]],
             ["bulleted_list", "note"],
         )
+
+    def test_a_library_finding_still_needs_an_affected_location(self) -> None:
+        """Scope defaults to "all", which would read as a deliberate every-target choice and walk
+        a freshly inserted finding straight past the affected-location gate."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id)
+        report.engagement.segment = "JH"
+        report.engagement.app_name = "Gate"
+        report.engagement.report_type = "annual_pentest"
+        report.engagement.tester = "QA Tester"
+        report.engagement.tested_environments = ["production"]
+        report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
+        report.scope_targets = [ScopeTarget(target_id="tgt_gate", environment="production", channel="web", value="https://prod.example.test")]
+        main.workspace.save(report)
+
+        inserted = self.client.post(f"/reports/{report_id}/library/VDB-047")
+        self.assertEqual(inserted.status_code, 200)
+        self.assertEqual(inserted.json()["finding"]["scope"]["mode"], "custom")
+
+        editor = self.client.get(f"/reports/{report_id}/edit", follow_redirects=False)
+        self.assertEqual(editor.status_code, 303)
+        self.assertIn("incomplete=findings", editor.headers["location"])
 
     def test_generate_docx_route_uses_template_and_report_filename(self) -> None:
         report_id = self.new_report()

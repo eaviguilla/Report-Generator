@@ -1,14 +1,12 @@
 #report-manager { max-width: 1100px; padding-top: 26px; }
-.manager-bar { display: flex; align-items: center; gap: 11px; padding: 9px 13px; border: 1px solid var(--line); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: var(--surface-raised); }
-.manager-brand { color: var(--ink); font-size: 12px; font-weight: 700; }
-.manager-sub { color: var(--muted); font-size: 11px; }
-.manager-spacer { flex: 1 1 auto; }
 .icon-command { display: inline-flex; min-height: 26px; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--ink-soft); background: var(--surface-raised); cursor: pointer; font-size: 10.5px; font-weight: 600; }
 .icon-command:hover { border-color: var(--accent); color: var(--accent-strong); background: var(--accent-soft); }
-.icon-command span:first-of-type { font-size: 13px; line-height: 1; }
-.manager-bar .primary { min-height: 26px; padding: 0 10px; font-size: 10.5px; }
-.manager-search { display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 13px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); background: var(--canvas-deep); }
-.manager-search input { flex: 1 1 auto; min-width: 0; max-width: 320px; height: 27px; padding: 0 9px; font-size: 11px; }
+.manager-search { display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--canvas-deep); }
+.manager-search input { flex: 1 1 auto; min-width: 0; max-width: 320px; min-height: 27px; height: 27px; padding: 0 9px; font-size: 11px; }
+/* One height across the row, so the actions read as part of the search bar rather than floating in it.
+   The anchor needs the flex box a button gets for free, or its label sits on the baseline. */
+.manager-search-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.manager-search-actions .icon-command, .manager-search-actions .primary { display: inline-flex; align-items: center; justify-content: center; min-height: 27px; height: 27px; padding: 0 11px; border-radius: var(--radius-sm); font-size: 11px; }
 #manager-status { display: block; min-height: 0; margin: 0; color: var(--danger); font-size: 10.5px; }
 .legacy-report { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid #e2b56e; border-radius: 4px; background: #fffaf1; color: #66532f; font-size: 11px; }
 .legacy-report span { min-width: 0; }
@@ -52,4 +50,4 @@
 .report-actions a:hover, .report-actions button:hover { border-color: var(--line-strong); color: var(--ink); background: var(--surface-raised); }
 .report-actions .report-delete:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
 .empty-reports { padding: 32px 14px; color: var(--muted); font-size: 12px; text-align: center; }
-@media (max-width: 680px) { #report-manager { padding: 20px 16px 64px; } .manager-bar { flex-wrap: wrap; } .manager-search input { flex: 1; } .app-group-columns { display: none; } .report-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; } .report-row time, .report-row > span { display: none; } .report-actions { align-self: center; } }
+@media (max-width: 680px) { #report-manager { padding: 20px 16px 64px; } .manager-search { flex-wrap: wrap; } .manager-search input { flex: 1; max-width: none; } .manager-search-actions { flex: 1 0 100%; margin-left: 0; } .manager-search-actions .primary, .manager-search-actions .icon-command { flex: 1; justify-content: center; } .app-group-columns { display: none; } .report-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; } .report-row time, .report-row > span { display: none; } .report-actions { align-self: center; } }

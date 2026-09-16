@@ -20,6 +20,8 @@ from .storage import atomic_write_bytes
 CAPTION_STYLE_NAMES = ("Figures and Tables", "Caption")
 MANUAL_FIGURE_PREFIX = re.compile(r"^\s*Figure\s+\d+\s*[:.\-]?\s*", re.IGNORECASE)
 FIGURE_SEQUENCE = re.compile(r"\bSEQ\s+Figure\b", re.IGNORECASE)
+# Word stores font size in half-points, so 9pt is 18.
+CAPTION_HALF_POINTS = "18"
 WORD_AUTOMATION_LOCK = threading.Lock()
 WD_MAIN_TEXT_STORY = 1
 WD_GO_TO_PAGE = 1
@@ -198,6 +200,7 @@ def _replace_with_native_caption(paragraph, caption_text: str, number: int) -> N
         ),
         None,
     )
+    base_properties = _caption_run_format(base_properties)
     for child in list(paragraph):
         if child.tag != qn("w:pPr"):
             paragraph.remove(child)
@@ -242,6 +245,50 @@ def _new_run(properties):
         run.append(deepcopy(properties))
     return run
 
+
+# CT_RPr is an ordered sequence, so a property appended out of turn is invalid XML.
+RPR_ORDER = (
+    "rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps", "smallCaps", "strike", "dstrike",
+    "outline", "shadow", "emboss", "imprint", "noProof", "snapToGrid", "vanish", "webHidden",
+    "color", "spacing", "w", "kern", "position", "sz", "szCs", "highlight", "u", "effect",
+    "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout",
+    "specVanish", "oMath",
+)
+
+
+def _set_run_property(properties, tag: str, value: str | None = None) -> None:
+    name = tag.split(":")[1]
+    element = properties.find(qn(tag))
+    if element is None:
+        element = OxmlElement(tag)
+        position = RPR_ORDER.index(name)
+        later = next(
+            (
+                child
+                for child in properties
+                if child.tag.split("}")[-1] in RPR_ORDER
+                and RPR_ORDER.index(child.tag.split("}")[-1]) > position
+            ),
+            None,
+        )
+        if later is None:
+            properties.append(element)
+        else:
+            later.addprevious(element)
+    if value is None:
+        element.attrib.pop(qn("w:val"), None)
+    else:
+        element.set(qn("w:val"), value)
+
+
+def _caption_run_format(properties):
+    """Captions print at 9pt italic; the Cs pairs carry it onto complex scripts too."""
+    properties = deepcopy(properties) if properties is not None else OxmlElement("w:rPr")
+    _set_run_property(properties, "w:i")
+    _set_run_property(properties, "w:iCs")
+    _set_run_property(properties, "w:sz", CAPTION_HALF_POINTS)
+    _set_run_property(properties, "w:szCs", CAPTION_HALF_POINTS)
+    return properties
 
 def _append_text_run(paragraph, text: str, properties) -> None:
     run = _new_run(properties)

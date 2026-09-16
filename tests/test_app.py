@@ -178,6 +178,7 @@ class ReportApiTests(unittest.TestCase):
             ("app_owner", "Owner 2", 'Application owner contains invalid character: "2" (digit two)'),
             ("tester", "QA_Tester", 'Tester contains invalid character: "_" (underscore)'),
             ("limitations", "No testing @ production", 'Limitations contains invalid character: "@" (at sign)'),
+            ("non_production_label", "UAT@2", 'Non-Production name contains invalid character: "@" (at sign)'),
         ]
         for field, value, expected_issue in field_cases:
             with self.subTest(field=field):
@@ -449,7 +450,26 @@ class ReportApiTests(unittest.TestCase):
         self.assertIsNone(engagement.segment)
         self.assertIsNone(engagement.report_type)
         self.assertEqual(engagement.limitations, "N/A")
+        self.assertEqual(engagement.non_production_label, "NON-PROD")
         self.assertEqual([(account.user_role, account.username) for account in engagement.test_accounts], [("N/A", "N/A")])
+
+    def test_a_retired_non_production_label_still_loads_and_saves(self) -> None:
+        """The label stopped being a closed set. Widening is only safe if every value that validated
+        before still does, so this asserts on a label the dropdown can no longer produce."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["non_production_label"] = "TEST/MO"
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+        self.assertEqual(main.workspace.load(report_id).engagement.non_production_label, "TEST/MO")
+
+    def test_the_non_production_name_is_only_validated_when_that_environment_is_covered(self) -> None:
+        """An unticked Non-Production leaves the field disabled, and a disabled input is exempt from
+        browser validation -- so validating it here would 422 a save the client could not block."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["non_production_label"] = "UAT@2"
+        report["engagement"]["tested_environments"] = ["production"]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
 
     def test_affected_channels_resolve_the_proof_of_concept_variants(self) -> None:
         report = main.workspace.create_report()

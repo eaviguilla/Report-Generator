@@ -32,7 +32,7 @@ main { max-width: var(--shell-max); padding: var(--shell-pad-top) var(--shell-gu
 #setup > section > h1, #setup > section > h2, #setup .section-title { margin: 0; padding: 12px 15px; border-bottom: 1px solid var(--line); color: var(--ink); font-size: 13px; }
 .scope-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 15px; border-bottom: 1px solid var(--line); }
 .scope-heading h1, .scope-heading h2 { margin: 0; color: var(--ink); font-size: 13px; }
-#setup > section > .grid, #setup > section > .test-configuration, #setup > section > .muted, #setup > section > .scope-grid, #setup > section > .setup-table-wrap, #setup > section > .limitations-field { margin-left: 15px; margin-right: 15px; }
+#setup > section > .grid, #setup > section > .test-configuration, #setup > section > .muted, #setup > section > .scope-grid, #setup > section > .setup-table-wrap, #setup > section > .limitations-field, #setup > section > .content-offer { margin-left: 15px; margin-right: 15px; }
 #setup > section > .grid:last-child, #setup > section > .scope-grid:last-child, #setup > section > .setup-table-wrap:last-child, #setup > section > .limitations-field:last-child { margin-bottom: 15px; }
 #setup .fields { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 label, .test-type-select { gap: 4px; color: var(--muted); font-size: 11px; font-weight: 600; }
@@ -52,12 +52,16 @@ button.danger { color: var(--danger); }
 .test-configuration fieldset, .location-group { border-color: var(--line); border-radius: 4px; }
 .test-configuration legend, .location-group legend { color: var(--muted); font-size: 11px; }
 .coverage-option { font-size: 12px; }
-.coverage-option input, .location-checklist input, .select-all input { width: auto !important; min-width: 0 !important; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }
+.coverage-option input[type="checkbox"], .location-checklist input, .select-all input { width: auto !important; min-width: 0 !important; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); }
 #setup .coverage-option input[type="checkbox"] { width: 13px !important; height: 13px; flex: 0 0 13px; }
 .test-windows { display: grid; grid-template-columns: 1fr; gap: 0; margin-top: 0; }
 .environment-window { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: 14px; padding: 12px 0; background: transparent; }
 .environment-window + .environment-window { border-top: 1px solid var(--line); }
 .environment-window .coverage-option { display: inline-flex; align-items: center; gap: 7px; margin: 0; }
+/* Widened on the whole block, not just the panel that needs it, so both rows keep a shared column. */
+.test-windows:has(.coverage-name-custom) .environment-window { grid-template-columns: 290px minmax(0, 1fr); }
+.environment-window .coverage-name { flex: 0 0 auto; width: 112px; }
+.environment-window .coverage-name-custom { flex: 1 1 auto; min-width: 0; font-size: 13px; }
 .environment-window .date-pair { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 3px; }
 .setup-table-wrap { padding-top: 12px; }
 .setup-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -337,7 +341,7 @@ input[data-path*="scope"],
   .engagement-name { display: none; }
   .stepper { gap: 20px; }
   main, #setup[data-step="findings"] { padding: 16px 12px 70px; }
-  #setup > section > .grid, #setup > section > .test-configuration, #setup > section > .muted, #setup > section > .scope-grid, #setup > section > .setup-table-wrap, #setup > section > .limitations-field { margin-left: 12px; margin-right: 12px; }
+  #setup > section > .grid, #setup > section > .test-configuration, #setup > section > .muted, #setup > section > .scope-grid, #setup > section > .setup-table-wrap, #setup > section > .limitations-field, #setup > section > .content-offer { margin-left: 12px; margin-right: 12px; }
   #setup .fields, .test-configuration, .test-windows, .date-pair, #setup .scope-grid, .finding-location, .location-controls, .location-option { grid-template-columns: 1fr; }
   .environment-window, .environment-window .date-pair { grid-template-columns: 1fr; gap: 8px; }
   .scope-heading { align-items: flex-start; gap: 10px; }

@@ -133,6 +133,12 @@ def setup_input_issues(engagement: Engagement) -> list[str]:
             issues.append(issue or f"Username {index} must start and end with a letter or number")
     if engagement.limitations and (issue := invalid_character_issue("Limitations", engagement.limitations, "/,.;:()&'\"-", allow_line_breaks=True)):
         issues.append(issue)
+    # Only when it can reach the document. An unticked Non-Production leaves the field disabled, and a
+    # disabled input is exempt from browser validation, so checking it here would 422 a save the
+    # client had no way to block.
+    if "non_production" in engagement.tested_environments and engagement.non_production_label:
+        if issue := invalid_character_issue("Non-Production name", engagement.non_production_label, "/-"):
+            issues.append(issue)
     return issues
 
 

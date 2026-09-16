@@ -17,7 +17,12 @@ RETIRED_SCOPE_MODES = ("all", "all_production", "all_non_production")
 # The retired compound token set, kept only to read drafts written before app types became a list.
 LEGACY_TEST_TYPE_CHANNELS: dict[str, list[str]] = {"web": ["web"], "api": ["api"], "mobile": ["mobile"], "web_api": ["web", "api"]}
 # Only labels the Proof of Concept evidence groups; it never renames the environment itself.
-NonProductionLabel = Literal["UAT", "TEST/MO", "DEV"]
+# Free text rather than a Literal so a tester can type their own, but docx_import needs a fixed set
+# to recognise the heading on the way back in, so the presets are canonical and shared.
+NonProductionLabel = Annotated[str, Field(min_length=1, max_length=40)]
+NON_PRODUCTION_LABEL_PRESETS: tuple[str, ...] = ("NON-PROD", "MOD", "UAT", "STAGE")
+# Retired presets. Still recognised on import so reports generated before the set changed round trip.
+LEGACY_NON_PRODUCTION_LABELS: tuple[str, ...] = ("TEST/MO", "DEV")
 Segment = Literal["JH", "GWAM", "Asia"]
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
 ContentType = Literal["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]
@@ -221,7 +226,7 @@ class Engagement(BaseModel):
     end_date: date | None = None
     tested_environments: list[Environment] = Field(default_factory=lambda: ["production", "non_production"])
     tested_channels: list[Channel] = Field(default_factory=lambda: ["web"], min_length=1)
-    non_production_label: NonProductionLabel = "UAT"
+    non_production_label: NonProductionLabel = "NON-PROD"
     test_windows: dict[Environment, TestWindow] = Field(default_factory=dict)
     test_accounts: list[TestAccount] = Field(default_factory=lambda: [TestAccount()])
     limitations: str = "N/A"
@@ -237,6 +242,12 @@ class Engagement(BaseModel):
         if len(self.tested_channels) != len(set(self.tested_channels)):
             raise ValueError("tested app types must be unique")
         return self
+
+    @field_validator("non_production_label", mode="before")
+    @classmethod
+    def strip_label(cls, value):
+        # docx_import matches against stripped document text, so a stored " UAT" would never round trip.
+        return value.strip() if isinstance(value, str) else value
 
 
 class FolderHint(BaseModel):

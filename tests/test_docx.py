@@ -59,6 +59,8 @@ class DocxReportTests(unittest.TestCase):
                     tester="QA Tester",
                     tested_environments=["production", "non_production"],
                     tested_channels=["web", "api"],
+                    # Pinned, not defaulted: the assertion below counts "UAT:" headings.
+                    non_production_label="UAT",
                     test_windows={
                         "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
                         "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Anytime"),
@@ -108,7 +110,7 @@ class DocxReportTests(unittest.TestCase):
             previous_image.evidence_id = "ev_prev"
             previous_image.caption = "Original non-production response"
 
-            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
+            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
             generated = render_report_docx(report, template, report_folder)
             rendered = Document(BytesIO(generated))
             text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
@@ -141,7 +143,7 @@ class DocxReportTests(unittest.TestCase):
             # The component template is the only supported one, so the checks below share this render.
             component_generated = generated
             component_document = rendered
-            template_document = Document(Path("resources/MAIN_TEST.docx"))
+            template_document = Document(Path("resources/MAIN.docx"))
             template_revision = next(
                 table for table in template_document.tables if table.cell(0, 0).text == "Version"
             )
@@ -345,7 +347,7 @@ class DocxReportTests(unittest.TestCase):
             ]
             self.assertEqual(generation_issues(report), [])
 
-            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
+            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
             rendered = Document(BytesIO(render_report_docx(report, template, report_folder)))
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("PROD:"), 1)
@@ -375,6 +377,8 @@ class DocxReportTests(unittest.TestCase):
                 tester="QA Tester",
                 tested_environments=["production"],
                 tested_channels=["web"],
+                # Pinned, not defaulted: the caller counts "UAT:" headings.
+                non_production_label="UAT",
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST")},
             ),
             scope_targets=[ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test")],
@@ -418,7 +422,7 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(history.environment, "non_production", "a carried image keeps the environment it was found in")
             self.assertEqual(generation_issues(report), [])
 
-            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
+            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
             rendered = Document(BytesIO(render_report_docx(report, template, report_folder)))
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("UAT:"), 1, "the carried non-production image must still be labelled and rendered")
@@ -460,7 +464,7 @@ class DocxReportTests(unittest.TestCase):
             report.vulnerabilities = [self._finding("v_wrap", "Authorization bypass", "high", "001", ["t_web", "t_api"], [
                 ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_wrap", caption="Production response"),
             ])]
-            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN_TEST.docx"), report_folder)))
+            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder)))
 
             locations = next(
                 cell
@@ -544,7 +548,7 @@ class DocxReportTests(unittest.TestCase):
                 self._finding("v_numbered", "Numbered finding", "high", "042", ["t_web"], image(1)),
                 self._finding("v_unnumbered", "Unnumbered finding", "low", None, ["t_web"], image(2)),
             ]
-            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN_TEST.docx"), report_folder)))
+            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder)))
 
             summary = next(table for table in rendered.tables if table.cell(0, 0).text == "Findings")
             numbers = {row.cells[0].text: row.cells[4].text for row in summary.rows[1:]}
@@ -678,7 +682,7 @@ class DocxReportTests(unittest.TestCase):
             likelihood="high", impact="high", severity="high", status=status,
             scope=Scope(mode="custom", target_ids=["t_web"]), contents=contents,
         )]
-        return Document(BytesIO(render_report_docx(report, Path("resources/MAIN_TEST.docx"), report_folder, allow_incomplete=True)))
+        return Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder, allow_incomplete=True)))
 
     @staticmethod
     def _table(suffix: str) -> TableFragment:

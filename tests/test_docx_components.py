@@ -28,7 +28,7 @@ class DocxComponentTests(unittest.TestCase):
 
     def test_inserts_three_severity_components_with_page_breaks(self) -> None:
         generated = compose_docx_components(
-            ROOT / "resources" / "MAIN_TEST.docx",
+            ROOT / "resources" / "MAIN.docx",
             [
                 DocxComponent(ROOT / "resources" / "severity_titles" / "critical_severity.docx", {"finding_title": "Critical SQL Injection"}),
                 DocxComponent(ROOT / "resources" / "severity_titles" / "high_severity.docx", {"finding_title": "High Authorization Bypass"}),

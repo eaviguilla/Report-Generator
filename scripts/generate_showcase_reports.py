@@ -42,7 +42,7 @@ from app.workspace import Workspace
 
 
 ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE = ROOT / "resources" / "MAIN_TEST.docx"
+TEMPLATE = ROOT / "resources" / "MAIN.docx"
 LIBRARY = Library(ROOT / "resources" / "vuln_library.json")
 MISSING_HEADER_LIBRARY_IDS = {f"VDB-{source_id:03d}" for source_id in range(36, 45)}
 EXPECTED_FRAGMENT_TYPES = {
@@ -115,7 +115,7 @@ REPORT_SPECS = (
         ci_number="CI-MERIDIAN-202",
         segment="GWAM",
         report_type="deployment_pentest",
-        non_production_label="TEST/MO",
+        non_production_label="MOD",
         targets={
             "api": ("https://commerce-api.meridian.example.test", "https://commerce-api-test.meridian.example.test"),
         },
@@ -146,7 +146,7 @@ REPORT_SPECS = (
         ci_number="CI-HORIZON-303",
         segment="Asia",
         report_type="retest",
-        non_production_label="DEV",
+        non_production_label="STAGE",
         targets={
             "web": ("https://workforce.horizon.example.test", "https://workforce-dev.horizon.example.test"),
             "api": ("https://workforce-api.horizon.example.test", "https://workforce-api-dev.horizon.example.test"),

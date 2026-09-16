@@ -1,6 +1,6 @@
 # DOCX Template Contract
 
-`resources/MAIN_TEST.docx` is the canonical Word template used by
+`resources/MAIN.docx` is the canonical Word template used by
 `app/docx_report.py`.
 The renderer preserves its styles, sections, headers, footers, numbering, and
 static content while replacing the fields below.
@@ -18,7 +18,7 @@ _populate_component_findings(...)
 ```
 
 A legacy inline renderer used to handle templates with no `{{findings}}` token.
-It was removed: `resources/MAIN_TEST.docx` carries the token, so the fallback
+It was removed: `resources/MAIN.docx` carries the token, so the fallback
 could not run in production, yet every fragment rule had to be written twice and
 had already drifted. `resources/fixtures/report-name.docx` is retained only as
 the rejection test's fixture.
@@ -183,7 +183,7 @@ Normal app and CLI report generation automatically creates native image-caption
 fields and runs the same Word finalization step. There is no `--skip-word-update`
 equivalent on those paths, so **generating a report requires Windows with
 Microsoft Word installed**; see `docs/PLAN.md` § Platform requirements. The
-existing methodology image in `MAIN_TEST.docx` is Figure 1, so generated evidence
+existing methodology image in `MAIN.docx` is Figure 1, so generated evidence
 captions continue at Figure 2 in document order.
 
 `generated/native-image-caption-test.docx` is the three-image native-caption
@@ -211,7 +211,7 @@ resolved.
 
 `scripts/compose_component_test.py` demonstrates the component architecture:
 
-- `resources/MAIN_TEST.docx` supplies the complete report shell.
+- `resources/MAIN.docx` supplies the complete report shell.
 - Severity components are inserted in Critical, High, Medium, Low,
   Informational order and begin on new pages.
 - Finding-type and fragment documents retain their paragraph styles, direct run
@@ -226,7 +226,7 @@ Run the proof with:
 py -3 -m scripts.compose_component_test
 ```
 
-It creates `generated/MAIN_TEST-composed.docx` and
+It creates `generated/MAIN-composed.docx` and
 `generated/retest-finding-composed.docx`. The first proof populates only the
-findings anchor; other metadata placeholders in `MAIN_TEST.docx` intentionally
+findings anchor; other metadata placeholders in `MAIN.docx` intentionally
 remain unchanged.

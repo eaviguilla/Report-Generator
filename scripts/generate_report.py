@@ -13,7 +13,7 @@ from app.storage import atomic_write_bytes
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate a VulnReport DOCX from a saved local report")
     parser.add_argument("report_id", help="Stored report ID, for example r_7edb3423a1bc")
-    parser.add_argument("-t", "--template", type=Path, default=ROOT / "resources" / "MAIN_TEST.docx")
+    parser.add_argument("-t", "--template", type=Path, default=ROOT / "resources" / "MAIN.docx")
     parser.add_argument("-o", "--output", type=Path)
     parser.add_argument("--allow-incomplete", action="store_true", help="Render missing evidence as visible placeholders")
     arguments = parser.parse_args()

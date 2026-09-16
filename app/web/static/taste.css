@@ -2965,6 +2965,9 @@ button.finding-nav.active:not(:disabled)::after {
 
 /* ---- Editor pane ---- */
 #finding-editor {
+  /* render() rebuilds this pane wholesale and restores scrollTop itself. Anchoring has no surviving
+     element to anchor to, so it guesses afterwards and shifts the view by the edited block's height. */
+  overflow-anchor: none;
   padding: 14px 16px;
   background: var(--canvas);
   font-size: 13px;

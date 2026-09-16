@@ -2395,6 +2395,73 @@ class BrowserWorkflowTests(unittest.TestCase):
         conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
         self.assertEqual(conclusion.locator("[data-conclusion-step]").count(), 1, "a conclusion left at its default stopped being offered the step")
 
+    def _conclusion_step_report(self):
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        self._fill_retest_history(report, finding)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items = [
+            ListItem(runs=[Run(text="Log in as a standard user.")]),
+            ListItem(runs=[Run(text="Observe the balance of another user.")]),
+        ]
+        main.provision_report(report)
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        return report_id, page
+
+    def test_editing_the_last_proof_step_updates_the_conclusion_offer_live(self) -> None:
+        """Every other test of this offer reloads the page, so none of them would notice the banner
+        going stale against the step it quotes."""
+        _report_id, page = self._conclusion_step_report()
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        self.assertIn("Observe the balance of another user.", conclusion.locator("[data-conclusion-step]").inner_text())
+
+        steps = page.locator('.content-block[data-content-type="proof_of_concept"] .list-textarea').last
+        # One textarea holds every item as a line, so the first line has to be carried along.
+        steps.fill("Log in as a standard user.\nWithdraw from the other user's account.")
+        steps.blur()
+        page.wait_for_timeout(600)
+        self.assertIn(
+            "Withdraw from the other user's account.",
+            conclusion.locator("[data-conclusion-step]").inner_text(),
+            "the offer still quotes the step the tester replaced",
+        )
+
+    def test_deleting_the_last_proof_step_moves_the_conclusion_offer_to_the_one_above(self) -> None:
+        _report_id, page = self._conclusion_step_report()
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        self.assertIn("Observe the balance of another user.", conclusion.locator("[data-conclusion-step]").inner_text())
+
+        steps = page.locator('.content-block[data-content-type="proof_of_concept"] .list-textarea').last
+        # Drops the second line only; the list still has a step, so the offer should move up to it.
+        steps.fill("Log in as a standard user.")
+        steps.blur()
+        page.wait_for_timeout(600)
+        self.assertIn(
+            "Log in as a standard user.",
+            conclusion.locator("[data-conclusion-step]").inner_text(),
+            "emptying the quoted step left the offer pointing at text that is gone",
+        )
+
+    def test_the_conclusion_offer_follows_the_proof_step_while_it_is_still_being_typed(self) -> None:
+        """Blurring first is what the other tests do, and it hid this: the refresh used to skip every
+        block whenever any field held the caret, so the quote went stale until the tester clicked away."""
+        _report_id, page = self._conclusion_step_report()
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        steps = page.locator('.content-block[data-content-type="proof_of_concept"] .list-textarea').last
+        steps.fill("Log in as a standard user.\nWithdraw from the other user's account.")
+        page.wait_for_timeout(600)
+
+        self.assertEqual(steps.evaluate("el => document.activeElement === el"), True, "the caret left the field, so this proves nothing")
+        self.assertIn(
+            "Withdraw from the other user's account.",
+            conclusion.locator("[data-conclusion-step]").inner_text(),
+            "the offer only caught up after the field lost focus",
+        )
+
     def test_a_status_round_trip_empties_the_conclusion_and_re_offers_both_prompts(self) -> None:
         """Open (New) drops the conclusion outright, so coming back leaves an empty section: the
         standard sentence is offered first, and accepting it then offers the last proof step."""
@@ -2527,6 +2594,88 @@ class BrowserWorkflowTests(unittest.TestCase):
             "UNCOMMITTED",
             page.locator(".table-cell-input").evaluate_all("nodes => nodes.map(node => node.value)"),
             "the redraw dropped an edit that was still only on screen",
+        )
+
+    def test_folding_a_section_leaves_its_header_under_the_pointer(self) -> None:
+        """Lists size themselves a frame after the redraw, so a section above the one being folded
+        grows once the scroll has already been put back. The correction has to outlast that."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        description = next(content for content in finding.contents if content.type == "description")
+        description.fragments.append(ListFragment(
+            frag_id="f_tall_list", type="numbered_list",
+            items=[ListItem(runs=[Run(text=f"Step {number}")]) for number in range(30)],
+        ))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        moved = page.evaluate(
+            """async () => {
+              const pane = document.querySelector("#finding-editor");
+              const settle = () => new Promise(done => setTimeout(done, 300));
+              const toggle = type => pane.querySelector(`[data-content-type="${type}"] > .content-toggle`);
+              for (const type of [...pane.querySelectorAll(".content-block")].map(block => block.dataset.contentType)) {
+                if (!toggle(type).closest(".content-block").classList.contains("is-expanded")) toggle(type).click();
+                await settle();
+              }
+              toggle("proof_of_concept").click();
+              await settle();
+              // Parked well down the pane, so the tall description above it is what moves.
+              pane.scrollTop += toggle("proof_of_concept").getBoundingClientRect().top - pane.getBoundingClientRect().top - 300;
+              await settle();
+              const before = toggle("proof_of_concept").getBoundingClientRect().top;
+              toggle("proof_of_concept").click();
+              await settle();
+              return Math.round(toggle("proof_of_concept").getBoundingClientRect().top - before);
+            }"""
+        )
+        self.assertLessEqual(abs(moved), 4, f"the section header slid {moved}px out from under the pointer")
+
+    def test_taking_a_conclusion_prompt_leaves_the_section_where_it_was(self) -> None:
+        """Every prompt button ends in a redraw, and the redraw puts the scroll back before the
+        sections have grown to full height, so the position it asks for does not exist yet."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        description = next(content for content in finding.contents if content.type == "description")
+        description.fragments.append(ListFragment(
+            frag_id="f_tall_list", type="numbered_list",
+            items=[ListItem(runs=[Run(text=f"Step {number}")]) for number in range(30)],
+        ))
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        conclusion.fragments[0].runs = [Run(text="The account remained reachable after the fix window closed.")]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("[data-conclusion-sentence]")
+        # Clicked through the DOM: Playwright scrolls a button into view first, which would move the
+        # very thing being measured.
+        moved = page.evaluate(
+            """async () => {
+              const pane = document.querySelector("#finding-editor");
+              const settle = () => new Promise(done => setTimeout(done, 300));
+              const header = () => pane.querySelector('[data-content-type="in_conclusion"] > .content-toggle');
+              pane.scrollTop += header().getBoundingClientRect().top - pane.getBoundingClientRect().top - 200;
+              await settle();
+              const before = header().getBoundingClientRect().top;
+              const tallBefore = pane.scrollHeight;
+              [...pane.querySelectorAll("button")].find(button => button.textContent.trim() === "Add it to the end").click();
+              await settle();
+              return {moved: Math.round(header().getBoundingClientRect().top - before),
+                      lost: Math.round(Math.max(0, tallBefore - pane.scrollHeight))};
+            }"""
+        )
+        # Taking the prompt removes the banner, and the pane is already at its end, so the content
+        # below cannot hold the view still. It may give up that much and no more.
+        self.assertLessEqual(
+            abs(moved["moved"]), moved["lost"] + 4,
+            f"the section slid {moved['moved']}px while the pane lost only {moved['lost']}px",
         )
 
     def test_a_written_conclusion_without_the_sentence_is_offered_it(self) -> None:

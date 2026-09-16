@@ -12,10 +12,89 @@ from docx.oxml.ns import qn
 from docx.shared import Mm
 from PIL import Image
 
-from app.docx_captions import postprocess_image_captions
+from app.docx_captions import _remove_page_leading_blank_paragraphs, postprocess_image_captions
 
 
 class DocxCaptionTests(unittest.TestCase):
+    def test_removes_only_blank_paragraphs_that_begin_a_rendered_page(self) -> None:
+        class ParagraphRange:
+            def __init__(self, paragraphs, text, page, in_table=False):
+                self.paragraphs = paragraphs
+                self.Text = text
+                self.page = page
+                self.in_table = in_table
+
+            def Information(self, code):
+                return self.page if code == 3 else self.in_table
+
+            def Delete(self):
+                self.paragraphs.items.remove(self)
+
+        class Paragraphs:
+            def __init__(self):
+                self.items = []
+
+            @property
+            def Count(self):
+                return len(self.items)
+
+            def __call__(self, index):
+                paragraph = type("Paragraph", (), {})()
+                paragraph.Range = self.items[index - 1]
+                return paragraph
+
+            def add(self, text, page, in_table=False):
+                self.items.append(ParagraphRange(self, text, page, in_table))
+
+        class Story:
+            def __init__(self, paragraphs):
+                self.Paragraphs = paragraphs
+
+        class WordDocument:
+            def __init__(self, paragraphs):
+                self.story = Story(paragraphs)
+                self.repaginate_calls = 0
+
+            def StoryRanges(self, story_type):
+                self.assert_main_story = story_type
+                return self.story
+
+            def Repaginate(self):
+                self.repaginate_calls += 1
+
+            def ComputeStatistics(self, statistic):
+                self.statistic = statistic
+                return max(paragraph.page for paragraph in self.story.Paragraphs.items)
+
+            def GoTo(self, *, What, Which, Count):
+                self.go_to = (What, Which)
+                candidates = [
+                    paragraph
+                    for paragraph in self.story.Paragraphs.items
+                    if paragraph.page == Count
+                ]
+                page_paragraphs = type("PageParagraphs", (), {"__call__": lambda self, index: type("Paragraph", (), {"Range": candidates[index - 1]})()})()
+                return type("PageStart", (), {"Paragraphs": page_paragraphs})()
+
+        paragraphs = Paragraphs()
+        paragraphs.add("End of page one\r", 1)
+        paragraphs.add("\r", 2)
+        paragraphs.add("First bullet\r", 2)
+        paragraphs.add("\r", 2)
+        paragraphs.add("Second bullet\r", 2)
+        paragraphs.add("\r", 3, in_table=True)
+        paragraphs.add("Table cell\r", 3, in_table=True)
+        document = WordDocument(paragraphs)
+
+        removed = _remove_page_leading_blank_paragraphs(document)
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(
+            [paragraph.Text for paragraph in paragraphs.items],
+            ["End of page one\r", "First bullet\r", "\r", "Second bullet\r", "\r", "Table cell\r"],
+        )
+        self.assertGreaterEqual(document.repaginate_calls, 2)
+
     def test_postprocesses_three_images_into_native_word_captions(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             folder = Path(temporary_directory)

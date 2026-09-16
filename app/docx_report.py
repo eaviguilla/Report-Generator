@@ -797,9 +797,9 @@ def _render_component_fragment(
     numbering_ids: dict[tuple[Path, int], int] | None = None,
 ) -> list:
     if isinstance(fragment, ParagraphFragment):
-        return _render_text_component(document, component_root, "paragraph", fragment.runs)
+        return _render_multiline_text_component(document, component_root, "paragraph", fragment.runs)
     if isinstance(fragment, NoteFragment):
-        return _render_text_component(document, component_root, "note", fragment.runs)
+        return _render_multiline_text_component(document, component_root, "note", fragment.runs)
     if isinstance(fragment, ListFragment):
         component_type = "numbered_list" if fragment.type == "numbered_list" else "bulleted_list"
         filename, token = FRAGMENT_COMPONENT_FILES[component_type]
@@ -866,6 +866,71 @@ def _render_text_component(
     filename, token = FRAGMENT_COMPONENT_FILES[component_type]
     elements = clone_component_elements(document, component_root / "fragments" / filename)
     replace_component_token_runs(elements, token, runs)
+    return elements
+
+
+def _split_runs_at_newlines(runs: list[Run]) -> list[list[Run]]:
+    lines: list[list[Run]] = [[]]
+    skip_leading_line_feed = False
+    for source in runs:
+        text = source.text
+        index = 0
+        if skip_leading_line_feed and text.startswith("\n"):
+            index = 1
+        skip_leading_line_feed = False
+        start = index
+        while index < len(text):
+            if text[index] not in "\r\n":
+                index += 1
+                continue
+            if start < index:
+                lines[-1].append(source.model_copy(update={"text": text[start:index]}))
+            if text[index] == "\r":
+                if index + 1 < len(text) and text[index + 1] == "\n":
+                    index += 1
+                elif index + 1 == len(text):
+                    skip_leading_line_feed = True
+            lines.append([])
+            index += 1
+            start = index
+        if start < len(text):
+            lines[-1].append(source.model_copy(update={"text": text[start:]}))
+    return lines
+
+
+def _render_multiline_text_component(
+    document: DocumentType,
+    component_root: Path,
+    component_type: str,
+    runs: list[Run],
+) -> list:
+    filename, token = FRAGMENT_COMPONENT_FILES[component_type]
+    elements = clone_component_elements(document, component_root / "fragments" / filename)
+    pattern = re.compile(r"\{\{\s*" + re.escape(token) + r"\s*\}\}", re.IGNORECASE)
+    matches = [
+        (index, element)
+        for index, element in enumerate(elements)
+        if element.tag == qn("w:p") and pattern.search(_element_text(element))
+    ]
+    if len(matches) != 1:
+        raise ReportGenerationError(f"Expected exactly one {token} paragraph in {filename}")
+
+    paragraph_index, paragraph = matches[0]
+    template = deepcopy(paragraph)
+    lines = _split_runs_at_newlines(runs)
+    replace_component_token_runs([paragraph], token, lines[0])
+    continuation_paragraphs = []
+    for line in lines[1:]:
+        continuation = deepcopy(template)
+        if component_type == "note":
+            replace_pattern_across_text_nodes(
+                continuation,
+                re.compile(r"^\s*Note:\s*", re.IGNORECASE),
+                "",
+            )
+        replace_component_token_runs([continuation], token, line)
+        continuation_paragraphs.append(continuation)
+    elements[paragraph_index + 1:paragraph_index + 1] = continuation_paragraphs
     return elements
 
 

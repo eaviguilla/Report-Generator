@@ -21,6 +21,11 @@ CAPTION_STYLE_NAMES = ("Figures and Tables", "Caption")
 MANUAL_FIGURE_PREFIX = re.compile(r"^\s*Figure\s+\d+\s*[:.\-]?\s*", re.IGNORECASE)
 FIGURE_SEQUENCE = re.compile(r"\bSEQ\s+Figure\b", re.IGNORECASE)
 WORD_AUTOMATION_LOCK = threading.Lock()
+WD_MAIN_TEXT_STORY = 1
+WD_GO_TO_PAGE = 1
+WD_GO_TO_ABSOLUTE = 1
+WD_STATISTIC_PAGES = 2
+WD_WITHIN_TABLE = 12
 
 
 def postprocess_image_captions(input_path: Path, output_path: Path | None = None) -> tuple[Path, int]:
@@ -69,8 +74,12 @@ def update_docx_fields_with_word(input_path: Path, output_path: Path | None = No
             for index in range(1, document.TablesOfFigures.Count + 1):
                 document.TablesOfFigures(index).Update()
             document.Repaginate()
+            _remove_page_leading_blank_paragraphs(document)
+            document.Repaginate()
             for index in range(1, document.TablesOfContents.Count + 1):
                 document.TablesOfContents(index).UpdatePageNumbers()
+            for index in range(1, document.TablesOfFigures.Count + 1):
+                document.TablesOfFigures(index).UpdatePageNumbers()
             document.Save()
         except Exception as error:
             raise RuntimeError(f"Microsoft Word could not update fields in {destination.name}") from error
@@ -92,6 +101,31 @@ def update_docx_bytes_with_word(contents: bytes) -> bytes:
         path.write_bytes(contents)
         update_docx_fields_with_word(path)
         return path.read_bytes()
+
+
+def _remove_page_leading_blank_paragraphs(document) -> int:
+    """Delete empty body paragraphs that Word places alone at the top of a page."""
+    removed = 0
+    paragraph_limit = document.StoryRanges(WD_MAIN_TEXT_STORY).Paragraphs.Count
+    for _ in range(paragraph_limit):
+        document.Repaginate()
+        removed_this_pass = 0
+        page_count = document.ComputeStatistics(WD_STATISTIC_PAGES)
+        for page_number in range(page_count, 1, -1):
+            page_start = document.GoTo(
+                What=WD_GO_TO_PAGE,
+                Which=WD_GO_TO_ABSOLUTE,
+                Count=page_number,
+            )
+            paragraph_range = page_start.Paragraphs(1).Range
+            if paragraph_range.Text != "\r" or paragraph_range.Information(WD_WITHIN_TABLE):
+                continue
+            paragraph_range.Delete()
+            removed += 1
+            removed_this_pass += 1
+        if not removed_this_pass:
+            break
+    return removed
 
 
 def add_native_image_captions(document: DocumentType) -> int:
@@ -125,7 +159,7 @@ def add_native_image_captions(document: DocumentType) -> int:
         if _paragraph_style_id(caption) not in caption_style_ids or _has_figure_sequence(caption):
             index += 1
             continue
-        caption_text = "".join(node.text or "" for node in caption.iter(qn("w:t"))).strip()
+        caption_text = _paragraph_text_with_breaks(caption).strip()
         if not caption_text:
             index += 1
             continue
@@ -162,6 +196,10 @@ def _replace_with_native_caption(paragraph, caption_text: str, number: int) -> N
         if child.tag != qn("w:pPr"):
             paragraph.remove(child)
 
+    lines = caption_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    multiline = len(lines) > 1
+    if multiline:
+        paragraph.append(_proof_error("spellStart"))
     _append_text_run(paragraph, "Figure ", base_properties)
     _append_field_character(paragraph, "begin", base_properties, dirty=True)
     instruction_run = _new_run(base_properties)
@@ -174,7 +212,22 @@ def _replace_with_native_caption(paragraph, caption_text: str, number: int) -> N
     _append_text_run(paragraph, str(number), base_properties)
     _append_field_character(paragraph, "end", base_properties)
     # Outside the field, so Word renumbering never rewrites the separator away.
-    _append_text_run(paragraph, f". {caption_text}", base_properties)
+    _append_text_run(paragraph, f". {lines[0]}", base_properties)
+    for line in lines[1:]:
+        paragraph.append(_proof_error("spellEnd"))
+        paragraph.append(_bold_break_run())
+        paragraph.append(_proof_error("spellStart"))
+        _append_text_run(paragraph, line, base_properties)
+    if multiline:
+        paragraph.append(_proof_error("spellEnd"))
+
+
+def _paragraph_text_with_breaks(paragraph) -> str:
+    return "".join(
+        "\n" if node.tag == qn("w:br") else node.text or ""
+        for node in paragraph.iter()
+        if node.tag in {qn("w:t"), qn("w:br")}
+    )
 
 
 def _new_run(properties):
@@ -202,6 +255,22 @@ def _append_field_character(paragraph, field_type: str, properties, *, dirty: bo
         field.set(qn("w:dirty"), "true")
     run.append(field)
     paragraph.append(run)
+
+
+def _bold_break_run():
+    run = OxmlElement("w:r")
+    properties = OxmlElement("w:rPr")
+    properties.append(OxmlElement("w:b"))
+    properties.append(OxmlElement("w:bCs"))
+    run.append(properties)
+    run.append(OxmlElement("w:br"))
+    return run
+
+
+def _proof_error(error_type: str):
+    marker = OxmlElement("w:proofErr")
+    marker.set(qn("w:type"), error_type)
+    return marker
 
 
 def _paragraph_style_id(paragraph) -> str | None:

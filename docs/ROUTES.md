@@ -55,7 +55,7 @@ The vulnerability library is `resources/vuln_library.json`, resolved from `prefs
 
 A local-only library editor mounts at `/library-editor` when `VULNREPORT_LIBRARY_EDITOR` is set **and** `app/library_editor.py` is present. Both that module and its template are deliberately untracked, so the routes do not exist in a fresh clone and nothing in tracked code links to them. Every write is validated by loading the exact bytes through `Library` in a temporary file before it replaces the real one.
 
-DOCX generation uses `resources/MAIN_TEST.docx` as the canonical template, then
+DOCX generation uses `resources/MAIN.docx` as the canonical template, then
 composes severity-title, finding-type, and fragment documents. A template
 without an exact `{{findings}}` anchor paragraph is rejected; there is no second
 renderer. The route rejects incomplete content or missing environment evidence

@@ -1311,10 +1311,32 @@
     if (variants.length) offers.push({type:"proof_of_concept", entry, variants});
     return offers;
   };
+  // One shape for every library prompt, quieter than the section it offers to rewrite.
+  // Module scope, not inside continuousEditor: the Setup page needs it too, and the dispatch at the
+  // bottom of this file runs one or the other, never both.
+  const buildOffer = (className, message) => {
+    const banner = document.createElement("div");
+    banner.className = className;
+    banner.innerHTML = '<svg class="offer-mark" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 2.4h5.7l3.1 3.1v8.1a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z"/><path d="M9.2 2.4v3.2h3.2"/><path d="M5.3 9h5.4M5.3 11.4h3.6"/></svg><div class="offer-body"><p></p><div class="offer-actions"></div></div>';
+    banner.querySelector("p").textContent = message;
+    return {banner, body: banner.querySelector(".offer-body"), actions: banner.querySelector(".offer-actions")};
+  };
+  const offerButton = (label, kind, onclick) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = kind === "primary" ? "primary" : kind === "dismiss" ? "subtle offer-dismiss" : "subtle";
+    button.textContent = label;
+    button.onclick = onclick;
+    return button;
+  };
   // Initializes the setup page's engagement metadata, coverage, and scope controls.
   function setup() {
     const environmentLabels = {production:"Production", non_production:"Non-Production"};
-    const nonProductionLabels = ["UAT", "TEST/MO", "DEV"];
+    // Twin of models.NON_PRODUCTION_LABEL_PRESETS. OTHERS is a UI affordance and is never stored.
+    const nonProductionLabels = ["NON-PROD", "MOD", "UAT", "STAGE"];
+    const OTHERS_OPTION = "OTHERS";
+    // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
+    let typingCustomLabel = false;
     const characterNames = new Map([
       [" ","space"], ["\t","tab"], ["\n","line feed"], ["\r","carriage return"], ["!","exclamation mark"], ['"',"double quote"], ["#","number sign"], ["$","dollar sign"], ["%","percent sign"], ["&","ampersand"], ["'","apostrophe"], ["(","left parenthesis"], [")","right parenthesis"], ["*","asterisk"], ["+","plus sign"], [",","comma"], ["-","hyphen"], [".","period"], ["/","slash"], [":","colon"], [";","semicolon"], ["<","less-than sign"], ["=","equals sign"], [">","greater-than sign"], ["?","question mark"], ["@","at sign"], ["[","left bracket"], ["\\","backslash"], ["]","right bracket"], ["^","caret"], ["_","underscore"], ["`","grave accent"], ["{","left brace"], ["|","vertical bar"], ["}","right brace"], ["~","tilde"],
     ]);
@@ -1344,6 +1366,9 @@
       limitations: characterRule("Limitations", /^[\p{L}\p{Nd} /,.;:()&'"\-\r\n]$/u),
       time: characterRule("Time", /^[\p{L}\p{Nd} :/\-]$/u),
       userRole: characterRule("User role", /^[\p{L}\p{Nd} /\-]$/u),
+      // Deliberately a subset of the Limitations set: the retest suggestion writes this label into
+      // Limitations, and a character legal here but not there would 422 the save that accepts it.
+      non_production_label: characterRule("Non-Production name", /^[\p{L}\p{Nd} /\-]$/u),
       username: {...usernameCharacters, valid:value => !value || value === "N/A" || /^[A-Za-z0-9](?:[A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/.test(value), message:label => `${label} must start and end with a letter or number`},
     };
     const setupNotice = document.querySelector("#setup-validation-note");
@@ -1425,6 +1450,65 @@
       input.oninput = () => { report[section][field] = input.value || (input.matches('select, input[type="date"]') ? null : ""); if (input.value.trim()) input.classList.remove("validation-error"); grow?.(); scheduleSave(); };
       if (setupRules[field]) wireSetupRule(input, setupRules[field]);
     });
+    // Offered, never written. A retest that covered one environment usually says so in Limitations,
+    // but the wording stays the tester's to accept. Client-only: nothing server-side re-derives
+    // limitations, so unlike the In Conclusion sentence there is no Python half to keep in step.
+    const dismissedLimitations = new Set();
+    const limitationsSuggestion = () => {
+      const engagement = report.engagement;
+      const environments = engagement.tested_environments || [];
+      if (engagement.report_type !== "retest" || environments.length !== 1) return "";
+      const label = (engagement.non_production_label || "").trim().toUpperCase();
+      if (!label) return "";
+      return environments[0] === "production"
+        ? `Retest only in PROD; no ${label} testing.`
+        : `Retest only in ${label}; no PROD testing.`;
+    };
+    const limitationsField = root.querySelector(".limitations-field");
+    // Matched with the label left open rather than built from the stored one, so a limitation
+    // written against an earlier name is still recognised as ours. Recognising only our own shape
+    // is what keeps the update offer away from wording the tester composed.
+    const GENERATED_LIMITATIONS = [/^Retest only in PROD; no .+ testing\.$/, /^Retest only in .+; no PROD testing\.$/];
+    const renderLimitationsOffer = () => {
+      // Only the Limitations textarea blocks a redraw: the banner sits directly above it, so
+      // inserting one would shift the line under its own caret. Typing the environment name
+      // elsewhere should keep updating the offer live.
+      const focused = activeTextEntry();
+      if (focused && focused === limitationsField.querySelector("textarea")) return;
+      const existing = root.querySelector("#limitations-offer");
+      const suggestion = limitationsSuggestion();
+      const current = (report.engagement.limitations || "").trim();
+      // "N/A" is the app's own default, so it means the tester has not written limitations yet.
+      const blank = current === "" || current === "N/A";
+      // Also true when the environment selection changed, which dates the sentence the same way.
+      const stale = !blank && current !== suggestion && GENERATED_LIMITATIONS.some(shape => shape.test(current));
+      const wanted = suggestion && !dismissedLimitations.has(suggestion) && (blank || stale);
+      if (!wanted) return existing?.remove();
+      const state = `${blank ? "add" : "update"}:${suggestion}`;
+      if (existing?.dataset.offerState === state) return;
+      existing?.remove();
+      const {banner, actions} = buildOffer("content-offer", blank
+        ? `Suggested limitation: "${suggestion}"`
+        : `The limitation still names the old environment. It would now read "${suggestion}".`);
+      banner.id = "limitations-offer";
+      banner.dataset.offerState = state;
+      actions.append(
+        offerButton(blank ? "Use it" : "Update it", "primary", () => {
+          const textarea = limitationsField.querySelector("textarea");
+          textarea.value = suggestion;
+          // Assigning .value fires nothing, so the [data-path] handler would never see it and a
+          // setCustomValidity left by earlier typing would go on blocking a value that is now clean.
+          textarea.dispatchEvent(new Event("input", {bubbles: true}));
+          banner.remove();
+        }),
+        offerButton("Dismiss", "dismiss", () => { dismissedLimitations.add(suggestion); banner.remove(); }),
+      );
+      limitationsField.before(banner);
+    };
+    if (limitationsField) {
+      renderLimitationsOffer();
+      document.addEventListener("reportchange", renderLimitationsOffer);
+    }
     const accountBody = document.querySelector("#test-accounts");
     if (accountBody) {
       const renderAccounts = () => {
@@ -1668,14 +1752,40 @@
         panel.className = "environment-window";
         const isSelected = selected(report.engagement.tested_environments, environment);
         // Non-Production shows its report name as a picker; the checkbox keeps the stable environment name.
+        const stored = report.engagement.non_production_label || "";
+        // A stored label that is not a preset -- an old draft, or an imported one -- must open the
+        // text box holding its own value, or the render would show a preset and the next change
+        // event would write it back over a label the tester never touched.
+        const showCustom = typingCustomLabel || !nonProductionLabels.includes(stored);
+        const options = [...nonProductionLabels, OTHERS_OPTION]
+          .map(value => `<option value="${value}" ${(showCustom ? OTHERS_OPTION : stored) === value ? "selected" : ""}>${value}</option>`).join("");
         const name = environment === "non_production"
-          ? `<select class="coverage-name" aria-label="Non-Production name" title="Labels the Proof of Concept evidence in the generated report" ${isSelected ? "" : "disabled"}>${nonProductionLabels.map(value => `<option value="${value}" ${report.engagement.non_production_label === value ? "selected" : ""}>${value}</option>`).join("")}</select>`
+          ? `<select class="coverage-name" aria-label="Non-Production name" title="Labels the Proof of Concept evidence in the generated report" ${isSelected ? "" : "disabled"}>${options}</select>`
+            + (showCustom ? `<input type="text" class="coverage-name-custom" aria-label="Non-Production name, typed" maxlength="40" value="${escape(stored)}" placeholder="Name it" ${isSelected ? "" : "disabled"}>` : "")
           : label;
         panel.innerHTML = `<label class="coverage-option"><input type="checkbox" value="${environment}" aria-label="${label}" ${isSelected ? "checked" : ""}>${name}</label>${isSelected ? `<div class="date-pair"><label>Start<input type="date" aria-label="${label} start date"></label><label>End<input type="date" aria-label="${label} end date"></label><label>Time<input type="text" aria-label="${label} time"></label></div>` : ""}`;
         const coverageName = panel.querySelector(".coverage-name");
         if (coverageName) {
           coverageName.onchange = event => {
+            if (event.target.value === OTHERS_OPTION) {
+              // Nothing is written yet: the stored label stays until the tester types one.
+              typingCustomLabel = true;
+              renderCoverage();
+              panel.parentElement?.querySelector(".coverage-name-custom")?.focus();
+              return;
+            }
+            typingCustomLabel = false;
             report.engagement.non_production_label = event.target.value;
+            renderCoverage();
+            scheduleSave();
+          };
+        }
+        const customName = panel.querySelector(".coverage-name-custom");
+        if (customName) {
+          wireSetupRule(customName, setupRules.non_production_label);
+          // No renderCoverage here: it rebuilds this input and would take the caret mid-word.
+          customName.oninput = () => {
+            report.engagement.non_production_label = customName.value.trim();
             scheduleSave();
           };
         }
@@ -1698,7 +1808,9 @@
           return;
         }
         const [startDate, endDate] = panel.querySelectorAll("input[type=date]");
-        const timeInput = panel.querySelector('input[type="text"]');
+        // Scoped to the date pair: the Non-Production panel also holds the typed label box, which
+        // is a text input and comes first.
+        const timeInput = panel.querySelector('.date-pair input[type="text"]');
         startDate.value = window.start_date || "";
         endDate.value = window.end_date || "";
         timeInput.value = window.test_time;
@@ -2855,22 +2967,6 @@
     let reviewTargetId = null;
     // A `<details>` rendered `open` unconditionally springs back the moment an autosave rebuilds.
     const collapsedReviewGroups = new Set();
-    // One shape for every library prompt, quieter than the section it offers to rewrite.
-    const buildOffer = (className, message) => {
-      const banner = document.createElement("div");
-      banner.className = className;
-      banner.innerHTML = '<svg class="offer-mark" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 2.4h5.7l3.1 3.1v8.1a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z"/><path d="M9.2 2.4v3.2h3.2"/><path d="M5.3 9h5.4M5.3 11.4h3.6"/></svg><div class="offer-body"><p></p><div class="offer-actions"></div></div>';
-      banner.querySelector("p").textContent = message;
-      return {banner, body: banner.querySelector(".offer-body"), actions: banner.querySelector(".offer-actions")};
-    };
-    const offerButton = (label, kind, onclick) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = kind === "primary" ? "primary" : kind === "dismiss" ? "subtle offer-dismiss" : "subtle";
-      button.textContent = label;
-      button.onclick = onclick;
-      return button;
-    };
     // Held as state rather than left behind as a class, so a re-render cannot drop the highlight
     // before the tester has dealt with the field.
     const showReviewTarget = () => {

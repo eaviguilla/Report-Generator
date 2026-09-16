@@ -43,7 +43,7 @@ from app.models import (
     Vulnerability,
 )
 
-TEMPLATE = Path(__file__).resolve().parent.parent / "resources" / "MAIN_TEST.docx"
+TEMPLATE = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
 
 
 class FragmentRecognitionTests(unittest.TestCase):
@@ -98,6 +98,47 @@ class FragmentRecognitionTests(unittest.TestCase):
 
     def _rendered(self, folder: Path):
         return Document(BytesIO(render_report_docx(self._report(folder), TEMPLATE, folder)))
+
+    def _non_production_report(self, folder: Path, label: str) -> Report:
+        """The production fixture never prints a non-production heading, so it cannot catch a
+        mislabelled round trip."""
+        report = self._report(folder)
+        report.engagement.non_production_label = label
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
+        report.scope_targets.append(
+            ScopeTarget(target_id="t_web_np", environment="non_production", channel="web", value="https://uat.example.test")
+        )
+        finding = report.vulnerabilities[0]
+        finding.scope = Scope(mode="custom", target_ids=["t_web", "t_web_np"])
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(
+            frag_id="f_image_np", type="image", environment="non_production",
+            evidence_id="ev_shot", caption="Non-production response",
+        ))
+        return report
+
+    def test_a_non_production_evidence_image_keeps_its_environment_through_a_round_trip(self) -> None:
+        """The heading above the screenshots is the label's only appearance in the document: the
+        scope rows read "Non-Production Environment" from the template, not the tester's label. Miss
+        it and the images below inherit the previous environment, so non-prod evidence files as prod."""
+        for label in ("NON-PROD", "STAGE", "TEST/MO"):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                report = self._non_production_report(folder, label)
+                document = render_report_docx(report, TEMPLATE, folder)
+                payload, _evidence, _summary = parse_report_docx(document)
+
+                self.assertEqual(payload["engagement"]["non_production_label"], label, "the label was not recovered")
+                fragments = [
+                    fragment for finding in payload["vulnerabilities"]
+                    for content in finding["contents"] if content["type"] == "previous_proof_of_concept"
+                    for fragment in content["fragments"]
+                ]
+                environments = [fragment["environment"] for fragment in fragments if fragment["type"] == "image"]
+                self.assertIn("non_production", environments, "non-production evidence came back filed elsewhere")
+                stray = [fragment for fragment in fragments if fragment["type"] == "instance_title" and fragment["text"].rstrip(":").upper() == label]
+                self.assertEqual(stray, [], "the environment heading survived as a visible fragment")
 
     def test_every_fragment_type_is_recognisable_in_a_generated_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

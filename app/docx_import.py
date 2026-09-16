@@ -21,7 +21,7 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from PIL import Image
 
-from .models import CHANNELS
+from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
 # renders one of every fragment type and fails if any of these stops identifying it.
@@ -207,6 +207,16 @@ def _table_fragment(table, caption: str) -> dict:
         "frag_id": _fresh("f"), "type": "table", "caption": _clean(caption) or None,
         "header": rows[0], "rows": rows[1:] or [[{"runs": [{"text": ""}]} for _ in rows[0]]],
     }
+
+
+def _detect_non_production_label(document) -> str:
+    """The evidence heading is the label's only appearance: the scope table rows read
+    "Non-Production Environment" from the template, not from what the tester chose."""
+    known = {f"{label}:": label for label in (*NON_PRODUCTION_LABEL_PRESETS, *LEGACY_NON_PRODUCTION_LABELS)}
+    for paragraph in document.paragraphs:
+        if found := known.get(paragraph.text.strip().upper()):
+            return found
+    return NON_PRODUCTION_LABEL_PRESETS[0]
 
 
 def _build_fragments(document, elements, formats, non_production_label, evidence):
@@ -525,7 +535,7 @@ def parse_report_docx(data: bytes) -> tuple[dict, dict[str, bytes], dict]:
             break
 
     formats = numbering_formats(document)
-    non_production_label = "UAT"
+    non_production_label = _detect_non_production_label(document)
     targets = _scope_rows(document, "URL(s) in Scope", "web") + _scope_rows(document, "API Routes", "api")
     evidence: dict[str, bytes] = {}
     findings, dropped, rewritten = _findings(document, formats, targets, non_production_label, evidence)

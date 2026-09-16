@@ -1436,6 +1436,202 @@ class BrowserWorkflowTests(unittest.TestCase):
             ["Bold", "Italic", "Underline"],
         )
 
+    def _setup_page(self, report_id: str):
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}")
+        page.wait_for_selector(".limitations-field")
+        return page
+
+    def _saved_engagement(self, report_id: str):
+        return main.workspace.load(report_id).engagement
+
+    def test_the_non_production_name_offers_presets_and_a_typed_option(self) -> None:
+        """The typed branch has no closed set behind it, so the browser message is the only thing
+        standing between a typo and a 422. It must read exactly as the server's does."""
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        main.workspace.save(report)
+
+        page = self._setup_page(report_id)
+        picker = page.locator(".coverage-name")
+        self.assertEqual(picker.locator("option").all_text_contents(), ["NON-PROD", "MOD", "UAT", "STAGE", "OTHERS"])
+        self.assertEqual(picker.input_value(), "NON-PROD")
+        self.assertEqual(page.locator(".coverage-name-custom").count(), 0)
+
+        picker.select_option("OTHERS")
+        typed = page.locator(".coverage-name-custom")
+        typed.wait_for()
+        typed.fill("MY@LAB")
+        self.assertEqual(
+            typed.evaluate("input => input.validationMessage"),
+            'Non-Production name contains invalid character: "@" (at sign)',
+        )
+        typed.fill("MY LAB/2")
+        self.assertEqual(typed.evaluate("input => input.validationMessage"), "")
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(self._saved_engagement(report_id).non_production_label, "MY LAB/2")
+
+        page.locator(".coverage-name").select_option("STAGE")
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(self._saved_engagement(report_id).non_production_label, "STAGE")
+
+    def test_opening_setup_never_rewrites_a_label_that_is_not_a_preset(self) -> None:
+        """A retired or imported label must not be silently replaced by whatever the dropdown
+        happens to show first. The assertion is on the stored value, not the control."""
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.non_production_label = "TEST/MO"
+        main.workspace.save(report)
+
+        page = self._setup_page(report_id)
+        self.assertEqual(page.locator(".coverage-name").input_value(), "OTHERS")
+        self.assertEqual(page.locator(".coverage-name-custom").input_value(), "TEST/MO")
+        page.wait_for_timeout(400)
+        self.assertEqual(self._saved_engagement(report_id).non_production_label, "TEST/MO")
+
+    def _retest_setup(self, report_id: str, environments: list[str], label: str = "NON-PROD"):
+        report = main.workspace.load(report_id)
+        report.engagement.report_type = "retest"
+        report.engagement.tested_environments = environments
+        report.engagement.non_production_label = label
+        report.engagement.limitations = "N/A"
+        main.workspace.save(report)
+        return self._setup_page(report_id)
+
+    def test_a_single_environment_retest_offers_a_limitation_naming_the_chosen_label(self) -> None:
+        report_id = self.ready_report()
+        page = self._retest_setup(report_id, ["production"], "UAT")
+        offer = page.locator("#limitations-offer")
+        offer.wait_for()
+        self.assertIn("Retest only in PROD; no UAT testing.", offer.inner_text())
+
+        offer.get_by_role("button", name="Use it").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        # The model, not just the textarea: assigning .value fires no event, so the [data-path]
+        # handler would never see it and the sentence would never reach the draft.
+        self.assertEqual(self._saved_engagement(report_id).limitations, "Retest only in PROD; no UAT testing.")
+        self.assertEqual(page.get_by_label("Limitations").input_value(), "Retest only in PROD; no UAT testing.")
+        self.assertEqual(page.get_by_label("Limitations").evaluate("input => input.validationMessage"), "")
+        self.assertEqual(page.locator("#limitations-offer").count(), 0)
+
+    def test_the_limitation_offer_names_prod_second_when_only_non_production_was_tested(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.scope_targets = [ScopeTarget(target_id="tgt_np", environment="non_production", channel="web", value="https://uat.example.test")]
+        main.workspace.save(report)
+        page = self._retest_setup(report_id, ["non_production"], "STAGE")
+        offer = page.locator("#limitations-offer")
+        offer.wait_for()
+        self.assertIn("Retest only in STAGE; no PROD testing.", offer.inner_text())
+
+    def test_the_limitation_offer_stays_away_once_limitations_say_something(self) -> None:
+        """Only offered while the field still holds the app's own default, so it cannot nag over
+        wording the tester has already chosen."""
+        report_id = self.ready_report()
+        page = self._retest_setup(report_id, ["production"])
+        page.locator("#limitations-offer").wait_for()
+
+        report = main.workspace.load(report_id)
+        report.engagement.limitations = "Tester wrote this."
+        main.workspace.save(report)
+        page = self._setup_page(report_id)
+        page.wait_for_timeout(300)
+        self.assertEqual(page.locator("#limitations-offer").count(), 0)
+
+    def test_a_dismissed_limitation_offer_does_not_come_back_while_the_page_is_open(self) -> None:
+        page = self._retest_setup(self.ready_report(), ["production"])
+        page.locator("#limitations-offer").wait_for()
+        page.locator("#limitations-offer").get_by_role("button", name="Dismiss").click()
+        self.assertEqual(page.locator("#limitations-offer").count(), 0)
+
+        page.get_by_label("Limitations").click()
+        page.get_by_label("Limitations").blur()
+        page.wait_for_timeout(300)
+        self.assertEqual(page.locator("#limitations-offer").count(), 0, "a dismissed offer returned on the next report change")
+
+    def test_the_offer_follows_the_label_when_it_changes(self) -> None:
+        """The sentence is derived at paint time, not captured when the page loaded: a tester who
+        renames the environment after seeing the offer must be offered the new wording."""
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        main.workspace.save(report)
+        page = self._retest_setup(report_id, ["production"], "UAT")
+        page.locator("#limitations-offer").wait_for()
+        self.assertIn("no UAT testing.", page.locator("#limitations-offer").inner_text())
+
+        report = main.workspace.load(report_id)
+        report.engagement.non_production_label = "STAGE"
+        main.workspace.save(report)
+        page = self._setup_page(report_id)
+        page.locator("#limitations-offer").wait_for()
+        self.assertIn("no STAGE testing.", page.locator("#limitations-offer").inner_text())
+
+    def _non_production_retest(self, label: str = "UAT"):
+        """Non-production only: the name control is disabled unless that environment is covered, so
+        this is the one single-environment retest where a rename is reachable at all."""
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.scope_targets = [ScopeTarget(target_id="tgt_np", environment="non_production", channel="web", value="https://uat.example.test")]
+        main.workspace.save(report)
+        return report_id, self._retest_setup(report_id, ["non_production"], label)
+
+    def test_renaming_the_environment_offers_to_update_the_limitation_without_a_reload(self) -> None:
+        """The whole point is that it reacts to the rename in place. A test that reloads would pass
+        against a version that only ever recomputed on boot."""
+        report_id, page = self._non_production_retest("UAT")
+        offer = page.locator("#limitations-offer")
+        offer.wait_for()
+        offer.get_by_role("button", name="Use it").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(page.get_by_label("Limitations").input_value(), "Retest only in UAT; no PROD testing.")
+
+        # Same page, no reload: the rename alone must bring the offer back.
+        page.locator(".coverage-name").select_option("STAGE")
+        offer = page.locator("#limitations-offer")
+        offer.wait_for(timeout=5_000)
+        self.assertIn('It would now read "Retest only in STAGE; no PROD testing."', offer.inner_text())
+
+        offer.get_by_role("button", name="Update it").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(self._saved_engagement(report_id).limitations, "Retest only in STAGE; no PROD testing.")
+        self.assertEqual(page.locator("#limitations-offer").count(), 0)
+
+    def test_a_typed_environment_name_updates_the_offer_while_it_is_being_typed(self) -> None:
+        """The redraw guard must be narrow enough to let this through: only the Limitations textarea
+        blocks a repaint, because only it sits under the banner."""
+        _report_id, page = self._non_production_retest("UAT")
+        page.locator("#limitations-offer").wait_for()
+
+        page.locator(".coverage-name").select_option("OTHERS")
+        typed = page.locator(".coverage-name-custom")
+        typed.wait_for()
+        typed.fill("PREPROD")
+        # Waits on the banner's own state rather than its presence: the stale banner is still on
+        # screen, so a presence check would return the old wording immediately.
+        page.wait_for_selector('#limitations-offer[data-offer-state*="PREPROD"]', timeout=5_000)
+        self.assertIn("Retest only in PREPROD; no PROD testing.", page.locator("#limitations-offer").inner_text())
+        self.assertEqual(typed.evaluate("input => document.activeElement === input"), True, "the repaint stole focus from the name being typed")
+
+    def test_the_update_offer_leaves_wording_the_tester_composed_alone(self) -> None:
+        """Recognising only the sentence this app generates is what stops a rename rewriting prose
+        the tester wrote themselves. The offer is live here -- it simply must not fire."""
+        report_id, page = self._non_production_retest("UAT")
+        page.locator("#limitations-offer").wait_for()
+        prose = "Retested UAT only, production was out of scope this cycle."
+        page.get_by_label("Limitations").fill(prose)
+        page.get_by_label("Limitations").blur()
+        page.wait_for_timeout(300)
+        self.assertEqual(page.locator("#limitations-offer").count(), 0)
+
+        page.locator(".coverage-name").select_option("STAGE")
+        page.wait_for_timeout(500)
+        self.assertEqual(page.locator("#limitations-offer").count(), 0, "a rename offered to rewrite the tester's own wording")
+        self.assertEqual(page.get_by_label("Limitations").input_value(), prose)
+
     def _two_list_proof(self, report_id: str, *, continue_second: bool):
         """A proof of concept shaped steps -> image -> steps, which is the only shape the continue
         option is reachable in: merge_step_lists would have collapsed two adjacent lists."""

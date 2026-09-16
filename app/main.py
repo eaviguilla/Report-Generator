@@ -517,7 +517,7 @@ def finalized_report(report_id: str, *, save_to_folder: bool = False) -> tuple[R
                 raise HTTPException(422, {"message": "Complete the report before generating it", "issues": issues})
             contents = render_report_docx(
                 report,
-                ROOT / "resources" / "MAIN_TEST.docx",
+                ROOT / "resources" / "MAIN.docx",
                 draft_path.parent,
                 validation_issues=issues,
             )

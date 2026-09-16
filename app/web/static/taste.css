@@ -659,7 +659,8 @@ input[data-path*="scope"],
 #setup > section > .muted,
 #setup > section > .scope-grid,
 #setup > section > .setup-table-wrap,
-#setup > section > .limitations-field {
+#setup > section > .limitations-field,
+#setup > section > .content-offer {
   grid-column: auto;
   margin: 14px 16px 16px;
 }
@@ -3216,6 +3217,21 @@ button.finding-nav.active:not(:disabled)::after {
   padding: 8px 9px;
   border: 0;
   border-radius: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* A textarea, so the base min-height of 112px applies until it is overridden here. */
+.fragment .instance-title-input {
+  min-height: 34px;
+  height: auto;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
+  resize: none;
   color: var(--ink-soft);
   background: transparent;
   font-size: 12px;

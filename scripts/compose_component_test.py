@@ -26,10 +26,10 @@ def compose_severity_sample() -> Path:
         DocxComponent(ROOT / "resources" / "severity_titles" / "high_severity.docx", {"finding_title": "High Authorization Bypass"}),
         DocxComponent(ROOT / "resources" / "severity_titles" / "medium_severity.docx", {"finding_title": "Medium Concurrent Session Allowed"}),
     ]
-    output = ROOT / "generated" / "MAIN_TEST-composed.docx"
+    output = ROOT / "generated" / "MAIN-composed.docx"
     atomic_write_bytes(
         output,
-        compose_docx_components(ROOT / "resources" / "MAIN_TEST.docx", components),
+        compose_docx_components(ROOT / "resources" / "MAIN.docx", components),
     )
     return output
 

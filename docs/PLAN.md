@@ -241,7 +241,7 @@ app/web/static/app.css       Legacy base styles
 app/web/static/overrides.css Active workflow styling overrides
 app/web/static/manager.css   Report manager styling
 resources/vuln_library.json  Offline vulnerability library
-resources/MAIN_TEST.docx     Canonical Word report template
+resources/MAIN.docx     Canonical Word report template
 resources/severity_titles/   Severity grouping components
 resources/finding_types/     Status-specific finding components
 resources/fragments/         Content fragment components

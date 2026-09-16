@@ -866,7 +866,19 @@ def _render_text_component(
     filename, token = FRAGMENT_COMPONENT_FILES[component_type]
     elements = clone_component_elements(document, component_root / "fragments" / filename)
     replace_component_token_runs(elements, token, runs)
+    _keep_broken_lines_together(elements)
     return elements
+
+
+def _keep_broken_lines_together(elements: list) -> None:
+    """A manual break means the lines belong together, as a lead-in does with the URL beneath it.
+    keepNext cannot help: Word is splitting inside one paragraph, not between two."""
+    for element in elements:
+        if element.tag != qn("w:p"):
+            continue
+        if element.find(qn("w:r")) is None or not element.findall(".//" + qn("w:br")):
+            continue
+        _keep_lines_together(element)
 
 
 def _split_runs_at_newlines(runs: list[Run]) -> list[list[Run]]:
@@ -1195,6 +1207,22 @@ def _set_page_break_before(paragraph_element) -> None:
         paragraph_element.insert(0, paragraph_properties)
     if paragraph_properties.find(qn("w:pageBreakBefore")) is None:
         paragraph_properties.append(OxmlElement("w:pageBreakBefore"))
+
+
+def _keep_lines_together(paragraph_element) -> None:
+    properties = paragraph_element.find(qn("w:pPr"))
+    if properties is None:
+        properties = OxmlElement("w:pPr")
+        paragraph_element.insert(0, properties)
+    if properties.find(qn("w:keepLines")) is not None:
+        return
+    keep = OxmlElement("w:keepLines")
+    # CT_PPr is a sequence: w:keepLines sits after w:pStyle and w:keepNext, before everything else.
+    anchor = properties.find(qn("w:keepNext")) or properties.find(qn("w:pStyle"))
+    if anchor is None:
+        properties.insert(0, keep)
+    else:
+        anchor.addnext(keep)
 
 
 def _keep_with_next(paragraph_element) -> None:

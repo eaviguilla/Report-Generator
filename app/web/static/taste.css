@@ -2558,6 +2558,7 @@ textarea,
 .fragment-head > .fragment-drag-handle,
 .fragment-head > .fragment-move-up,
 .fragment-head > .fragment-move-down,
+.fragment-head > .list-continue,
 .fragment-head > .toolbar button,
 .fragment-head > button.danger {
   min-height: 22px;
@@ -2585,18 +2586,45 @@ textarea,
 .fragment-head .toolbar,
 .fragment-head .fragment-move-up,
 .fragment-head .fragment-move-down,
+.fragment-head .list-continue,
 .fragment-head button.danger {
   opacity: 0.34;
   transition: opacity 0.12s ease-out;
 }
 
+/* A state nobody can read at a glance is not a state, so a ticked box never recedes. */
+.fragment-head .list-continue.is-on {
+  opacity: 1;
+}
+
+.fragment-head > .list-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-left: 2px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fragment-head > .list-continue input {
+  width: 11px;
+  height: 11px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .fragment:hover .fragment-head .toolbar,
 .fragment:hover .fragment-head .fragment-move-up,
 .fragment:hover .fragment-head .fragment-move-down,
+.fragment:hover .fragment-head .list-continue,
 .fragment:hover .fragment-head button.danger,
 .fragment:focus-within .fragment-head .toolbar,
 .fragment:focus-within .fragment-head .fragment-move-up,
 .fragment:focus-within .fragment-head .fragment-move-down,
+.fragment:focus-within .fragment-head .list-continue,
 .fragment:focus-within .fragment-head button.danger {
   opacity: 1;
 }
@@ -2958,7 +2986,6 @@ button.finding-nav.active:not(:disabled)::after {
   margin: -14px -16px 0;
   padding: 14px 16px 10px;
   border: 0;
-  border-bottom: 1px solid var(--line);
   background: var(--canvas);
 }
 
@@ -3041,13 +3068,25 @@ button.finding-nav.active:not(:disabled)::after {
   font-size: 9.5px;
 }
 
+/* Equal auto margins, so the badge sits midway between the name and the fragment count instead of
+   wherever the leftover space happened to fall. */
 .content-flag {
-  padding: 1px 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline: auto;
+  padding: 2px 7px;
   border-radius: var(--radius-pill);
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 17%, transparent);
   font-size: 9px;
   font-weight: 700;
+  line-height: 1;
+}
+
+/* No stylesheet reinstates the browser's [hidden] rule, so the display above would outlive it. */
+.content-flag[hidden] {
+  display: none;
 }
 
 /* :placeholder-shown drops the ring as soon as a character is typed, without waiting for a save. */

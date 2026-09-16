@@ -55,6 +55,7 @@ STATUS_BY_LABEL = {
 }
 RETAINED_STATUSES = {"open_new", "open_previously_discovered"}
 FIGURE_PREFIX = re.compile(r"^Figure\s+\d+\s*[.:\-]?\s*")
+INSTANCE_PREFIX = re.compile(r"^Instance\s+\d+\s*[:.\-]?\s*")
 DISPLAY_ID = re.compile(r"^[0-9]{1,5}$")
 PRODUCTION_ROW = "Production Environment"
 
@@ -128,6 +129,9 @@ def classify_paragraph(paragraph, formats: dict[str, str]) -> str:
     alignment = properties.find(qn("w:jc")) if properties is not None else None
     if alignment is not None and alignment.get(qn("w:val")) == JUSTIFIED:
         return "paragraph"
+    # The generator's own label, so the text identifies it even though only that label is bold.
+    if INSTANCE_PREFIX.match(paragraph.text.strip()):
+        return "instance_title"
     if _paragraph_mark(paragraph, "w:b"):
         return "instance_title"
     if _paragraph_mark(paragraph, "w:i"):
@@ -229,6 +233,11 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
         if stripped in BOILERPLATE:
             continue
         kind = classify_paragraph(paragraph, formats)
+        # An image's caption sits directly under it, so position identifies it and the style name does
+        # not have to. The generator's "Figure n." lead-in is its own, and never the tester's words.
+        if fragments and fragments[-1]["type"] == "image" and not fragments[-1]["caption"] and FIGURE_PREFIX.match(stripped):
+            fragments[-1]["caption"] = _clean(FIGURE_PREFIX.sub("", stripped))
+            continue
         if kind == "caption":
             caption = FIGURE_PREFIX.sub("", stripped)
             if fragments and fragments[-1]["type"] == "image":
@@ -258,7 +267,8 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
                 continue
             if not stripped:
                 continue
-            fragments.append({"frag_id": _fresh("f"), "type": "instance_title", "text": stripped})
+            # "Instance n:" is the generator's own label, so it is stripped back off on the way in.
+            fragments.append({"frag_id": _fresh("f"), "type": "instance_title", "text": INSTANCE_PREFIX.sub("", stripped)})
             continue
         if kind == "code_block":
             if not text.strip():

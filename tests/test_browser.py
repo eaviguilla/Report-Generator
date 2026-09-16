@@ -16,13 +16,14 @@ import uvicorn
 from docx import Document
 from PIL import Image
 from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from app import main
 from app.docx_report import generation_issues
 from app.report_service import status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from app.workspace import Workspace
-from app.models import Content, EvidenceItem, ImageFragment, LibraryRef, ListItem, NoteFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
+from app.models import Content, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
 
 
 class BrowserWorkflowTests(unittest.TestCase):
@@ -1409,7 +1410,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".table-fragment").count(), 1)
         self.assertGreaterEqual(page.locator(".fragment .rich").count(), 3)
         self.assertGreaterEqual(page.locator(".list-textarea").count(), 2)
-        self.assertGreaterEqual(page.locator(".fragment input.instance-title-input").count(), 1)
+        self.assertGreaterEqual(page.locator(".fragment textarea.instance-title-input").count(), 1)
         self.assertGreaterEqual(page.locator(".evidence-tile").count(), 2)
 
         page.get_by_role("button", name="Save").click()
@@ -1433,6 +1434,142 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(
             header.locator(".toolbar").get_by_role("button").evaluate_all("buttons => buttons.map(button => button.title)"),
             ["Bold", "Italic", "Underline"],
+        )
+
+    def _two_list_proof(self, report_id: str, *, continue_second: bool):
+        """A proof of concept shaped steps -> image -> steps, which is the only shape the continue
+        option is reachable in: merge_step_lists would have collapsed two adjacent lists."""
+        report, finding = self._complete_finding(report_id)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        first = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        first.items = [ListItem(runs=[Run(text="First step")]), ListItem(runs=[Run(text="Second step")])]
+        proof.fragments.append(ListFragment(
+            frag_id="f_second_list", type="numbered_list", continue_numbering=continue_second,
+            items=[ListItem(runs=[Run(text="Third step")])],
+        ))
+        main.workspace.save(report)
+        return report, finding
+
+    def test_a_continued_list_numbers_on_from_the_one_above_it(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        self._two_list_proof(report_id, continue_second=True)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator('.content-block[data-content-type="proof_of_concept"]')
+        second = proof.locator('[data-fragment-id="f_second_list"] .list-textarea')
+        self.assertEqual(second.locator("xpath=..").locator(".list-marker").all_text_contents(), ["3."])
+
+        first = proof.locator(".list-textarea").first
+        first.click()
+        page.keyboard.press("End")
+        page.keyboard.type("\nInserted step")
+        page.wait_for_timeout(300)
+        self.assertEqual(
+            second.locator("xpath=..").locator(".list-marker").all_text_contents(), ["4."],
+            "editing the list above did not repaint the one continuing it",
+        )
+        self.assertTrue(
+            first.evaluate("field => field === document.activeElement"),
+            "the repaint stole focus from the list being typed in",
+        )
+
+    def test_a_list_that_restarts_numbers_from_one(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        self._two_list_proof(report_id, continue_second=False)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        second = page.locator('[data-fragment-id="f_second_list"] .list-textarea')
+        self.assertEqual(second.locator("xpath=..").locator(".list-marker").all_text_contents(), ["1."])
+
+    def test_the_continue_control_appears_only_where_it_can_act(self) -> None:
+        """Hidden on a section's first numbered list, which every proof of concept is guaranteed to
+        have -- a permanently disabled control on the most common card in the app explains nothing."""
+        report_id = self.ready_report(include_finding=True)
+        self._two_list_proof(report_id, continue_second=False)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator('.content-block[data-content-type="proof_of_concept"]')
+        self.assertEqual(proof.locator(".fragment").first.locator(".list-continue").count(), 0)
+        second = proof.locator('[data-fragment-id="f_second_list"]')
+        self.assertEqual(second.locator(".list-continue").count(), 1)
+
+        second.locator(".list-continue input").check()
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        saved = main.workspace.load(report_id).vulnerabilities[0]
+        stored = next(content for content in saved.contents if content.type == "proof_of_concept")
+        self.assertTrue(next(fragment for fragment in stored.fragments if fragment.frag_id == "f_second_list").continue_numbering)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        second = page.locator('[data-fragment-id="f_second_list"]')
+        self.assertEqual(second.locator(".list-textarea").locator("xpath=..").locator(".list-marker").all_text_contents(), ["3."])
+        self.assertTrue(second.locator(".list-continue input").is_checked())
+
+    def test_a_set_continue_flag_stays_visible_after_the_list_above_it_goes(self) -> None:
+        """Deleting the list above leaves the flag set but inert. Hiding the control then would make
+        a set flag invisible and able to re-activate later without the tester ever seeing it."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._two_list_proof(report_id, continue_second=True)
+        description = next(content for content in finding.contents if content.type == "description")
+        description.fragments.append(ListFragment(
+            frag_id="f_orphan", type="numbered_list", continue_numbering=True,
+            items=[ListItem(runs=[Run(text="Orphaned step")])],
+        ))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        orphan = page.locator('[data-fragment-id="f_orphan"]')
+        self.assertEqual(orphan.locator(".list-continue").count(), 1, "a set flag was hidden")
+        self.assertTrue(orphan.locator(".list-continue input").is_checked())
+        self.assertEqual(
+            orphan.locator(".list-textarea").locator("xpath=..").locator(".list-marker").all_text_contents(), ["1."],
+            "a flag with nothing above it must fall back to 1 rather than invent an offset",
+        )
+
+    def test_ticking_continue_numbering_does_not_disturb_a_dismissed_library_offer(self) -> None:
+        """The library offer asks whether the section still matches the entry's content. Numbering
+        presentation is not content, so the tick must leave the dismissal fingerprint alone. The
+        presence assertion is what stops this rotting into a green test that proves nothing."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._library_finding(report_id)
+        description = next(content for content in finding.contents if content.type == "description")
+        description.fragments.append(ListFragment(
+            frag_id="f_first", type="numbered_list", items=[ListItem(runs=[Run(text="A step")])],
+        ))
+        description.fragments.append(ListFragment(
+            frag_id="f_numbered", type="numbered_list", items=[ListItem(runs=[Run(text="Another step")])],
+        ))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        self.assertEqual(block.locator("[data-content-offer]").count(), 1, "the fixture no longer produces an offer to dismiss")
+
+        block.get_by_role("button", name="Keep mine").click()
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(block.locator("[data-content-offer]").count(), 0)
+
+        block.locator('[data-fragment-id="f_numbered"] .list-continue input').check()
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        self.assertEqual(
+            block.locator("[data-content-offer]").count(), 0,
+            "ticking a numbering option resurrected a dismissed library offer",
         )
 
     def _complete_finding(self, report_id: str):
@@ -2071,6 +2208,33 @@ class BrowserWorkflowTests(unittest.TestCase):
             "the redraw dropped an edit that was still only on screen",
         )
 
+    def test_a_written_conclusion_without_the_sentence_is_offered_it(self) -> None:
+        """Their wording is the conclusion, so the sentence is offered rather than written for them."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        conclusion.fragments[0].runs = [Run(text="The account remained reachable after the fix window closed.")]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("[data-conclusion-sentence]")
+        page.get_by_role("button", name="Add it to the end").click()
+        page.wait_for_selector("[data-conclusion-sentence]", state="detached")
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=15_000)
+
+        saved = main.workspace.load(report_id).vulnerabilities[0]
+        text = "".join(
+            run.text
+            for content in saved.contents if content.type == "in_conclusion"
+            for fragment in content.fragments for run in fragment.runs
+        )
+        self.assertTrue(text.startswith("The account remained reachable"), "the tester's wording was not kept")
+        self.assertTrue(text.rstrip().endswith("is still Open."), f"the sentence was not appended: {text!r}")
+
     def _library_finding(self, report_id: str, library_id: str = "VDB-047"):
         """A finding whose Description and Remediation hold that entry's own content, as an insert leaves it."""
         report = main.workspace.load(report_id)
@@ -2233,7 +2397,26 @@ class BrowserWorkflowTests(unittest.TestCase):
             conclusion = self._fill_retest_history(report, finding)
             conclusion.fragments[0].runs = [Run(text="Observe the balance of another user. "), *conclusion.fragments[0].runs]
 
-        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion]
+        def duplicate_additional_locations(report, finding):
+            finding.scope = Scope(mode="custom", target_ids=["tgt_browser"], custom_locations={"production": {"web": ["https://dupe.test", "  https://dupe.test  "]}})
+
+        def carried_section_holding_work(report, finding):
+            # Flipping to "open new" hides the previous proof; neither side may then ask for it.
+            finding.status = "open_previously_discovered"
+            main.provision(finding)
+            previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+            next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Last year's step")]
+            finding.status = "open_new"
+
+        def previous_proof_image_without_an_environment(report, finding):
+            finding.status = "open_previously_discovered"
+            main.provision(finding)
+            previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+            next(fragment for fragment in previous.fragments if fragment.type == "image").environment = None
+
+        # Scope-rule drift is invisible here: a finding with no location cannot open the editor, so
+        # the loop below never reaches the comparison. Those cases live in the Findings-gate test.
+        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment]
         for case in cases:
             with self.subTest(case=case.__name__):
                 report_id = self.ready_report(include_finding=True)
@@ -2261,6 +2444,68 @@ class BrowserWorkflowTests(unittest.TestCase):
                     self.page.get_by_role("button", name="Generate Report").is_enabled(),
                     not server_issues,
                     f"{case.__name__}: generate button does not match server readiness",
+                )
+
+    def test_browser_findings_gate_matches_server_finding_completeness(self) -> None:
+        """The sibling of the readiness contract test, for the rules it cannot see.
+
+        A finding with no location never opens the editor, so the readiness panel is the wrong
+        place to catch `scopeHasLocation` drifting from `scope_has_location`. The observable that
+        does move is the Findings gate: whether Next carries the tester through to Content. If the
+        client is laxer than the server the tester is bounced straight back, and if it is stricter
+        they are stranded on a report the server would have accepted."""
+
+        def selected_target(finding):
+            finding.scope = Scope(mode="custom", target_ids=["tgt_browser"])
+
+        def typed_endpoint_only(finding):
+            finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["https://typed.example.test/admin"]}})
+
+        def comment_only(finding):
+            finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["# ask the owner which host"]}})
+
+        def whitespace_only(finding):
+            finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["   ", "\t"]}})
+
+        def outside_coverage(finding):
+            # Non-production is not tested on this report, so the line resolves to nothing.
+            finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"non_production": {"web": ["https://uat.example.test"]}})
+
+        def comment_beside_a_real_endpoint(finding):
+            finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["# the note", "https://real.example.test"]}})
+
+        def nothing_at_all(finding):
+            finding.scope = Scope(mode="custom", target_ids=[])
+
+        for case in [selected_target, typed_endpoint_only, comment_only, whitespace_only, outside_coverage, comment_beside_a_real_endpoint, nothing_at_all]:
+            with self.subTest(case=case.__name__):
+                report_id = self.ready_report(include_finding=True)
+                report, finding = self._complete_finding(report_id)
+                case(finding)
+                main.provision_report(report)
+                main.workspace.save(report)
+
+                stored = main.workspace.load(report_id)
+                server_allows = main.finding_is_complete(stored.vulnerabilities[0], stored)
+
+                page = self.page
+                page.goto(f"{self.base_url}/reports/{report_id}/findings")
+                page.wait_for_selector("#findings tr")
+                # Watch for the navigation request, not the resulting URL: when the client is laxer
+                # than the server it still fires the request and the server's redirect hides it, so
+                # the landing page looks identical whether or not the two agree.
+                try:
+                    with page.expect_request(lambda request: request.url.rstrip("/").endswith("/edit"), timeout=3_000):
+                        page.locator("#next").click()
+                    client_allows = True
+                except PlaywrightTimeoutError:
+                    client_allows = False
+
+                self.assertEqual(
+                    client_allows,
+                    server_allows,
+                    f"{case.__name__}: the Findings gate {'let the tester through' if client_allows else 'refused'} "
+                    f"but finding_is_complete says {server_allows}",
                 )
 
     def test_deleting_a_finding_with_work_in_it_asks_first(self) -> None:

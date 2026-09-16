@@ -1260,6 +1260,9 @@
     normalizedCells(fragment.header), (fragment.rows || []).map(normalizedCells),
     fragment.text || "", fragment.caption || "", fragment.evidence_id || "",
     fragment.environment || "", fragment.generated || "",
+    // continue_numbering is deliberately absent. The library offer asks whether this section still
+    // matches the entry's content, and numbering presentation is not content -- including it would
+    // make ticking the box re-open an offer whose only remedy would wipe the tick.
   ]));
   // frag_ids are reminted on every copy, so they are the one thing two identical sections never share.
   const sameFragments = (left, right) => normalizedSection(left) === normalizedSection(right);
@@ -1279,6 +1282,7 @@
   // this job: while the conclusion is still boilerplate the offer is meant to keep standing, so a
   // Dismiss that only wrote to the draft would be redrawn immediately and mean nothing.
   const dismissedStepOffers = new Set();
+  const dismissedSentenceOffers = new Set();
   // Whether the tester has written any steps. Images are excluded deliberately: a screenshot is not
   // a step, and "I have a screenshot but no steps" is exactly the state worth offering.
   const pocHasWrittenSteps = finding => (finding.contents?.find(content => content.type === "proof_of_concept")?.fragments || [])
@@ -2314,7 +2318,7 @@
     };
   }
   // Creates the minimum valid data structure for a requested fragment type.
-  function newFragment(type) { const fragment = {frag_id:id("f"),type}; if (type === "paragraph" || type === "note") fragment.runs = []; else if (type.endsWith("list")) fragment.items = [{runs:[]}]; else if (type === "table") Object.assign(fragment,{header:[{runs:[]}],rows:[[{runs:[]}]]}); else if (type === "image") Object.assign(fragment,{evidence_id:null,caption:"",width_mm:null}); else if (type === "code_block") Object.assign(fragment,{caption:null,text:""}); else fragment.text=""; return fragment; }
+  function newFragment(type) { const fragment = {frag_id:id("f"),type}; if (type === "paragraph" || type === "note") fragment.runs = []; else if (type.endsWith("list")) Object.assign(fragment,{items:[{runs:[]}],continue_numbering:false}); else if (type === "table") Object.assign(fragment,{header:[{runs:[]}],rows:[[{runs:[]}]]}); else if (type === "image") Object.assign(fragment,{evidence_id:null,caption:"",width_mm:null}); else if (type === "code_block") Object.assign(fragment,{caption:null,text:""}); else fragment.text=""; return fragment; }
   const EVIDENCE_ICONS = {
     image: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m3 15 4.5-4.5a2 2 0 0 1 2.8 0L15 15"/><circle cx="15.5" cy="8.5" r="1.2"/></svg>',
     earlier: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
@@ -2561,6 +2565,22 @@
     return article;
   }
   // Renders one content fragment with its type-specific editing controls.
+  // How many items a continued list has to count past. The scan stops at the start of its own
+  // section, which is what stops a proof of concept continuing the previous proof of concept.
+  const numberingOffset = (fragment, content) => {
+    const fragments = content?.fragments || [];
+    const index = fragments.indexOf(fragment);
+    if (index < 1 || !fragment.continue_numbering) return 0;
+    let offset = 0;
+    for (let scan = index - 1; scan >= 0; scan -= 1) {
+      const earlier = fragments[scan];
+      if (earlier.type !== "numbered_list") continue;
+      offset += (earlier.items || []).filter(item => (item.runs || []).some(run => run.text?.trim())).length;
+      // Keep walking only while that list is itself continuing something.
+      if (!earlier.continue_numbering) break;
+    }
+    return offset;
+  };
   function renderFragment(fragment, content, rerender, finding) {
     const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger fragment-delete" type="button" aria-label="Delete fragment" title="Delete">&#215;</button></div>`;
     const removeButton = card.querySelector(".danger");
@@ -2622,6 +2642,28 @@
       editor.className = "list-text-editor";
       gutter.className = "list-gutter";
       gutter.setAttribute("aria-hidden", "true");
+      // Inserted from here, never from the shared head markup, so every other fragment head is
+      // untouched. A label rather than a button: a head rule sizes every button to a 20px square.
+      if (numbered) {
+        const fragments = content?.fragments || [];
+        const index = fragments.indexOf(fragment);
+        const canContinue = fragments.slice(0, Math.max(index, 0)).some(earlier => earlier.type === "numbered_list");
+        // A set flag is never hidden, even if the list it continued has since been deleted.
+        if (canContinue || fragment.continue_numbering) {
+          const toggle = document.createElement("label");
+          toggle.className = "list-continue";
+          toggle.classList.toggle("is-on", Boolean(fragment.continue_numbering));
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.checked = Boolean(fragment.continue_numbering);
+          box.onchange = () => { fragment.continue_numbering = box.checked; rerender(); scheduleSave(); };
+          toggle.append(box, document.createTextNode("Continue numbering"));
+          toggle.title = fragment.continue_numbering
+            ? `Continues the list above; this list starts at ${numberingOffset(fragment, content) + 1}.`
+            : "Carry on from the numbers of the list above, instead of starting at 1.";
+          card.querySelector(".fragment-head .tag").after(toggle);
+        }
+      }
       input.className = "list-textarea";
       input.setAttribute("aria-label", `${numbered ? "Numbered" : "Bulleted"} list items`);
       input.placeholder = "One item per line";
@@ -2630,8 +2672,20 @@
       measure.className = "list-line-measure";
       editor.append(gutter, input, measure);
       const renderGutter = () => {
-        let itemNumber = 0;
+        // Read at paint time, never captured: the repaint below relies on a fresh count.
+        let itemNumber = numberingOffset(fragment, content);
         renderLineMarkers(input, gutter, measure, line => line.trim() ? numbered ? `${++itemNumber}.` : "\u2022" : "", "list-marker");
+      };
+      // So a list can repaint the gutters of the ones continuing it without a pane rebuild.
+      input.renderGutter = renderGutter;
+      const repaintChain = () => {
+        const fragments = content?.fragments || [];
+        for (let scan = fragments.indexOf(fragment) + 1; scan > 0 && scan < fragments.length; scan += 1) {
+          const later = fragments[scan];
+          if (later.type !== "numbered_list") continue;
+          if (!later.continue_numbering) break;
+          card.parentElement?.querySelector(`[data-fragment-id="${later.frag_id}"] .list-textarea`)?.renderGutter?.();
+        }
       };
       const resize = () => {
         input.style.height = "auto";
@@ -2642,6 +2696,7 @@
         const lines = input.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
         fragment.items = (lines.length ? lines : [""]).map(text => ({runs:text ? [{text}] : []}));
         resize();
+        repaintChain();
         changed();
       };
       // Bracketed by finalize so the strip is one undo step, not folded into the whole time the
@@ -2769,21 +2824,17 @@
       card.append(renderEvidenceTile(fragment, content, rerender, finding, 1));
     } else {
       const isCode = fragment.type === "code_block";
-      const input = document.createElement(isCode ? "textarea" : "input");
-      const label = isCode ? "Paste the command or response" : "Instance title, for example the login endpoint";
+      const input = document.createElement("textarea");
+      const label = isCode ? "Paste the command or response" : "Optional instance title here";
       input.className = isCode ? "code-block" : "instance-title-input";
       input.value = fragment.text || "";
       input.placeholder = label;
       input.setAttribute("aria-label", label);
-      if (isCode) {
-        input.rows = 1;
-        const fit = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
-        fit();
-        document.fonts?.ready.then(fit);
-        input.oninput = () => { fragment.text = input.value; fit(); changed(); };
-      } else {
-        input.oninput = () => { fragment.text = input.value; changed(); };
-      }
+      input.rows = 1;
+      const fit = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
+      fit();
+      document.fonts?.ready.then(fit);
+      input.oninput = () => { fragment.text = input.value; fit(); changed(); };
       card.append(input);
     }
     return card;
@@ -2886,7 +2937,7 @@
           const alreadyNamed = content.type === "proof_of_concept" && !fragment.evidence_id && uncovered.includes(fragment.environment);
           if (missing.length && !alreadyNamed) issues.push({contentLabel, fragmentLabel:`${environment} evidence`, message:`requires ${missing.join(" and ")}`, fragmentId:fragment.frag_id, evidenceSlot:true});
         }
-        if (!fragment.runs && !fragment.items && fragment.type !== "table" && fragment.type !== "image" && !fragment.text?.trim()) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
+        if (!fragment.runs && !fragment.items && fragment.type !== "table" && fragment.type !== "image" && fragment.type !== "instance_title" && !fragment.text?.trim()) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (placeholderPattern.test(fragmentText(fragment))) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"replace placeholder text", fragmentId:fragment.frag_id, level:"warning"});
         return issues;
         })];
@@ -3274,6 +3325,27 @@
                 render();
                 scheduleSave();
               }));
+              nodes.push(banner);
+            }
+            const writtenParagraphs = content.fragments.filter(fragment => fragment.type === "paragraph" && fragmentHasText(fragment));
+            // Written, but not stating where the finding landed. Offered, never written for them:
+            // their wording is the conclusion, and only they can say whether it is kept.
+            if (!emptied.length && writtenParagraphs.length && !content.fragments.some(hasDefaultStatusConclusion) && !dismissedSentenceOffers.has(finding.uid)) {
+              const {banner, actions} = buildOffer("content-offer", "This conclusion does not state whether the finding is open or resolved.");
+              banner.dataset.conclusionSentence = "";
+              const target = writtenParagraphs[writtenParagraphs.length - 1];
+              const apply = mode => {
+                const sentence = statusConclusionRuns(finding.title, finding.status === "resolved" ? "Resolved" : "Open");
+                target.runs = mode === "replace" ? sentence : [...(target.runs || []), {text:" "}, ...sentence];
+                if (mode === "replace") finding.conclusion_offer_resolved = [];
+                render();
+                scheduleSave();
+              };
+              actions.append(
+                offerButton("Add it to the end", "primary", () => apply("append")),
+                offerButton("Replace what I wrote", "subtle", () => apply("replace")),
+                offerButton("Dismiss", "dismiss", () => { dismissedSentenceOffers.add(finding.uid); render(); }),
+              );
               nodes.push(banner);
             }
           }

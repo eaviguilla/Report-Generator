@@ -2698,6 +2698,14 @@
       };
       const table = document.createElement("table");
       table.className = "table-fragment";
+      // A structural edit redraws from the model, so anything on screen that has not reached it yet
+      // would be dropped. Rendering order puts the header first, then each row left to right.
+      const commitCells = () => {
+        const cells = [...fragment.header, ...fragment.rows.flat()];
+        [...table.querySelectorAll(".table-cell-input")].forEach((input, index) => {
+          if (cells[index]) cells[index].runs = input.value ? [{text:input.value}] : [];
+        });
+      };
       const header = document.createElement("thead");
       const headerRow = document.createElement("tr");
       fragment.header.forEach((cell, index) => { const headerCell = document.createElement("th"); headerCell.append(cellInput(cell, `Header ${index + 1}`)); headerRow.append(headerCell); });
@@ -2720,7 +2728,7 @@
         removeButton.title = "Remove row";
         removeButton.setAttribute("aria-label", `Remove row ${rowIndex + 1}`);
         removeButton.disabled = fragment.rows.length === 1;
-        removeButton.onclick = () => { fragment.rows.splice(rowIndex, 1); rerender(); changed(); };
+        removeButton.onclick = () => { commitCells(); fragment.rows.splice(rowIndex, 1); rerender(); changed(); };
         actionCell.append(removeButton);
         bodyRow.append(actionCell);
         body.append(bodyRow);
@@ -2731,11 +2739,11 @@
       const addRow = document.createElement("button");
       addRow.type = "button";
       addRow.textContent = "Add row";
-      addRow.onclick = () => { fragment.rows.push(Array.from({length:columnCount}, () => ({runs:[]}))); rerender(); changed(); };
+      addRow.onclick = () => { commitCells(); fragment.rows.push(Array.from({length:columnCount}, () => ({runs:[]}))); rerender(); changed(); };
       const addColumn = document.createElement("button");
       addColumn.type = "button";
       addColumn.textContent = "Add column";
-      addColumn.onclick = () => { fragment.header.push({runs:[]}); fragment.rows.forEach(row => row.push({runs:[]})); rerender(); changed(); };
+      addColumn.onclick = () => { commitCells(); fragment.header.push({runs:[]}); fragment.rows.forEach(row => row.push({runs:[]})); rerender(); changed(); };
       const removeColumn = document.createElement("select");
       removeColumn.className = "table-remove-select";
       removeColumn.setAttribute("aria-label", "Remove table column");
@@ -2744,6 +2752,7 @@
       removeColumn.onchange = () => {
         if (removeColumn.value === "") return;
         const columnIndex = Number(removeColumn.value);
+        commitCells();
         fragment.header.splice(columnIndex, 1);
         fragment.rows.forEach(row => row.splice(columnIndex, 1));
         rerender();

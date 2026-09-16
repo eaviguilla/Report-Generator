@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Library prompt variations</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/overrides.css">
+<link rel="stylesheet" href="/static/taste.css">
+<style>
+/* ---------- comp page chrome (not part of any variant) ---------- */
+.vpage { max-width: 1180px; margin: 0 auto; padding: 28px 28px 80px; }
+.vpage h1 { margin: 0 0 6px; color: var(--ink); font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.vpage .vlede { max-width: 66ch; margin: 0 0 8px; color: var(--ink-soft); font-size: 12px; line-height: 1.6; }
+.vbar { display: flex; align-items: center; gap: 10px; margin: 18px 0 30px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.vbar button { padding: 5px 11px; font-size: 11px; }
+.vsec { margin: 0 0 46px; }
+.vintro { margin: 0 0 14px; padding: 0 0 9px; border-bottom: 1px solid var(--line); }
+.vsec h2 { display: flex; align-items: baseline; gap: 9px; margin: 0 0 5px; color: var(--ink); font-size: 14px; font-weight: 700; }
+.vsec h2 span { color: var(--muted); font-family: "JetBrains Mono", Consolas, monospace !important; font-size: 10px; font-weight: 400; }
+.vsec .vwhy { max-width: 74ch; margin: 0; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.vsec .vwhy b { color: var(--ink); font-weight: 650; }
+.vcases { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); align-items: start; }
+.vcase > h3 { margin: 0 0 7px; color: var(--muted); font-size: 8.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* A stand-in for the editor's content card, so each prompt is judged in situ. */
+.vblock { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.vblock > .vhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 11px; border-bottom: 1px solid var(--line); background: var(--canvas-deep); color: var(--ink); font-size: 10.5px; font-weight: 650; }
+.vblock > .vhead em { color: var(--muted); font-family: "JetBrains Mono", Consolas, monospace !important; font-size: 9px; font-style: normal; font-weight: 400; }
+.vbody { padding: 10px 11px 11px; }
+.vfield { padding: 8px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--ink-soft); font-size: 11.5px; line-height: 1.55; }
+.vfield.is-blank { color: var(--muted); }
+.vadd { margin-top: 9px; padding: 7px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--muted); font-size: 10px; font-weight: 650; text-align: center; }
+
+/* ---------- shared across variants: drawn icons + a channel picker ---------- */
+.ic { flex: 0 0 auto; width: 13px; height: 13px; }
+.chan { display: inline-flex; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
+.chan button { min-height: 0; padding: 3px 9px; border: 0; border-radius: 0; color: var(--muted); background: var(--panel); font-size: 10px; font-weight: 650; }
+.chan button + button { border-left: 1px solid var(--line-strong); }
+.chan button[aria-pressed="true"] { color: var(--accent-strong); background: var(--accent-soft); }
+.chan button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* =========================================================================
+   1 — MARGIN NOTE.  No fill, no rail. A ruled aside above the field.
+   ========================================================================= */
+.v1 { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 11px; padding: 0 0 10px; border-bottom: 1px solid var(--line-strong); }
+.v1 > .ic { margin-top: 1px; color: var(--warning); }
+.v1-body { flex: 1; min-width: 0; }
+.v1-body p { margin: 0; color: var(--ink-soft); font-size: 10.5px; line-height: 1.5; }
+.v1-body p b { color: var(--ink); font-weight: 650; }
+.v1-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 7px; }
+.v1-go { min-height: 0; padding: 3px 10px; border: 0; border-radius: var(--radius-sm); color: #fff; background: var(--accent); font-size: 10px; font-weight: 700; }
+.v1-go:hover { background: var(--accent-strong); }
+.v1-txt { min-height: 0; padding: 4px 2px; border: 0; border-radius: var(--radius-sm); color: var(--accent-strong); background: transparent; font-size: 10px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.v1-txt:hover { color: var(--accent); background: transparent; }
+.v1-off { margin-left: auto; color: var(--muted); text-decoration: none; }
+.v1-off:hover { color: var(--ink-soft); text-decoration: underline; text-underline-offset: 3px; }
+.v1-chan { margin-top: 8px; }
+
+/* =========================================================================
+   2 — DOCKED HEADER.  The prompt is the field's own title bar, so its reach
+   is visible: it modifies exactly the box it is welded to.
+   ========================================================================= */
+.v2 { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 9px; padding: 7px 10px; border: 1px solid var(--warning); border-bottom: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: var(--warning-soft); }
+.v2 > .ic { color: var(--warning); }
+/* The message owns its row, so the three actions can never be split across two lines. */
+.v2 p { flex: 1 1 calc(100% - 22px); margin: 0; color: var(--ink); font-size: 10.5px; line-height: 1.4; }
+.v2 .chan { margin-right: auto; }
+.v2-go { min-height: 0; padding: 3px 10px; border: 1px solid var(--warning); border-radius: var(--radius-sm); color: var(--warning); background: transparent; font-size: 10px; font-weight: 700; }
+.v2-go:hover { color: #fff; background: var(--warning); }
+.v2-txt { min-height: 0; padding: 3px 6px; border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--ink-soft); background: transparent; font-size: 10px; font-weight: 650; }
+.v2-txt:hover { background: color-mix(in srgb, var(--warning) 18%, transparent); }
+.v2 + .vfield { border-color: var(--warning); border-top-left-radius: 0; border-top-right-radius: 0; }
+
+/* =========================================================================
+   3 — COMPARE.  Answers the question the other three leave open: what IS
+   the library version? Yours and theirs, side by side, before deciding.
+   ========================================================================= */
+.v3 { overflow: hidden; margin: 0 0 11px; border: 1px solid var(--line-strong); border-radius: var(--radius); }
+.v3-head { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-bottom: 1px solid var(--line-strong); background: var(--canvas-deep); color: var(--ink); font-size: 10px; font-weight: 650; }
+.v3-head > .ic { width: 12px; height: 12px; color: var(--warning); }
+.v3-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.v3-col { min-width: 0; padding: 8px 11px 10px; }
+.v3-col + .v3-col { border-left: 1px solid var(--line); background: var(--warning-soft); }
+.v3-col > b { display: block; margin-bottom: 4px; color: var(--muted); font-size: 8px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.v3-col + .v3-col > b { color: var(--warning); }
+.v3-col p { display: -webkit-box; overflow: hidden; margin: 0; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: var(--ink-soft); font-size: 10.5px; line-height: 1.5; }
+.v3-col p.is-blank { color: var(--muted); font-style: italic; }
+.v3-col ol { margin: 0; padding-left: 15px; color: var(--ink-soft); font-size: 10.5px; line-height: 1.55; }
+.v3-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 7px 10px; border-top: 1px solid var(--line-strong); background: var(--surface-quiet); }
+.v3-go { min-height: 0; padding: 3px 10px; border: 0; border-radius: var(--radius-sm); color: #fff; background: var(--accent); font-size: 10px; font-weight: 700; }
+.v3-go:hover { background: var(--accent-strong); }
+.v3-txt { min-height: 0; padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--ink); background: transparent; font-size: 10px; font-weight: 650; }
+.v3-txt:hover { border-color: var(--accent); color: var(--accent-strong); background: transparent; }
+.v3-off { margin-left: auto; min-height: 0; padding: 3px 4px; border: 0; color: var(--muted); background: transparent; font-size: 10px; font-weight: 650; }
+.v3-off:hover { color: var(--ink-soft); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+
+/* =========================================================================
+   4 — CHIP.  Resting footprint is one small chip by the heading; the detail
+   arrives only when asked for. Built for the tester on their ninetieth finding.
+   ========================================================================= */
+.v4-chip { display: inline-flex; min-height: 0; align-items: center; gap: 5px; padding: 2px 8px 2px 7px; border: 1px dashed var(--warning); border-radius: var(--radius-pill); color: var(--warning); background: transparent; font-size: 9px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
+.v4-chip:hover { border-style: solid; background: var(--warning-soft); }
+.v4-chip .ic { width: 11px; height: 11px; }
+.v4-chip .cv { transition: transform 140ms ease; }
+.v4-chip[aria-expanded="true"] .cv { transform: rotate(180deg); }
+.v4 { margin: 0 0 11px; overflow: hidden; border: 1px solid var(--warning); border-radius: var(--radius-sm); background: var(--warning-soft); }
+.v4-top { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px 0; }
+.v4-top > .ic { margin-top: 1px; color: var(--warning); }
+.v4-top p { margin: 0; color: var(--ink); font-size: 10.5px; line-height: 1.45; }
+.v4-prev { margin: 7px 10px 0; padding: 7px 9px; border-radius: var(--radius-sm); background: var(--panel); color: var(--ink-soft); font-size: 10px; line-height: 1.5; }
+.v4-prev ol { margin: 0; padding-left: 14px; }
+.v4-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 8px 10px; }
+.v4-go { min-height: 0; padding: 3px 10px; border: 0; border-radius: var(--radius-sm); color: #fff; background: var(--warning); font-size: 10px; font-weight: 700; }
+.v4-go:hover { filter: brightness(0.9); }
+.v4-txt { min-height: 0; padding: 3px 8px; border: 1px solid var(--warning); border-radius: var(--radius-sm); color: var(--warning); background: transparent; font-size: 10px; font-weight: 650; }
+.v4-txt:hover { background: color-mix(in srgb, var(--warning) 16%, transparent); }
+.v4-off { margin-left: auto; min-height: 0; padding: 3px 4px; border: 0; color: var(--muted); background: transparent; font-size: 10px; font-weight: 650; }
+.v4-off:hover { color: var(--ink-soft); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <symbol id="i-lib" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.6 2.4h5.7l3.1 3.1v8.1a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z"/><path d="M9.2 2.4v3.2h3.2"/><path d="M5.3 9h5.4M5.3 11.4h3.6"/>
+  </symbol>
+  <symbol id="i-cmp" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.6 5.2h9.1M9.4 2.9l2.3 2.3-2.3 2.3"/><path d="M13.4 10.8H4.3M6.6 8.5 4.3 10.8l2.3 2.3"/>
+  </symbol>
+  <symbol id="i-cv" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.4 8 9.4l3-3"/></symbol>
+</svg>
+
+<div class="vpage">
+  <h1>Library prompt — four directions</h1>
+  <p class="vlede">Each direction is shown in all three states it has to survive: a section the tester has already written, a section still empty, and the proof of concept with two app types to choose between. Copy and button labels are held identical across all four so you are comparing form, not wording.</p>
+  <div class="vbar">
+    <button type="button" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'">Toggle theme</button>
+    <span class="muted" style="font-size:11px">Reference report: <code>r_5395baea9d23</code></span>
+  </div>
+
+  <!-- ============================ 1 ============================ -->
+  <section class="vsec">
+    <div class="vintro">
+      <h2>1 &middot; Margin note <span>no fill, no rail</span></h2>
+      <p class="vwhy">The prompt stops being a coloured block and becomes a <b>ruled aside</b>, the way a footnote sits under text. It is the only direction that never outshouts the tester's own prose, because it has no fill to do it with. The three choices separate by weight rather than by colour: one solid button commits, two underlines qualify, and dismissal sits apart on the right. Cheapest vertically &mdash; about 46px against the incumbent's 96px.</p>
+    </div>
+    <div class="vcases">
+      <div class="vcase"><h3>Section already written</h3>
+        <div class="vblock"><div class="vhead">Description <em>1 fragment</em></div><div class="vbody">
+          <div class="v1"><svg class="ic"><use href="#i-lib"/></svg><div class="v1-body">
+            <p>The library has a saved <b>Description</b> for this finding.</p>
+            <div class="v1-acts"><button class="v1-go" type="button">Use library version</button><button class="v1-txt" type="button">Add below</button><button class="v1-txt v1-off" type="button">Keep mine</button></div>
+          </div></div>
+          <div class="vfield">The assistant returned fabricated policy numbers when asked about refund windows, and presented them as verbatim quotations from the knowledge base.</div>
+          <div class="vadd">+ Add a fragment</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Section still empty</h3>
+        <div class="vblock"><div class="vhead">Recommended Remediation <em>1 fragment</em></div><div class="vbody">
+          <div class="v1"><svg class="ic"><use href="#i-lib"/></svg><div class="v1-body">
+            <p>The library has a saved <b>Recommended Remediation</b> for this finding.</p>
+            <div class="v1-acts"><button class="v1-go" type="button">Fill from library</button><button class="v1-txt v1-off" type="button">Dismiss</button></div>
+          </div></div>
+          <div class="vfield is-blank">Write the paragraph</div>
+          <div class="vadd">+ Add a fragment</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Proof of concept, two app types</h3>
+        <div class="vblock"><div class="vhead">Proof of Concept <em>2 fragments</em></div><div class="vbody">
+          <div class="v1"><svg class="ic"><use href="#i-lib"/></svg><div class="v1-body">
+            <p>This finding affects <b>Web</b> and <b>API</b>. Saved steps exist for both; they arrive as one list you can edit.</p>
+            <div class="v1-chan chan"><button type="button" aria-pressed="true">Web</button><button type="button" aria-pressed="true">API</button></div>
+            <div class="v1-acts"><button class="v1-go" type="button">Use saved steps</button><button class="v1-txt" type="button">Add below</button><button class="v1-txt v1-off" type="button">Dismiss</button></div>
+          </div></div>
+          <div class="vfield is-blank">Step 1</div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 2 ============================ -->
+  <section class="vsec">
+    <div class="vintro">
+      <h2>2 &middot; Docked header <span>welded to the field it changes</span></h2>
+      <p class="vwhy">The prompt becomes the field's own title bar, sharing its border and its corners. That makes its <b>reach legible</b>: you can see it will rewrite this box and nothing else &mdash; which matters most in Proof of Concept, where steps and evidence images sit in the same section. Amber is carried as a hairline outline plus a soft wash rather than a slab, so it reads as an annotation on the field instead of a banner above it.</p>
+    </div>
+    <div class="vcases">
+      <div class="vcase"><h3>Section already written</h3>
+        <div class="vblock"><div class="vhead">Description <em>1 fragment</em></div><div class="vbody">
+          <div class="v2"><svg class="ic"><use href="#i-lib"/></svg><p>Library has a saved Description.</p><button class="v2-go" type="button">Use library version</button><button class="v2-txt" type="button">Add below</button><button class="v2-txt" type="button">Keep mine</button></div>
+          <div class="vfield">The assistant returned fabricated policy numbers when asked about refund windows, and presented them as verbatim quotations from the knowledge base.</div>
+          <div class="vadd">+ Add a fragment</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Section still empty</h3>
+        <div class="vblock"><div class="vhead">Recommended Remediation <em>1 fragment</em></div><div class="vbody">
+          <div class="v2"><svg class="ic"><use href="#i-lib"/></svg><p>Library has a saved Recommended Remediation.</p><button class="v2-go" type="button">Fill from library</button><button class="v2-txt" type="button">Dismiss</button></div>
+          <div class="vfield is-blank">Write the paragraph</div>
+          <div class="vadd">+ Add a fragment</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Proof of concept, two app types</h3>
+        <div class="vblock"><div class="vhead">Proof of Concept <em>2 fragments</em></div><div class="vbody">
+          <div class="v2"><svg class="ic"><use href="#i-lib"/></svg><p>Saved steps for Web and API.</p><span class="chan"><button type="button" aria-pressed="true">Web</button><button type="button" aria-pressed="true">API</button></span><button class="v2-go" type="button">Use saved steps</button><button class="v2-txt" type="button">Add below</button><button class="v2-txt" type="button">Dismiss</button></div>
+          <div class="vfield is-blank">Step 1</div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 3 ============================ -->
+  <section class="vsec">
+    <div class="vintro">
+      <h2>3 &middot; Compare <span>shows what you would get</span></h2>
+      <p class="vwhy">The only direction that answers the question the other three leave open: <b>what is the library version?</b> Today a tester must destroy their own text to find out, then undo. Setting the two side by side turns an abstract choice into a visible one, and the empty state costs nothing extra because the left column simply reads as empty. The most vertical space of the four, and worth it precisely where the decision is irreversible.</p>
+    </div>
+    <div class="vcases">
+      <div class="vcase"><h3>Section already written</h3>
+        <div class="vblock"><div class="vhead">Description <em>1 fragment</em></div><div class="vbody">
+          <div class="v3">
+            <div class="v3-head"><svg class="ic"><use href="#i-cmp"/></svg>Library has a saved Description</div>
+            <div class="v3-cols">
+              <div class="v3-col"><b>Yours</b><p>The assistant returned fabricated policy numbers when asked about refund windows, and presented them as verbatim quotations from the knowledge base.</p></div>
+              <div class="v3-col"><b>Library</b><p>The model, while responding to specific topic queries, was found to generate inaccurate or misleading information. Despite being trained to process and evaluate specific tasks, it produced responses that misinterpreted the source material.</p></div>
+            </div>
+            <div class="v3-foot"><button class="v3-go" type="button">Use library version</button><button class="v3-txt" type="button">Add below</button><button class="v3-off" type="button">Keep mine</button></div>
+          </div>
+          <div class="vfield">The assistant returned fabricated policy numbers when asked about refund windows, and presented them as verbatim quotations from the knowledge base.</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Section still empty</h3>
+        <div class="vblock"><div class="vhead">Recommended Remediation <em>1 fragment</em></div><div class="vbody">
+          <div class="v3">
+            <div class="v3-head"><svg class="ic"><use href="#i-cmp"/></svg>Library has a saved Recommended Remediation</div>
+            <div class="v3-cols">
+              <div class="v3-col"><b>Yours</b><p class="is-blank">Nothing written yet.</p></div>
+              <div class="v3-col"><b>Library</b><p>Improve the model's accuracy and reliability through enhanced training and validation process.</p></div>
+            </div>
+            <div class="v3-foot"><button class="v3-go" type="button">Fill from library</button><button class="v3-off" type="button">Dismiss</button></div>
+          </div>
+          <div class="vfield is-blank">Write the paragraph</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Proof of concept, two app types</h3>
+        <div class="vblock"><div class="vhead">Proof of Concept <em>2 fragments</em></div><div class="vbody">
+          <div class="v3">
+            <div class="v3-head"><svg class="ic"><use href="#i-cmp"/></svg>Saved steps for Web and API<span class="chan" style="margin-left:auto"><button type="button" aria-pressed="true">Web</button><button type="button" aria-pressed="false">API</button></span></div>
+            <div class="v3-cols">
+              <div class="v3-col"><b>Yours</b><p class="is-blank">No steps written yet.</p></div>
+              <div class="v3-col"><b>Library &middot; Web</b><ol><li>Browse to the assistant page as a standard user.</li><li>Submit the crafted prompt in the chat box.</li><li>Compare the answer against the account summary.</li></ol></div>
+            </div>
+            <div class="v3-foot"><button class="v3-go" type="button">Use saved steps</button><button class="v3-txt" type="button">Add below</button><button class="v3-off" type="button">Dismiss</button></div>
+          </div>
+          <div class="vfield is-blank">Step 1</div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 4 ============================ -->
+  <section class="vsec">
+    <div class="vintro">
+      <h2>4 &middot; Chip <span>silent until asked</span></h2>
+      <p class="vwhy">At rest the prompt is a <b>single chip beside the section heading</b> &mdash; roughly 18px, no interruption to the writing surface. Opening it reveals the preview and the actions. This is the direction built for the tester on their ninetieth finding, who already knows what the library holds and wants the page to stop negotiating. The cost is a click before the offer can be acted on, and a chip is easier to never notice.</p>
+    </div>
+    <div class="vcases">
+      <div class="vcase"><h3>At rest, in the heading</h3>
+        <div class="vblock"><div class="vhead">Description <button class="v4-chip" type="button" aria-expanded="false"><svg class="ic"><use href="#i-lib"/></svg>Library version<svg class="ic cv"><use href="#i-cv"/></svg></button></div><div class="vbody">
+          <div class="vfield">The assistant returned fabricated policy numbers when asked about refund windows, and presented them as verbatim quotations from the knowledge base.</div>
+          <div class="vadd">+ Add a fragment</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Opened, section written</h3>
+        <div class="vblock"><div class="vhead">Description <button class="v4-chip" type="button" aria-expanded="true"><svg class="ic"><use href="#i-lib"/></svg>Library version<svg class="ic cv"><use href="#i-cv"/></svg></button></div><div class="vbody">
+          <div class="v4">
+            <div class="v4-top"><svg class="ic"><use href="#i-lib"/></svg><p>The library has a saved Description for this finding.</p></div>
+            <div class="v4-prev">The model, while responding to specific topic queries, was found to generate inaccurate or misleading information&hellip;</div>
+            <div class="v4-acts"><button class="v4-go" type="button">Use library version</button><button class="v4-txt" type="button">Add below</button><button class="v4-off" type="button">Keep mine</button></div>
+          </div>
+          <div class="vfield">The assistant returned fabricated policy numbers when asked about refund windows, and presented them as verbatim quotations from the knowledge base.</div>
+        </div></div>
+      </div>
+      <div class="vcase"><h3>Opened, proof of concept</h3>
+        <div class="vblock"><div class="vhead">Proof of Concept <button class="v4-chip" type="button" aria-expanded="true"><svg class="ic"><use href="#i-lib"/></svg>Saved steps<svg class="ic cv"><use href="#i-cv"/></svg></button></div><div class="vbody">
+          <div class="v4">
+            <div class="v4-top"><svg class="ic"><use href="#i-lib"/></svg><p>This finding affects Web and API. Saved steps exist for both.</p></div>
+            <div class="v4-acts" style="padding-bottom:0"><span class="chan"><button type="button" aria-pressed="true">Web</button><button type="button" aria-pressed="true">API</button></span></div>
+            <div class="v4-prev"><ol><li>Browse to the assistant page as a standard user.</li><li>Submit the crafted prompt in the chat box.</li><li>Send POST /v1/assistant/query with the crafted prompt.</li></ol></div>
+            <div class="v4-acts"><button class="v4-go" type="button">Use saved steps</button><button class="v4-txt" type="button">Add below</button><button class="v4-off" type="button">Dismiss</button></div>
+          </div>
+          <div class="vfield is-blank">Step 1</div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+document.querySelectorAll(".chan button").forEach(b => b.onclick = () => b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true"));
+</script>
+</body></html>

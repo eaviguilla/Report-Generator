@@ -1559,34 +1559,6 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 }
 
 /* ---- Readiness rows read as unfinished work, not as failures. ---- */
-.review-group .review-item {
-  margin: 8px 10px;
-  padding: 9px 10px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-}
-
-.review-group .review-item[data-level="warning"] {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.review-group .review-item + .review-item {
-  border-top: 0;
-}
-
-.review-group .review-item .review-detail {
-  color: var(--ink-soft);
-}
-
-.review-group .review-item button {
-  color: var(--warning);
-  text-decoration: underline;
-}
-
-.review-group .review-item[data-level="warning"] button {
-  color: var(--accent-strong);
-}
-
 /* Two sections share a row; the card styling already comes from .content-block. */
 .content-row {
   display: grid;
@@ -1929,30 +1901,16 @@ button.content-toggle:hover:not(:disabled) small {
   border-left-color: var(--line-strong);
 }
 
-/* A review jump can land among several identical cards, so the one it meant stays ringed until
-   the tester clicks into it. The ring says where; the red borders below say what. */
+/* The one red on the page while it holds, so the jump it marks is unmistakable. */
 .is-review-target {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 0 3px var(--accent);
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 2px var(--danger-soft), 0 0 0 3px var(--danger);
   animation: review-target-arrive 420ms ease-out;
-}
-
-/* Every field the readiness panel is still waiting on, not just the one last jumped to.
-   :placeholder-shown drops the red the moment a character is typed, without waiting for a save. */
-.is-incomplete input:placeholder-shown,
-.is-incomplete textarea:placeholder-shown,
-.is-incomplete .rich:empty,
-.is-incomplete .evidence-environment.is-unset {
-  border-color: var(--danger);
-}
-
-.evidence-tile.is-incomplete:not(.has-evidence) .evidence-thumb {
-  box-shadow: inset 0 0 0 1px var(--danger);
 }
 
 @keyframes review-target-arrive {
   from {
-    box-shadow: 0 0 0 11px var(--accent-soft), 0 0 0 3px var(--accent);
+    box-shadow: 0 0 0 11px var(--danger-soft), 0 0 0 3px var(--danger);
   }
 }
 
@@ -2002,8 +1960,8 @@ button.content-toggle:hover:not(:disabled) small {
 #issue-count {
   padding: 3px 8px;
   border-radius: var(--radius-pill);
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
   font-size: 10px;
 }
 
@@ -2012,65 +1970,23 @@ button.content-toggle:hover:not(:disabled) small {
   background: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
-.review-item {
-  grid-template-columns: 16px minmax(0, 1fr);
-  margin: 0;
-  padding: 9px 11px;
-  border: 0;
-  border-radius: 0;
-  color: var(--ink);
-  background: transparent;
-  font-size: 11px;
-}
-
-.review-group .review-item + .review-item {
-  border-top: 1px solid var(--line);
-}
-
-.review-group .review-item .review-detail {
-  display: block;
-  color: var(--muted);
-}
-
-.review-group .review-icon {
-  width: 13px;
-  height: 13px;
-  margin-top: 1px;
-  border: 0;
-  color: #fff;
-  background: var(--warning);
-  font-size: 9px;
-}
-
-.review-group .review-item[data-level="warning"] .review-icon {
-  color: #fff;
-  background: var(--accent);
-}
-
-.review-group .review-item button {
-  margin-top: 4px;
-  color: var(--accent);
-  font-size: 10px;
-}
-
-.review-group .review-item button:hover:not(:disabled) {
-  border-color: transparent;
-  color: var(--accent-strong);
-  background: transparent;
-}
-
-/* Unfinished is amber, never red: nothing here is broken, it is only not written yet. */
+/* Red is what is still missing, amber is what the library offers: two verdicts, two hues. */
 .review-group {
   overflow: hidden;
   margin-bottom: 8px;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--warning);
+  border-left: 3px solid var(--danger);
   border-radius: var(--radius);
   background: var(--surface-raised);
 }
 
+.review-group[data-level="error"] {
+  border-left: 3px solid var(--danger);
+}
+
+/* Dashed as well as amber, so the two rails differ by shape and not only by colour. */
 .review-group[data-level="warning"] {
-  border-left-color: var(--accent);
+  border-left: 3px dashed var(--warning);
 }
 
 .review-group > summary {
@@ -2112,15 +2028,6 @@ button.content-toggle:hover:not(:disabled) small {
   color: var(--muted);
   font-weight: 600;
   white-space: nowrap;
-}
-
-/* Each half of the count carries its own verdict, so neither hides behind a neutral grey. */
-.review-group-count b[data-level="error"] {
-  color: var(--warning);
-}
-
-.review-group-count b[data-level="warning"] {
-  color: var(--accent-strong);
 }
 
 .review-empty {
@@ -2959,12 +2866,6 @@ textarea,
   font-weight: 400;
 }
 
-.finding-nav-heading .nav-count[data-state="issues"] {
-  color: var(--warning);
-  font-family: inherit !important;
-  font-weight: 700;
-}
-
 /* The right panel was left behind when this block restyled the left one, so its label sat 34px
    lower and 5px further in. Same insets, same min-height, same type as .finding-nav-heading. */
 .review-panel {
@@ -3143,22 +3044,26 @@ button.finding-nav.active:not(:disabled)::after {
 .content-flag {
   padding: 1px 7px;
   border-radius: var(--radius-pill);
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 17%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 17%, transparent);
   font-size: 9px;
   font-weight: 700;
 }
 
-/* Unfinished fields wear the same amber as the readiness list, not an error red. */
+/* :placeholder-shown drops the ring as soon as a character is typed, without waiting for a save. */
 .is-incomplete input:placeholder-shown,
 .is-incomplete textarea:placeholder-shown,
-.is-incomplete .rich:empty,
 .is-incomplete .evidence-environment.is-unset {
-  border-color: var(--warning);
+  border-color: var(--danger);
+}
+
+/* .fragment .rich zeroes its border, so this ring has to be drawn rather than recoloured. */
+.is-incomplete .rich:empty {
+  box-shadow: inset 0 0 0 1px var(--danger);
 }
 
 .evidence-tile.is-incomplete:not(.has-evidence) .evidence-thumb {
-  box-shadow: inset 0 0 0 1px var(--warning);
+  box-shadow: inset 0 0 0 1px var(--danger);
 }
 
 /* Disabled move buttons stay visible but inert, as in the reference. */
@@ -3396,15 +3301,16 @@ button.finding-nav.active:not(:disabled)::after {
   margin-left: auto;
   padding: 1px 6px;
   border-radius: var(--radius-pill);
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
   font-size: 9px;
   font-weight: 700;
 }
 
 .review-group-count[data-level="warning"] {
-  color: var(--accent-strong);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px dashed var(--warning);
+  color: var(--warning);
+  background: transparent;
 }
 
 .review-table {
@@ -3447,11 +3353,11 @@ button.finding-nav.active:not(:disabled)::after {
 }
 
 .review-row:hover td {
-  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .review-row[data-level="warning"]:hover td {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 
 .review-content {
@@ -3467,14 +3373,15 @@ button.finding-nav.active:not(:disabled)::after {
   height: 6px;
   margin-right: 5px;
   border-radius: 50%;
-  background: var(--warning);
+  background: var(--danger);
   vertical-align: 1px;
 }
 
+/* Hollow, so a suggestion is not mistaken for a gap at a glance. */
 .review-row[data-level="warning"] .review-content i {
-  background: var(--accent);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--warning);
 }
-
 .review-content small {
   display: block;
   overflow: hidden;
@@ -3499,7 +3406,7 @@ button.finding-nav.active:not(:disabled)::after {
   padding: 0;
   border: 0;
   border-radius: 0;
-  color: var(--warning);
+  color: var(--danger);
   background: transparent;
   font-size: 11px;
   font-weight: 700;
@@ -3507,7 +3414,7 @@ button.finding-nav.active:not(:disabled)::after {
 }
 
 .review-row[data-level="warning"] .review-arrow button {
-  color: var(--accent);
+  color: var(--warning);
 }
 
 .review-row:hover .review-arrow button {

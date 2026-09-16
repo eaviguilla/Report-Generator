@@ -172,7 +172,7 @@ def content_has_work(content: Content) -> bool:
     Boilerplate this app wrote itself does not count: it is regenerated on demand, so treating it as
     work would mean every finding looks like it has something to lose."""
     for fragment in content.fragments:
-        if isinstance(fragment, ParagraphFragment) and (fragment.generated or _is_default_status_conclusion(fragment)):
+        if isinstance(fragment, ParagraphFragment) and (fragment.generated or is_default_status_conclusion(fragment)):
             continue
         if any(run.text.strip() for run in getattr(fragment, "runs", [])):
             return True
@@ -195,7 +195,9 @@ def provision(vulnerability: Vulnerability) -> None:
     existing = {content.type: content for content in vulnerability.contents}
     # A status change must not destroy work. A section this status does not print is kept when it
     # still holds something written, so changing status and back brings the tester's work with it.
-    carried = [content for content in vulnerability.contents if content.type not in types and content_has_work(content)]
+    # in_conclusion is the exception: it is a statement about the status, so carrying it would keep a
+    # sentence the status has just made false. It is dropped, and offered back fresh on the way in.
+    carried = [content for content in vulnerability.contents if content.type not in types and content.type != "in_conclusion" and content_has_work(content)]
     vulnerability.contents = [existing.get(content_type, Content(type=content_type)) for content_type in types] + carried
     required_fragments = {
         "description": ["paragraph"],
@@ -235,18 +237,23 @@ def provision(vulnerability: Vulnerability) -> None:
         status = "Resolved" if vulnerability.status == "resolved" else "Open"
         paragraphs = [fragment for fragment in conclusion.fragments if isinstance(fragment, ParagraphFragment)]
         generated = next((fragment for fragment in paragraphs if fragment.generated == "status_conclusion"), None)
-        default = generated or next((fragment for fragment in paragraphs if _is_default_status_conclusion(fragment)), None)
-        default = default or next((fragment for fragment in paragraphs if not _fragment_has_text(fragment)), None)
-        if default is None and not paragraphs:
-            default = ParagraphFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="paragraph", runs=[])
-            conclusion.fragments.insert(0, default)
-        if default is not None and (generated is not None or not _fragment_has_text(default) or _is_default_status_conclusion(default)):
+        # Deliberately no "first paragraph with no text" arm: a paragraph the tester emptied is theirs.
+        # Refilling it wrote boilerplate above a conclusion they had just written, and the client twin
+        # runs on editor boot, so it came back on a page load. The Content page offers it back instead.
+        spans = {id(fragment): default_conclusion_span("".join(run.text for run in fragment.runs)) for fragment in paragraphs}
+        # The regex alone decides: the marker outlives the text and overwrote written conclusions.
+        default = next((fragment for fragment in paragraphs if spans[id(fragment)] is not None), None)
+        if not paragraphs:
+            # Created empty, never filled. The app offers the sentence on the Content page instead:
+            # a conclusion the app wrote for you is not a conclusion, and the tester owes a real one.
+            conclusion.fragments.insert(0, ParagraphFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="paragraph", runs=[]))
+        elif default is not None:
             default.generated = None
-            default.runs = [
-            Run(text=f'The finding "{vulnerability.title}" is still ' if status == "Open" else f'The finding "{vulnerability.title}" is '),
-            Run(text=status, bold=True),
-            Run(text="."),
-            ]
+            # Only the sentence is re-derived; text around it belongs to the tester and keeps its runs.
+            span = spans[id(default)]
+            before = _runs_up_to(default.runs, span[0])
+            after = _runs_after(default.runs, span[1])
+            default.runs = before + status_conclusion_runs(vulnerability.title, status) + after
         if generated is not None:
             conclusion.fragments = [
                 fragment for fragment in conclusion.fragments
@@ -398,10 +405,74 @@ def _fragment_has_text(fragment: ParagraphFragment) -> bool:
     return any(run.text.strip() for run in fragment.runs)
 
 
-def _is_default_status_conclusion(fragment: ParagraphFragment) -> bool:
-    """Recognize an untouched default sentence that can still be synchronized."""
+STATUS_CONCLUSION_PATTERN = re.compile(r'The finding ".*" is(?: still)? (?:Open|Resolved)\.', re.DOTALL)
+
+
+def status_conclusion_runs(title: str, status_word: str) -> list[Run]:
+    """Single owner of the default conclusion sentence. Paired with STATUS_CONCLUSION_PATTERN, which
+    must keep matching whatever this builds: relax one and every default on disk freezes at the title
+    and status it was stored with, because nothing recognises it as the app's own sentence any more."""
+    return [
+        Run(text=f'The finding "{title}" is still ' if status_word == "Open" else f'The finding "{title}" is '),
+        Run(text=status_word, bold=True),
+        Run(text="."),
+    ]
+
+
+def default_conclusion_span(text: str) -> tuple[int, int] | None:
+    """Return the app-owned sentence's bounds when it remains in the paragraph."""
+    stripped = text.rstrip()
+    marker = 'The finding "'
+    index = stripped.rfind(marker)
+    while index != -1:
+        match = STATUS_CONCLUSION_PATTERN.match(stripped, index)
+        if match:
+            return match.span()
+        index = stripped.rfind(marker, 0, index)
+    return None
+
+
+def default_conclusion_start(text: str) -> int | None:
+    """Where the app's own sentence begins, if the paragraph still ends with it.
+
+    The quoted proof-of-concept step shares this paragraph and sits in front, so the sentence is a
+    tail rather than the whole text. Scanning right to left and testing a full match on each suffix
+    keeps one regex honest for titles that themselves contain a quotation mark."""
+    span = default_conclusion_span(text)
+    return span[0] if span is not None and span[1] == len(text.rstrip()) else None
+
+
+def is_default_status_conclusion(fragment: ParagraphFragment) -> bool:
+    """Whether the paragraph is nothing but the app's sentence, with no tester text in front."""
     text = "".join(run.text for run in fragment.runs)
-    return bool(re.fullmatch(r'The finding ".*" is(?: still)? (?:Open|Resolved)\.', text))
+    span = default_conclusion_span(text)
+    return span is not None and span == (0, len(text.rstrip()))
+
+
+def _runs_up_to(runs: list[Run], offset: int) -> list[Run]:
+    """The runs covering the first `offset` characters, splitting the run that straddles the cut."""
+    kept: list[Run] = []
+    seen = 0
+    for run in runs:
+        if seen >= offset:
+            break
+        take = min(len(run.text), offset - seen)
+        if take:
+            kept.append(run.model_copy(update={"text": run.text[:take]}))
+        seen += len(run.text)
+    return kept
+
+
+def _runs_after(runs: list[Run], offset: int) -> list[Run]:
+    """The runs after `offset`, splitting the run that straddles the cut."""
+    kept: list[Run] = []
+    seen = 0
+    for run in runs:
+        start = max(0, offset - seen)
+        if start < len(run.text):
+            kept.append(run.model_copy(update={"text": run.text[start:]}))
+        seen += len(run.text)
+    return kept
 
 
 def assign_fresh_fragment_ids(vulnerability: Vulnerability) -> None:
@@ -412,16 +483,17 @@ def assign_fresh_fragment_ids(vulnerability: Vulnerability) -> None:
 
 
 def merge_step_lists(fragments: list) -> list:
-    """Single owner of the rule: appended steps are one procedure, so the numbered lists collapse into
-    one. Two list fragments would each restart at 1 in the generated document."""
-    lists = [fragment for fragment in fragments if isinstance(fragment, ListFragment) and fragment.type == "numbered_list"]
-    if len(lists) < 2:
-        return fragments
-    items = [item for fragment in lists for item in fragment.items]
-    written = [item for item in items if any(run.text.strip() for run in item.runs)]
-    lists[0].items = written or items[:1]
-    absorbed = lists[1:]
-    return [fragment for fragment in fragments if not any(fragment is other for other in absorbed)]
+    """Collapse consecutive step lists without moving them across intervening content."""
+    merged = []
+    for fragment in fragments:
+        previous = merged[-1] if merged else None
+        if isinstance(fragment, ListFragment) and fragment.type == "numbered_list" and isinstance(previous, ListFragment) and previous.type == "numbered_list":
+            items = [*previous.items, *fragment.items]
+            written = [item for item in items if any(run.text.strip() for run in item.runs)]
+            previous.items = written or items[:1]
+        else:
+            merged.append(fragment)
+    return merged
 
 
 def apply_poc_variant(vulnerability: Vulnerability, fragments: list, variants: list, mode: Literal["replace", "merge"] = "replace") -> None:

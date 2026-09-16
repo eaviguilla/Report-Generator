@@ -56,9 +56,9 @@ class DocxCaptionTests(unittest.TestCase):
             self.assertEqual(
                 [paragraph.text for paragraph in caption_paragraphs],
                 [
-                    "Figure 1 Authentication response.",
-                    "Figure 2 Authorization response.",
-                    "Figure 3 Remediation verification.",
+                    "Figure 1. Authentication response.",
+                    "Figure 2. Authorization response.",
+                    "Figure 3. Remediation verification.",
                 ],
             )
             for paragraph in caption_paragraphs:

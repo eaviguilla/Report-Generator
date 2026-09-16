@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -13,19 +14,22 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from docx import Document
 from docx.oxml.ns import qn
 from PIL import Image
 from pydantic import ValidationError
+from starlette.requests import ClientDisconnect
 
 from app import main
+from app import report_service
 from app.docx_report import _finding_locations, _metadata, generation_issues
 from app.library import Library
 from app.report_service import affected_channels, affected_environments, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
-from app.models import ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, TestWindow, Vulnerability, resolve_tested_channels
+from app.models import Content, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TestWindow, Vulnerability, resolve_tested_channels
 from app.tester_identity import Identity, load_or_bootstrap
 
 
@@ -131,6 +135,17 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.create_report().model_dump(mode="json", by_alias=True)
         response = self.client.post("/reports/import", files={"file": ("legacy.json", json.dumps(report).encode(), "application/json")})
         self.assertEqual(response.status_code, 200)
+
+    def test_disconnected_json_body_is_a_client_error(self) -> None:
+        class DisconnectedRequest:
+            async def body(self):
+                raise ClientDisconnect()
+
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(main.read_json_object(DisconnectedRequest()))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail, "Request body was interrupted")
 
     def test_import_and_image_upload_limits(self) -> None:
         report_id = self.new_report()
@@ -538,6 +553,23 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(len(lists), 1)
         self.assertEqual([item.runs[0].text for item in lists[0].items], ["Open the browser", "Proxy it", "Send the request"])
         self.assertEqual(finding.poc_variants, ["web", "api"])
+
+    def test_merging_poc_steps_keeps_them_below_an_intervening_note(self) -> None:
+        finding = Vulnerability(uid="v_order", title="Finding")
+        provision(finding)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        proof.fragments = [
+            ListFragment(frag_id="f_existing", type="numbered_list", items=[ListItem(runs=[Run(text="Existing step")])]),
+            NoteFragment(frag_id="f_stop", type="note", runs=[Run(text="Stop after the existing procedure")]),
+            image,
+        ]
+        steps = [ListFragment(frag_id="f_library", type="numbered_list", items=[ListItem(runs=[Run(text="Library step")])])]
+
+        apply_poc_variant(finding, steps, ["web"], "merge")
+
+        self.assertEqual([fragment.type for fragment in proof.fragments], ["numbered_list", "note", "numbered_list", "image"])
+        self.assertEqual(proof.fragments[2].items[0].runs[0].text, "Library step")
 
     def test_a_proof_of_concept_always_keeps_a_steps_list(self) -> None:
         """Steps are the substance of a proof of concept, so neither deleting the list nor replacing
@@ -973,9 +1005,10 @@ class ReportApiTests(unittest.TestCase):
             ["production"],
         )
 
-    def test_a_status_change_does_not_destroy_the_previous_proof_or_conclusion(self) -> None:
+    def test_a_status_change_keeps_the_previous_proof_but_not_the_conclusion(self) -> None:
         """Switching a finding to "open new" hides last year's proof; it must not delete it, because
-        switching back is a correction the tester is allowed to make."""
+        switching back is a correction the tester is allowed to make. The conclusion is the exception:
+        it is a statement about the status, so keeping it would preserve a sentence now made false."""
         finding = Vulnerability(uid="v_carry", title="Carried finding", status="open_previously_discovered")
         provision(finding)
         previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
@@ -986,6 +1019,7 @@ class ReportApiTests(unittest.TestCase):
         finding.status = "open_new"
         provision(finding)
         self.assertNotIn("previous_proof_of_concept", [content.type for content in finding.contents[:3]])
+        self.assertNotIn("in_conclusion", [content.type for content in finding.contents], "a conclusion outlived the status it described")
 
         finding.status = "open_previously_discovered"
         provision(finding)
@@ -995,9 +1029,10 @@ class ReportApiTests(unittest.TestCase):
             ["Last year's proof"],
         )
         restored_conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
-        self.assertIn(
-            "Hand written conclusion",
+        self.assertEqual(
             [run.text for fragment in restored_conclusion.fragments for run in getattr(fragment, "runs", [])],
+            [],
+            "the section comes back empty, so the Content page can offer the standard sentence",
         )
 
     def test_a_carried_section_is_not_asked_to_be_completed(self) -> None:
@@ -1020,8 +1055,8 @@ class ReportApiTests(unittest.TestCase):
             "contents": [
                 {"type": "description", "fragments": [{"frag_id": "f_d", "type": "paragraph", "runs": [{"text": "described"}]}]},
                 {"type": "recommended_remediation", "fragments": [{"frag_id": "f_r", "type": "paragraph", "runs": [{"text": "fix it"}]}]},
-                {"type": "in_conclusion", "fragments": [
-                    {"frag_id": "f_written", "type": "paragraph", "runs": [{"text": "kept text"}]},
+                {"type": "previous_proof_of_concept", "fragments": [
+                    {"frag_id": "f_written", "type": "numbered_list", "items": [{"runs": [{"text": "kept text"}]}]},
                     {"frag_id": "f_blank", "type": "note", "runs": []},
                 ]},
             ],
@@ -1029,8 +1064,8 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=current).status_code, 200)
 
         saved = main.workspace.load(report_id)
-        self.assertIn("in_conclusion", [content.type for content in saved.vulnerabilities[0].contents])
-        self.assertNotIn("Carry finding: in_conclusion text is required", generation_issues(saved))
+        self.assertIn("previous_proof_of_concept", [content.type for content in saved.vulnerabilities[0].contents])
+        self.assertNotIn("Carry finding: previous_proof_of_concept text is required", generation_issues(saved))
 
     def test_the_previous_proof_slot_is_born_with_an_environment(self) -> None:
         """Provisioning creates this slot, so provisioning owes it the environment that generation
@@ -1491,7 +1526,7 @@ class ReportApiTests(unittest.TestCase):
                     toc_entries.append(entry)
         self.assertTrue(any("Generated finding" in entry for entry in toc_entries))
         caption = next(paragraph for paragraph in rendered.paragraphs if paragraph.text.endswith("Production proof"))
-        self.assertEqual(caption.text, "Figure 2 Production proof")
+        self.assertEqual(caption.text, "Figure 2. Production proof")
         self.assertEqual(
             [node.text for node in caption._p.iter(qn("w:instrText"))],
             [r" SEQ Figure \* ARABIC "],
@@ -1605,9 +1640,10 @@ class ReportApiTests(unittest.TestCase):
         finding = saved.json()["report"]["vulnerabilities"][0]
         conclusion = next(content for content in finding["contents"] if content["type"] == "in_conclusion")
         self.assertEqual(len(conclusion["fragments"]), 1)
-        self.assertIsNone(conclusion["fragments"][0]["generated"])
-        self.assertEqual(conclusion["fragments"][0]["runs"], [{"text": 'The finding "Known issue" is still ', "bold": False, "italic": False, "underline": False}, {"text": "Open", "bold": True, "italic": False, "underline": False}, {"text": ".", "bold": False, "italic": False, "underline": False}])
+        self.assertEqual(conclusion["fragments"][0]["runs"], [], "the app wrote a conclusion instead of offering one")
 
+        # Accepting the Content page's offer is what puts the sentence there; from then on it tracks.
+        conclusion["fragments"][0]["runs"] = [{"text": 'The finding "Known issue" is still '}, {"text": "Open", "bold": True}, {"text": "."}]
         finding["title"] = "Remediated issue"
         finding["status"] = "resolved"
         resolved = self.client.put(f"/reports/{report_id}", json=saved.json()["report"] | {"vulnerabilities": [finding]})
@@ -1623,6 +1659,204 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(preserved.status_code, 200)
         conclusion = next(content for content in preserved.json()["report"]["vulnerabilities"][0]["contents"] if content["type"] == "in_conclusion")
         self.assertEqual(conclusion["fragments"][0]["runs"][0]["text"], custom_runs[0]["text"])
+
+    def test_the_conclusion_recogniser_matches_what_the_builder_writes(self) -> None:
+        """Four spellings of one sentence, linked only by this regex. If the two drift apart, every
+        default on disk stops being recognised and freezes at the title and status it was stored with."""
+        for title in (
+            "Plain title",
+            'A "quoted" title',
+            "Line one\nLine two",
+            'Quoted phrase " is Open. still title',
+            "Regex . * + ? [ ] ( ) metacharacters",
+        ):
+            for status_word in ("Open", "Resolved"):
+                with self.subTest(title=title, status=status_word):
+                    runs = report_service.status_conclusion_runs(title, status_word)
+                    written = "".join(run.text for run in runs)
+                    self.assertTrue(
+                        report_service.STATUS_CONCLUSION_PATTERN.fullmatch(written),
+                        f"the builder wrote {written!r}, which its own recogniser rejects",
+                    )
+                    self.assertEqual(report_service.default_conclusion_span(written), (0, len(written)))
+
+    def test_an_emptied_conclusion_paragraph_is_not_refilled(self) -> None:
+        """The app used to claim the first text-less paragraph, which wrote boilerplate above a
+        conclusion the tester had just written. A paragraph they emptied is theirs to leave empty."""
+        finding = Vulnerability(uid="v_conc", title="Emptied", status="open_previously_discovered")
+        provision(finding)
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        conclusion.fragments[0].runs = report_service.status_conclusion_runs("Emptied", "Open")
+        self.assertTrue(report_service.is_default_status_conclusion(conclusion.fragments[0]))
+
+        conclusion.fragments[0].runs = [Run(text="The finding was confirmed exploitable on retest.")]
+        conclusion.fragments.insert(0, ParagraphFragment(frag_id="f_quoted", type="paragraph", runs=[]))
+        provision(finding)
+
+        self.assertEqual(conclusion.fragments[0].runs, [], "the emptied paragraph was refilled with boilerplate")
+        self.assertEqual(
+            "".join(run.text for run in conclusion.fragments[1].runs),
+            "The finding was confirmed exploitable on retest.",
+            "the tester's conclusion was disturbed",
+        )
+
+    def test_a_conclusion_section_is_created_empty_rather_than_written_for_you(self) -> None:
+        """A DOCX import arrives with an empty in_conclusion and a status that prints it, so the
+        section has to exist -- but the sentence is offered on the Content page, never written here."""
+        finding = Vulnerability(uid="v_imported", title="Imported", status="open_previously_discovered")
+        finding.contents = [Content(type="in_conclusion", fragments=[])]
+        provision(finding)
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        self.assertEqual([fragment.type for fragment in conclusion.fragments], ["paragraph"])
+        self.assertEqual(conclusion.fragments[0].runs, [], "the app wrote the sentence instead of offering it")
+
+    def test_the_default_conclusion_blocks_generation_until_it_is_replaced(self) -> None:
+        report = main.workspace.load(self.new_report())
+        finding = Vulnerability(uid="v_owes", title="Owes a conclusion", status="open_previously_discovered")
+        report.vulnerabilities = [finding]
+        provision(finding)
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        conclusion.fragments[0].runs = report_service.status_conclusion_runs("Owes a conclusion", "Open")
+
+        self.assertIn(
+            "Owes a conclusion: in_conclusion still holds the default sentence",
+            generation_issues(report),
+            "the app's own sentence counts as a finished conclusion",
+        )
+
+        conclusion.fragments[0].runs = [Run(text="The finding is still reachable from the internet.")]
+        self.assertNotIn(
+            "Owes a conclusion: in_conclusion still holds the default sentence",
+            generation_issues(report),
+            "a written conclusion still reports as unwritten",
+        )
+
+        conclusion.fragments = []
+        self.assertIn(
+            "Owes a conclusion: in_conclusion needs at least one fragment",
+            generation_issues(report),
+            "deleting the paragraph would discharge the requirement and print N/A",
+        )
+
+    def test_an_open_new_finding_never_owes_a_conclusion(self) -> None:
+        """open_new does not print the section, and a carried one is kept for safekeeping, not completing."""
+        report = main.workspace.load(self.new_report())
+        finding = Vulnerability(uid="v_new", title="Brand new", status="open_previously_discovered")
+        report.vulnerabilities = [finding]
+        provision(finding)
+        finding.status = "open_new"
+        provision(finding)
+        self.assertEqual(
+            [issue for issue in generation_issues(report) if "in_conclusion" in issue],
+            [],
+            "an unprinted conclusion was reported as incomplete",
+        )
+
+    def test_a_quoted_step_in_front_of_the_sentence_keeps_the_sentence_live(self) -> None:
+        """The step shares the sentence's paragraph, so the sentence is a tail rather than the whole
+        text. If only a whole-paragraph match counted, accepting the offer would freeze the sentence
+        at the title and status it was stored with, and silently discharge the replace-it rule."""
+        finding = Vulnerability(uid="v_quoted", title="Before rename", status="open_previously_discovered")
+        provision(finding)
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        paragraph = conclusion.fragments[0]
+        paragraph.runs = [Run(text="Observe the balance of another user. ", italic=True), *report_service.status_conclusion_runs("Before rename", "Open")]
+
+        finding.title = "After rename"
+        finding.status = "resolved"
+        provision(finding)
+
+        self.assertEqual(
+            "".join(run.text for run in paragraph.runs),
+            'Observe the balance of another user. The finding "After rename" is Resolved.',
+            "the sentence stopped tracking the finding once a step sat in front of it",
+        )
+        self.assertTrue(paragraph.runs[0].italic, "the quoted step lost the tester's formatting")
+        self.assertFalse(
+            report_service.is_default_status_conclusion(paragraph),
+            "a paragraph carrying a quoted step is not purely the app's own sentence",
+        )
+
+    def test_text_either_side_of_the_sentence_discharges_the_default(self) -> None:
+        """Only a bare sentence is boilerplate; a quoted step or trailing prose is the tester's own words."""
+        report = main.workspace.load(self.new_report())
+        finding = Vulnerability(uid="v_owes_still", title="Quoted", status="open_previously_discovered")
+        report.vulnerabilities = [finding]
+        provision(finding)
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        issue = "Quoted: in_conclusion still holds the default sentence"
+
+        conclusion.fragments[0].runs = report_service.status_conclusion_runs("Quoted", "Open")
+        self.assertIn(issue, generation_issues(report), "the app's own sentence counts as a finished conclusion")
+
+        conclusion.fragments[0].runs = [Run(text="Observe the balance. "), *report_service.status_conclusion_runs("Quoted", "Open")]
+        self.assertNotIn(issue, generation_issues(report), "a quoted step in front was treated as boilerplate")
+
+        conclusion.fragments[0].runs = [*report_service.status_conclusion_runs("Quoted", "Open"), Run(text=" The account was fully exposed.")]
+        self.assertNotIn(issue, generation_issues(report), "prose after the sentence was treated as boilerplate")
+
+    def test_the_conclusion_offer_memory_round_trips_and_refuses_null(self) -> None:
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{
+            "uid": "v_offer", "title": "Offer memory", "status": "open_previously_discovered",
+            "likelihood": "low", "impact": "low", "severity": "low",
+            "conclusion_offer_resolved": ["Observe the balance of another user."],
+        }]
+        stored = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(stored.status_code, 200)
+        self.assertEqual(
+            stored.json()["report"]["vulnerabilities"][0]["conclusion_offer_resolved"],
+            ["Observe the balance of another user."],
+            "the server did not echo the offer memory back",
+        )
+
+        report["vulnerabilities"][0]["conclusion_offer_resolved"] = None
+        report["saved_at"] = stored.json()["report"]["saved_at"]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 422, "null must not validate")
+
+    def test_the_content_offer_fingerprint_round_trips_and_refuses_null(self) -> None:
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{
+            "uid": "v_fingerprint", "title": "Fingerprinted", "status": "open_new",
+            "likelihood": "low", "impact": "low", "severity": "low",
+            "content_offer_dismissed": {"description": "412-1a2b3c4d"},
+        }]
+        stored = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(stored.status_code, 200)
+        self.assertEqual(
+            stored.json()["report"]["vulnerabilities"][0]["content_offer_dismissed"],
+            {"description": "412-1a2b3c4d"},
+            "the server did not echo the dismissal fingerprint back",
+        )
+
+        report["vulnerabilities"][0]["content_offer_dismissed"] = None
+        report["saved_at"] = stored.json()["report"]["saved_at"]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 422, "null must not validate")
+
+    def test_a_status_change_leaves_the_content_offer_memory_untouched(self) -> None:
+        """The offer records the tester's answer. provision runs on both sides on every save, so if
+        it ever cleared these the browser and the server would take turns wiping each other's copy."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{
+            "uid": "v_memory", "title": "Memory", "status": "resolved",
+            "likelihood": "low", "impact": "low", "severity": "low",
+            "content_offer_resolved": {"description": "VDB-047"},
+            "content_offer_dismissed": {"description": "412-1a2b3c4d"},
+        }]
+        resolved = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(resolved.status_code, 200)
+
+        reopened_body = resolved.json()["report"]
+        reopened_body["vulnerabilities"][0]["status"] = "open_previously_discovered"
+        reopened = self.client.put(f"/reports/{report_id}", json=reopened_body)
+        self.assertEqual(reopened.status_code, 200)
+
+        finding = reopened.json()["report"]["vulnerabilities"][0]
+        self.assertEqual(finding["content_offer_resolved"], {"description": "VDB-047"})
+        self.assertEqual(finding["content_offer_dismissed"], {"description": "412-1a2b3c4d"})
 
     def test_direct_report_url_redirects_or_shows_navigable_not_found(self) -> None:
         report_id = self.new_report()

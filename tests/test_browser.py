@@ -9,7 +9,6 @@ import unittest
 from datetime import date
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import patch
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -20,9 +19,10 @@ from playwright.sync_api import sync_playwright
 
 from app import main
 from app.docx_report import generation_issues
+from app.report_service import status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from app.workspace import Workspace
-from app.models import EvidenceItem, ImageFragment, LibraryRef, Run, Scope, ScopeTarget, TestWindow, Vulnerability
+from app.models import Content, EvidenceItem, ImageFragment, LibraryRef, ListItem, NoteFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
 
 
 class BrowserWorkflowTests(unittest.TestCase):
@@ -169,7 +169,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.get_by_label("Limitations").input_value(), "No production write access")
 
         page.get_by_role("button", name="Next: Findings").click()
-        page.wait_for_url(f"**/reports/*/findings")
+        page.wait_for_url("**/reports/*/findings")
         page.get_by_role("button", name="Add finding").click()
         page.get_by_role("combobox", name="Finding Name").fill("Browser finding")
         page.get_by_role("combobox", name="Likelihood").select_option(label="Low")
@@ -599,6 +599,90 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(len(saved.evidence), 1, "navigating away dropped the upload")
         self.assertEqual(referenced, list(saved.evidence), "the uploaded image is referenced by no fragment")
 
+    def test_back_waits_for_two_queued_evidence_uploads(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(frag_id="f_second_upload", type="image", environment="production"))
+        main.workspace.save(report)
+
+        image = BytesIO()
+        Image.new("RGB", (3, 3), "red").save(image, format="PNG")
+        payload = image.getvalue()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.evaluate(
+            """() => {
+                const originalFetch = window.fetch.bind(window);
+                window.heldEvidenceUploads = [];
+                window.fetch = (input, init = {}) => {
+                    if (String(input).endsWith("/evidence") && init.method === "POST") {
+                        return new Promise(resolve => window.heldEvidenceUploads.push(() => originalFetch(input, init).then(resolve)));
+                    }
+                    return originalFetch(input, init);
+                };
+            }"""
+        )
+        uploads = page.locator('.evidence-tile:not(.has-evidence) input[type="file"]')
+        uploads.nth(0).set_input_files({"name": "first.png", "mimeType": "image/png", "buffer": payload})
+        uploads.nth(1).set_input_files({"name": "second.png", "mimeType": "image/png", "buffer": payload})
+        page.wait_for_function("window.heldEvidenceUploads.length >= 1")
+        page.get_by_role("button", name="Previous: Findings").click()
+
+        self.assertEqual(page.evaluate("window.heldEvidenceUploads.length"), 1, "two revisioned mutations ran concurrently")
+        page.evaluate("window.heldEvidenceUploads[0]()")
+        page.wait_for_function("window.heldEvidenceUploads.length === 2")
+        page.evaluate("window.heldEvidenceUploads[1]()")
+        page.wait_for_url("**/findings", timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual(len(saved.evidence), 2)
+        self.assertEqual(sum(bool(fragment.evidence_id) for fragment in proof.fragments if fragment.type == "image"), 2)
+
+    def test_back_waits_for_an_upload_queued_after_the_click(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(frag_id="f_late_upload", type="image", environment="production"))
+        main.workspace.save(report)
+
+        image = BytesIO()
+        Image.new("RGB", (3, 3), "green").save(image, format="PNG")
+        payload = image.getvalue()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.evaluate(
+            """() => {
+                const originalFetch = window.fetch.bind(window);
+                window.heldEvidenceUploads = [];
+                window.fetch = (input, init = {}) => {
+                    if (String(input).endsWith("/evidence") && init.method === "POST") {
+                        return new Promise(resolve => {
+                            window.heldEvidenceUploads.push(() => originalFetch(input, init).then(resolve));
+                            sessionStorage.setItem("held-evidence-count", String(window.heldEvidenceUploads.length));
+                        });
+                    }
+                    return originalFetch(input, init);
+                };
+            }"""
+        )
+        uploads = page.locator('.evidence-tile:not(.has-evidence) input[type="file"]')
+        uploads.nth(0).set_input_files({"name": "first.png", "mimeType": "image/png", "buffer": payload})
+        page.wait_for_function('sessionStorage.getItem("held-evidence-count") === "1"')
+        page.get_by_role("button", name="Previous: Findings").click()
+        uploads.nth(1).set_input_files({"name": "late.png", "mimeType": "image/png", "buffer": payload})
+        page.evaluate("window.heldEvidenceUploads[0]()")
+        page.wait_for_function('sessionStorage.getItem("held-evidence-count") === "2"')
+
+        self.assertTrue(page.url.endswith("/edit"), "Back left while the late upload was still queued")
+        page.evaluate("window.heldEvidenceUploads[1]()")
+        page.wait_for_url("**/findings", timeout=10_000)
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual(len(saved.evidence), 2)
+        self.assertEqual(sum(bool(fragment.evidence_id) for fragment in proof.fragments if fragment.type == "image"), 2)
+
     def test_each_affected_environment_requires_an_image_and_allows_more(self) -> None:
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
@@ -671,6 +755,96 @@ class BrowserWorkflowTests(unittest.TestCase):
         stale_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
         self.assertEqual(main.workspace.load(report_id).engagement.app_owner, "Saved after conflict")
         stale_page.close()
+
+    def test_upload_attempt_during_conflict_keeps_the_resolution_state(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        stale_page = self.page
+        current_page = self.browser.new_page()
+        stale_page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        current_page.goto(f"{self.base_url}/reports/{report_id}/edit")
+
+        current_page.locator(".content-block").filter(has_text="Description").locator(".rich").first.fill("Current tab edit")
+        current_page.get_by_role("button", name="Save").click()
+        current_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        stale_page.locator(".content-block").filter(has_text="Description").locator(".rich").first.fill("Stale tab edit")
+        stale_page.get_by_role("button", name="Save").click()
+        stale_page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+
+        image = BytesIO()
+        Image.new("RGB", (3, 3), "yellow").save(image, format="PNG")
+        upload = stale_page.locator('.evidence-tile input[type="file"]').first
+        upload.set_input_files(
+            {"name": "conflict.png", "mimeType": "image/png", "buffer": image.getvalue()}
+        )
+        save_button = stale_page.locator("#save-button")
+        self.assertEqual(save_button.get_attribute("data-save-state"), "conflict")
+        self.assertEqual(save_button.inner_text(), "Resolve conflict")
+        self.assertEqual(upload.evaluate("input => input.files.length"), 0, "the same screenshot cannot be selected again")
+        self.assertEqual(len(main.workspace.load(report_id).evidence), 0)
+
+        stale_page.get_by_role("button", name="Save my version").click()
+        stale_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].contents[0].fragments[0].runs[0].text, "Stale tab edit")
+        current_page.close()
+
+    def test_native_back_refreshes_a_revision_saved_later_in_the_same_tab(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_url("**/findings", timeout=10_000)
+        page.get_by_role("button", name="Edit finding name").click()
+        page.get_by_role("combobox", name="Finding Name").fill("History saved title")
+        page.get_by_role("button", name="Save").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        page.go_back(wait_until="domcontentloaded")
+        page.wait_for_url("**/setup", timeout=10_000)
+        page.wait_for_function(
+            "JSON.parse(document.querySelector('main[data-report]').dataset.report).vulnerabilities[0].title === 'History saved title'",
+            timeout=5_000,
+        )
+        page.get_by_label("Application Owner").fill("Saved after native Back")
+        page.get_by_role("button", name="Save").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.app_owner, "Saved after native Back")
+        self.assertEqual(saved.vulnerabilities[0].title, "History saved title")
+
+    def test_later_page_save_does_not_erase_an_unresolved_recovery_draft(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_url("**/findings", timeout=10_000)
+        page.go_back(wait_until="domcontentloaded")
+        page.wait_for_url("**/setup", timeout=10_000)
+
+        page.get_by_label("Application Owner").fill("Unsaved setup owner")
+        prefix = f"vulnreport-pending:{report_id}:"
+        page.wait_for_function(
+            "prefix => Object.keys(localStorage).some(key => key.startsWith(prefix))",
+            arg=prefix,
+        )
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.go_forward(wait_until="domcontentloaded")
+        page.wait_for_url("**/findings", timeout=10_000)
+        page.get_by_role("heading", name="Unsaved changes found").wait_for(timeout=5_000)
+
+        page.get_by_role("button", name="Edit finding name").click()
+        page.get_by_role("combobox", name="Finding Name").fill("Saved after leaving Setup")
+        page.get_by_role("button", name="Save").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        recovered_owners = page.evaluate(
+            """prefix => Object.keys(localStorage)
+              .filter(key => key.startsWith(prefix))
+              .map(key => JSON.parse(localStorage.getItem(key)).report.engagement.app_owner)""",
+            prefix,
+        )
+        self.assertIn("Unsaved setup owner", recovered_owners)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].title, "Saved after leaving Setup")
 
     def test_stale_local_draft_does_not_replace_newer_backend_report(self) -> None:
         report_id = self.ready_report()
@@ -807,8 +981,27 @@ class BrowserWorkflowTests(unittest.TestCase):
         cards.last.get_by_role("button", name="Move fragment up").click()
         self.assertEqual(cards.nth(initial_count - 1).locator(".tag").text_content(), "note")
 
-    def test_a_collapsed_finding_stays_collapsed_when_the_table_rebuilds(self) -> None:
-        """Typing the first vuln ID rebuilds the table, which used to re-open the first finding."""
+    def test_editor_library_selection_commits_the_full_option_title(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, _ = self._complete_finding(report_id)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".edit-title").click()
+        editor = page.locator(".editor-title-search input")
+        editor.fill("Session Token Remains")
+        option = page.locator('.editor-title-search [role="option"]').first
+        expected_title = option.locator("b").inner_text()
+        option.click()
+        page.wait_for_selector(".finding-title .edit-title")
+        self.assertEqual(page.locator(".finding-title .edit-title").inner_text(), expected_title)
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].title, expected_title)
+
+    def test_typing_a_vuln_id_updates_in_place_without_rebuilding_the_table(self) -> None:
+        """Blurring the ID cell used to rebuild the whole table, taking the fold state with it."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
@@ -818,11 +1011,47 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.evaluate("() => document.querySelector('.finding-fold-toggle').click()")
         self.assertEqual(expanded.count(), 0)
 
+        row = page.evaluate_handle("() => document.querySelector('#findings > tr')")
+        display = page.locator("#findings .finding-id-display")
+        display.click()
         vuln_id = page.locator("#findings input[inputmode='numeric']")
         vuln_id.fill("1234")
         vuln_id.blur()
-        page.locator("#findings .finding-id-display").wait_for()
-        self.assertEqual(expanded.count(), 0, "the collapsed finding re-opened when the table rebuilt")
+        self.assertTrue(row.evaluate("node => node.isConnected"), "the table was rebuilt while the ID was being edited")
+        self.assertEqual(expanded.count(), 0, "the collapsed finding re-opened when the ID was typed")
+        self.assertEqual(display.text_content(), "1234")
+
+    def test_an_empty_vuln_id_cell_offers_a_dash_and_swaps_for_the_field(self) -> None:
+        """Run narrow: below 960px the field is no longer lifted out of flow, so [hidden] has to really hide."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.set_viewport_size({"width": 800, "height": 900})
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        display = page.locator("#findings .finding-id-display")
+        field = page.locator("#findings input[inputmode='numeric']")
+        display.wait_for()
+        self.assertEqual(display.text_content(), "\u2014")
+        self.assertFalse(field.is_visible(), "the field sits under the button when both are shown")
+        display.click()
+        self.assertFalse(display.is_visible(), "the button stayed on top of the field being edited")
+        self.assertTrue(field.is_visible())
+        self.assertTrue(field.evaluate("node => node === document.activeElement"))
+
+    def test_a_long_affected_location_wraps_instead_of_running_past_its_column(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        long_value = "https://prod.example.test/" + "a" * 120
+        report.scope_targets[0].value = long_value
+        report.scope_targets.append(ScopeTarget(target_id="tgt_long", environment="production", channel="web", value=f"{long_value}/other"))
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        selected = page.locator("#findings textarea.location-value")
+        selected.wait_for()
+        self.assertLessEqual(selected.evaluate("node => node.scrollWidth - node.clientWidth"), 1, "the selected location ran past its column")
+        self.assertGreater(selected.evaluate("node => node.clientHeight"), 28, "the selected location did not grow to fit")
+        unselected = page.locator("#findings .location-preview")
+        self.assertLessEqual(unselected.evaluate("node => node.scrollWidth - node.clientWidth"), 1, "the unselected location ran past its column")
 
     def test_previous_saves_before_library_replacement_and_next_navigation(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -903,7 +1132,9 @@ class BrowserWorkflowTests(unittest.TestCase):
             "the note is kept alongside the location it stands next to",
         )
 
-    def test_invalid_findings_block_navigation_but_content_allows_back(self) -> None:
+    def test_findings_gate_blocks_next_but_back_is_never_refused(self) -> None:
+        """Completeness is a forward requirement. Editing the application details is not something a
+        tester should have to finish a finding to reach."""
         findings_report_id = self.ready_report()
         page = self.page
         page.goto(f"{self.base_url}/reports/{findings_report_id}/findings")
@@ -914,15 +1145,20 @@ class BrowserWorkflowTests(unittest.TestCase):
         previous.click(button="middle")
         page.wait_for_timeout(200)
         self.assertTrue(page.url.endswith(f"/reports/{findings_report_id}/findings"))
+        # Both Back controls share one handler, so the stepper only has to still be wired.
+        self.assertEqual(page.locator("nav.stepper .back-link").count(), 1)
 
-        previous.click()
+        # The forward gate is what refuses, and what reveals the incomplete fields.
+        page.get_by_role("button", name="Next: Content", exact=False).click()
         page.wait_for_timeout(200)
         self.assertTrue(page.url.endswith(f"/reports/{findings_report_id}/findings"))
         self.assertFalse(page.locator("#finding-validation-note").is_hidden())
 
-        page.get_by_role("button", name="Next: Content", exact=False).click()
-        page.wait_for_timeout(200)
-        self.assertTrue(page.url.endswith(f"/reports/{findings_report_id}/findings"))
+        previous.click()
+        page.wait_for_url(f"**/reports/{findings_report_id}/setup")
+        # Corroborating only: the blank finding reached disk. The flush guarantee itself is pinned by
+        # test_previous_saves_before_library_replacement_and_next_navigation.
+        self.assertEqual(len(read_json(main.workspace.find_path(findings_report_id))["vulnerabilities"]), 1)
 
         content_report_id = self.ready_report(include_finding=True)
         page.goto(f"{self.base_url}/reports/{content_report_id}/edit")
@@ -930,6 +1166,34 @@ class BrowserWorkflowTests(unittest.TestCase):
         # Going back from Content is never gated: the tester is on their way to fix the gaps.
         page.get_by_role("button", name="Previous: Findings").click()
         page.wait_for_url(f"**/reports/{content_report_id}/findings")
+
+    def test_a_report_with_no_findings_can_still_reach_setup(self) -> None:
+        """The literal complaint: a brand-new report has nothing to fix and no field to highlight, so
+        refusing to let it back to Setup left the tester with no way forward or back."""
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#next")
+        self.assertEqual(page.locator("#findings tr").count(), 0)
+
+        page.get_by_role("button", name="Previous: Setup").click()
+        page.wait_for_url(f"**/reports/{report_id}/setup")
+
+    def test_a_bounce_from_content_names_the_missing_fields(self) -> None:
+        """The bounce used to show one fixed sentence that never updated. It now reveals the same
+        per-finding count the Next button does, so the tester can see what is actually missing."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.vulnerabilities[0].severity = None
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_url(f"**/reports/{report_id}/findings?incomplete=findings")
+        note = page.locator("#finding-validation-note")
+        note.wait_for()
+        self.assertIn("severity", note.inner_text().lower())
+        self.assertNotIn("Add at least one complete finding", note.inner_text())
 
     def test_matching_a_library_title_applies_metadata_without_a_confirm(self) -> None:
         """Title, likelihood, impact, severity, and library_ref apply immediately and silently on a
@@ -989,6 +1253,105 @@ class BrowserWorkflowTests(unittest.TestCase):
             ["bulleted_list", "note"],
         )
 
+    def test_adding_library_remediation_below_drops_blank_starter(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        title = "Session Token Remains Valid after Session Expiry Message"
+        page.get_by_role("button", name="Edit finding name").click()
+        search = page.get_by_role("combobox", name="Finding Name")
+        search.fill(title)
+        page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        finding.likelihood = finding.impact = finding.severity = "low"
+        main.workspace.save(report)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
+        remediation_block.get_by_role("button", name="Add below").click()
+        page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        page.reload()
+
+        remediation = next(
+            content
+            for content in main.workspace.load(report_id).vulnerabilities[0].contents
+            if content.type == "recommended_remediation"
+        )
+        self.assertEqual(
+            [fragment.type for fragment in remediation.fragments],
+            ["bulleted_list", "note"],
+        )
+
+    def test_adding_library_content_below_retains_unfinished_fragments(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        entry = main.library.get("VDB-047")
+        finding.library_ref = LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=report.saved_at)
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        remediation.fragments[0].runs = [Run(text="Keep this tester remediation")]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
+        remediation_block.get_by_role("combobox", name="Add fragment to Recommended Remediation").select_option("table")
+        remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
+        remediation_block.get_by_role("button", name="Add below").click()
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url("**/findings", timeout=10_000)
+
+        remediation = next(
+            content
+            for content in main.workspace.load(report_id).vulnerabilities[0].contents
+            if content.type == "recommended_remediation"
+        )
+        self.assertEqual(
+            [fragment.type for fragment in remediation.fragments],
+            ["paragraph", "table", "bulleted_list", "note"],
+        )
+
+    def test_replacing_library_content_drops_only_its_orphaned_evidence(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        entry = main.library.get("VDB-047")
+        finding.library_ref = LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=report.saved_at)
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        remediation.fragments[0].runs = [Run(text="Tester remediation")]
+        remediation.fragments.append(ImageFragment(frag_id="f_replace_image", type="image", evidence_id="ev_replace", caption="Remove with section"))
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        proof_image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        proof_image.evidence_id = "ev_keep"
+        proof_image.caption = "Keep outside section"
+
+        image = BytesIO()
+        Image.new("RGB", (3, 3), "blue").save(image, format="PNG")
+        payload = image.getvalue()
+        for evidence_id in ("ev_replace", "ev_keep"):
+            report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name=f"{evidence_id}.png", width_px=3, height_px=3, sha256=hashlib.sha256(payload).hexdigest(), uploaded_at=report.saved_at)
+        evidence_root = main.workspace.find_path(report_id).parent / "evidence"
+        evidence_root.mkdir(exist_ok=True)
+        for evidence_id in report.evidence:
+            (evidence_root / f"{evidence_id}.png").write_bytes(payload)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
+        remediation_block.get_by_role("button", name="Use library version").click()
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url("**/findings", timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(set(saved.evidence), {"ev_keep"})
+        self.assertFalse((evidence_root / "ev_replace.png").exists())
+        self.assertTrue((evidence_root / "ev_keep.png").exists())
+
     def test_readiness_flags_placeholder_and_whitespace_content(self) -> None:
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
@@ -1003,7 +1366,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(page.get_by_text("replace placeholder text", exact=False).is_visible())
         self.assertTrue(page.get_by_text("text is required", exact=False).first.is_visible())
 
-    def test_in_conclusion_seed_is_editable_and_accepts_more_fragments(self) -> None:
+    def test_in_conclusion_opens_empty_and_offers_the_standard_sentence(self) -> None:
+        """The section is created but never written for you: an empty paragraph plus an offer, so the
+        tester owes a real conclusion rather than inheriting one the app made up."""
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
         report.vulnerabilities[0].status = "open_previously_discovered"
@@ -1013,10 +1378,15 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         conclusion = page.locator(".content-block").filter(has_text="In Conclusion")
-        self.assertTrue(conclusion.get_by_text("Include a brief justification or explanation.", exact=True).is_visible())
         self.assertEqual(conclusion.locator(".fragment").count(), 1)
+        self.assertEqual(conclusion.locator(".rich").first.text_content(), "")
+        self.assertEqual(conclusion.locator("[data-conclusion-restore]").count(), 1, "an empty conclusion was not offered the standard sentence")
+
+        conclusion.get_by_role("button", name="Put it back").click()
+        page.wait_for_timeout(300)
         self.assertEqual(conclusion.locator(".rich").first.text_content(), 'The finding "Browser finding" is still Open.')
-        self.assertEqual(conclusion.locator(".generated-conclusion").count(), 0)
+        self.assertEqual(conclusion.locator(".fragment").count(), 1, "accepting the offer added a fragment")
+
         conclusion.locator(".rich").first.fill("Testing confirmed that compensating controls reduce the exposure. The issue remains open pending remediation.")
         conclusion.get_by_role("combobox", name="Add fragment to In Conclusion").select_option("note")
         conclusion.locator(".fragment").last.locator(".rich").fill("Monitor the control until permanent remediation is complete.")
@@ -1027,7 +1397,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         conclusion = page.locator(".content-block").filter(has_text="In Conclusion")
         self.assertEqual(conclusion.locator(".rich").first.text_content(), "Testing confirmed that compensating controls reduce the exposure. The issue remains open pending remediation.")
         self.assertEqual(conclusion.locator(".rich").nth(1).text_content(), "Monitor the control until permanent remediation is complete.")
-        self.assertEqual(conclusion.locator(".generated-conclusion").count(), 0)
 
     def test_all_fragment_types_render_and_persist(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -1086,6 +1455,21 @@ class BrowserWorkflowTests(unittest.TestCase):
         evidence_path.write_bytes(image_data.getvalue())
         return report, finding
 
+    def _fill_retest_history(self, report, finding):
+        """Complete everything a previously-discovered status adds, and accept the standard closing
+        sentence, so a caller's verdict turns on the conclusion rule rather than on retest history.
+        The app offers that sentence now instead of writing it, so the fixture has to say so."""
+        main.provision(finding)
+        previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
+        next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Original reproduction step")]
+        history = next(fragment for fragment in previous.fragments if fragment.type == "image")
+        history.environment = "production"
+        history.evidence_id = "ev_contract"
+        history.caption = "Original production response"
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        conclusion.fragments[0].runs = status_conclusion_runs(finding.title, "Resolved" if finding.status == "resolved" else "Open")
+        return conclusion
+
     def test_a_finding_is_offered_only_the_app_types_it_has_not_installed(self) -> None:
         """Variants are per app type now, so a finding spanning web and API with only the web steps
         installed is offered API alone, and narrowing it back to web leaves nothing to offer."""
@@ -1115,6 +1499,48 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
         self.assertEqual(page.locator(".poc-offer").count(), 0, "web is already installed, so nothing is left to offer")
+
+    def test_a_review_jump_leaves_one_red_mark_and_lets_go_when_you_look_away(self) -> None:
+        """Ringing every gap at once drowns the single one the panel just sent the tester to."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        tile = page.locator(".evidence-tile:not(.has-evidence)").first
+        tile.wait_for()
+        self.assertNotIn("is-incomplete", tile.get_attribute("class") or "", "an empty evidence slot was ringed on its own")
+        self.assertGreater(page.locator(".is-incomplete").count(), 0, "nothing was marked before the jump")
+
+        page.get_by_role("button", name="Go to Proof of Concept").first.click()
+        page.wait_for_selector(".is-review-target")
+        self.assertEqual(page.locator(".is-incomplete").count(), 0, "other red marks were left competing with the jump")
+
+        page.evaluate("() => document.querySelector('#editor').click()")
+        page.wait_for_selector(".is-review-target", state="detached")
+        self.assertGreater(page.locator(".is-incomplete").count(), 0, "the marks never came back after looking away")
+
+    def test_go_to_marks_only_the_selected_empty_evidence_slot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        proof.fragments.extend([
+            ImageFragment(frag_id="f_empty_a", type="image", environment="production"),
+            ImageFragment(frag_id="f_empty_b", type="image", environment="production"),
+        ])
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        empty_tiles = page.locator(".evidence-tile:not(.has-evidence)")
+        self.assertEqual(empty_tiles.count(), 2)
+        target_id = empty_tiles.first.get_attribute("data-fragment-id")
+        page.locator(f'[data-review-fragment="{target_id}"]').first.click()
+        page.wait_for_selector(f'.evidence-tile[data-fragment-id="{target_id}"].is-incomplete')
+        highlighted = page.locator(".evidence-tile.is-incomplete")
+        self.assertEqual(highlighted.count(), 1)
+        self.assertEqual(highlighted.get_attribute("data-fragment-id"), target_id)
 
     def test_unchecking_a_location_in_the_page_withdraws_that_app_types_offer(self) -> None:
         """The same narrowing done through the Findings page, which is how a tester actually does it."""
@@ -1253,6 +1679,54 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertFalse(cards.last.locator("button.danger").is_disabled(), "a second steps list is deletable")
         self.assertFalse(cards.first.locator("button.danger").is_disabled(), "neither one is required once there are two")
 
+    def test_switching_library_entries_reoffers_poc_for_the_same_channel(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        first = main.library.get("VDB-015")
+        finding.title = first["title"]
+        finding.library_ref = LibraryRef(library_id=first["library_id"], source_id=first["source_id"], inserted_at=report.saved_at)
+        finding.poc_variants = ["web"]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        second_title = "Deprecated Pragma Header in Use"
+        page.get_by_role("button", name="Edit finding name").click()
+        title = page.get_by_role("combobox", name="Finding Name")
+        title.fill(second_title)
+        page.locator('.row-library-results [role="option"]').filter(has_text=second_title).click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        self.assertEqual(proof.locator(".poc-offer").count(), 1)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].poc_variants, [])
+
+    def test_poc_add_below_does_not_cross_an_intervening_note(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        entry = main.library.get("VDB-015")
+        finding.library_ref = LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=report.saved_at)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        steps.items[0].runs = [Run(text="Existing step")]
+        image_index = next(index for index, fragment in enumerate(proof.fragments) if fragment.type == "image")
+        proof.fragments.insert(image_index, NoteFragment(frag_id="f_stop_note", type="note", runs=[Run(text="Stop after the existing procedure")]))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        proof_block = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        proof_block.get_by_role("button", name="Add below").click()
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url("**/findings", timeout=10_000)
+
+        proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.type for fragment in proof.fragments], ["numbered_list", "note", "numbered_list", "image"])
+        self.assertEqual(proof.fragments[2].items[0].runs[0].text, "Browse to the assistant page as a standard user.")
+
     def test_library_step_offer_appears_only_on_the_proof_of_concept(self) -> None:
         """The offer replaces this engagement's steps. Previous Proof of Concept is the record of
         the engagement before it, so an offer there would invite overwriting history."""
@@ -1308,6 +1782,389 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(block.locator(".evidence-environment").input_value(), "non_production")
         self.assertEqual(block.locator(".evidence-environment-value").count(), 0)
 
+    def test_pasting_a_numbered_list_strips_the_markers_the_gutter_already_draws(self) -> None:
+        """The visible numbering is a separate gutter, never the field's value, so a pasted "1."
+        renders as "1. 1.". A separator is required, which is what keeps an IP address intact."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        steps = page.locator('.content-block[data-content-type="proof_of_concept"] .list-textarea').first
+        steps.click()
+        page.evaluate(
+            """() => {
+              const field = document.querySelector('.content-block[data-content-type="proof_of_concept"] .list-textarea');
+              field.focus();
+              field.setSelectionRange(0, field.value.length);
+              const transfer = new DataTransfer();
+              transfer.setData("text/plain", "1. Alpha step\\n2) Beta step\\n(3) Gamma step\\n- Delta step\\n\\u2022 Epsilon step\\n1.2.3.4 is the host");
+              field.dispatchEvent(new ClipboardEvent("paste", {clipboardData: transfer, bubbles: true, cancelable: true}));
+            }"""
+        )
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        steps_fragment = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        self.assertEqual(
+            ["".join(run.text for run in item.runs) for item in steps_fragment.items],
+            ["Alpha step", "Beta step", "Gamma step", "Delta step", "Epsilon step", "1.2.3.4 is the host"],
+            "a marker survived, or the host address lost its leading number",
+        )
+
+    def test_pasting_marker_like_text_mid_item_does_not_delete_it(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, _ = self._complete_finding(report_id)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        field = page.locator('.content-block[data-content-type="proof_of_concept"] .list-textarea').first
+        field.fill("Send parameter ")
+        page.evaluate(
+            """() => {
+              const field = document.querySelector('.content-block[data-content-type="proof_of_concept"] .list-textarea');
+              field.setSelectionRange(field.value.length, field.value.length);
+              const transfer = new DataTransfer();
+              transfer.setData("text/plain", "1. value");
+              field.dispatchEvent(new ClipboardEvent("paste", {clipboardData: transfer, bubbles: true, cancelable: true}));
+            }"""
+        )
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        first_item = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items[0]
+        self.assertEqual("".join(run.text for run in first_item.runs), "Send parameter 1. value")
+
+    def test_the_conclusion_offer_puts_the_last_step_in_front_of_the_sentence(self) -> None:
+        """The step shares the sentence's paragraph rather than taking one of its own, so the client
+        has to find the sentence as a tail. Get that wrong and the browser either stacks a second
+        paragraph or stops recognising the sentence the server still maintains."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        self._fill_retest_history(report, finding)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        steps.items = [
+            ListItem(runs=[Run(text="Log in as a standard user.")]),
+            ListItem(runs=[Run(text="Observe the balance of another user.")]),
+            ListItem(runs=[]),
+        ]
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        offer = conclusion.locator("[data-conclusion-step]")
+        self.assertEqual(offer.count(), 1, "the last written step was not offered")
+        self.assertIn("Observe the balance of another user.", offer.inner_text(), "a trailing blank item was quoted")
+
+        fragments_before = conclusion.locator(".fragment").count()
+        offer.get_by_role("button", name="Use it").click()
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        self.assertEqual(conclusion.locator(".fragment").count(), fragments_before, "the step took a paragraph of its own")
+        saved = main.workspace.load(report_id).vulnerabilities[0]
+        paragraph = next(content for content in saved.contents if content.type == "in_conclusion").fragments[0]
+        self.assertEqual(
+            "".join(run.text for run in paragraph.runs),
+            f'Observe the balance of another user. The finding "{saved.title}" is still Open.',
+            "the step did not land in front of the sentence in the same paragraph",
+        )
+        self.assertEqual(saved.conclusion_offer_resolved, ["Observe the balance of another user."])
+        self.assertEqual(conclusion.locator("[data-conclusion-step]").count(), 0, "an answered offer came back")
+
+    def test_the_conclusion_offer_uses_only_the_last_line_of_multiline_poc_prose(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        self._fill_retest_history(report, finding)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        proof.fragments.append(NoteFragment(
+            frag_id="f_multiline_note",
+            type="note",
+            runs=[Run(text="First note line\nLast note line\n")],
+        ))
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        offer = self.page.locator("[data-conclusion-step]")
+        offer.wait_for()
+        self.assertIn('"Last note line"', offer.inner_text())
+        self.assertNotIn("First note line", offer.inner_text())
+
+    def test_the_default_conclusion_still_gets_offered_the_last_step(self) -> None:
+        """The whole sequence: a conclusion that holds nothing but the standard sentence is exactly
+        the state where quoting the last proof step is most useful, so the offer has to survive it."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        self._fill_retest_history(report, finding)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items = [
+            ListItem(runs=[Run(text="Log in as a standard user.")]),
+            ListItem(runs=[Run(text="Observe the balance of another user.")]),
+        ]
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        self.assertEqual(conclusion.locator(".rich").first.text_content(), 'The finding "Browser finding" is still Open.')
+        offer = conclusion.locator("[data-conclusion-step]")
+        self.assertEqual(offer.count(), 1, "a conclusion at its default was not offered the last step")
+        self.assertIn("Observe the balance of another user.", offer.inner_text())
+
+        # Dismiss has to work for this sitting, or a standing offer would redraw itself unanswered.
+        conclusion.get_by_role("button", name="Dismiss").click()
+        page.wait_for_timeout(300)
+        self.assertEqual(conclusion.locator("[data-conclusion-step]").count(), 0, "dismissing the step offer did nothing")
+
+        # But the conclusion is still boilerplate, so reopening the report asks once more.
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        self.assertEqual(conclusion.locator("[data-conclusion-step]").count(), 1, "a conclusion left at its default stopped being offered the step")
+
+    def test_a_status_round_trip_empties_the_conclusion_and_re_offers_both_prompts(self) -> None:
+        """Open (New) drops the conclusion outright, so coming back leaves an empty section: the
+        standard sentence is offered first, and accepting it then offers the last proof step."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        conclusion = self._fill_retest_history(report, finding)
+        conclusion.fragments[0].runs = [Run(text="My own conclusion.")]
+        # Already answered once, which is the state that was wrongly silencing the offer for good.
+        finding.conclusion_offer_resolved = ["Observe the balance of another user."]
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items = [
+            ListItem(runs=[Run(text="Observe the balance of another user.")]),
+        ]
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#findings tr")
+        status = page.locator("#findings tr").first.locator("select").last
+        saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
+        with page.expect_response(saved_put):
+            status.select_option("open_new")
+            page.click('[data-dialog-action="confirm"]')
+        self.assertNotIn(
+            "in_conclusion",
+            [content.type for content in main.workspace.load(report_id).vulnerabilities[0].contents],
+            "Open (New) kept a conclusion describing a status it no longer has",
+        )
+
+        with page.expect_response(saved_put):
+            status.select_option("open_previously_discovered")
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        conclusion_block = page.locator('.content-block[data-content-type="in_conclusion"]')
+        self.assertEqual(conclusion_block.locator(".rich").first.text_content(), "", "the conclusion came back with text in it")
+        self.assertEqual(conclusion_block.locator("[data-conclusion-restore]").count(), 1, "an empty conclusion was not offered the standard sentence")
+
+        conclusion_block.get_by_role("button", name="Put it back").click()
+        page.wait_for_timeout(400)
+        self.assertEqual(conclusion_block.locator(".rich").first.text_content(), 'The finding "Browser finding" is still Open.')
+        self.assertEqual(conclusion_block.locator("[data-conclusion-restore]").count(), 0, "the restore offer stayed after being accepted")
+        self.assertEqual(conclusion_block.locator("[data-conclusion-step]").count(), 1, "the last proof step was not offered once the default was in place")
+
+    def test_a_quoted_step_discharges_the_default_conclusion(self) -> None:
+        """The step is the tester's own words, so the paragraph is no longer nothing but boilerplate."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        conclusion = self._fill_retest_history(report, finding)
+        conclusion.fragments[0].runs = [Run(text="Observe the balance of another user. "), *conclusion.fragments[0].runs]
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
+        server_has_issue = expected_issue in generation_issues(main.workspace.load(report_id))
+        self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        self.page.wait_for_selector("#issue-count")
+        conclusion_rows = self.page.locator(".review-row", has_text="In Conclusion").count()
+        self.assertEqual(
+            (
+                server_has_issue,
+                self.page.locator("#issue-count").get_attribute("data-state"),
+                self.page.locator("#generate-report").is_disabled(),
+                conclusion_rows,
+            ),
+            (False, "ready", False, 0),
+        )
+
+    def test_trailing_whitespace_cannot_hang_or_disguise_the_default_conclusion(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        conclusion = self._fill_retest_history(report, finding)
+        conclusion.fragments[0].runs.append(Run(text="  \n"))
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
+        server_has_issue = expected_issue in generation_issues(main.workspace.load(report_id))
+        self.page.goto(f"{self.base_url}/reports/{report_id}/edit", timeout=2_000)
+        self.page.wait_for_selector("#issue-count")
+        self.assertEqual(
+            (
+                server_has_issue,
+                self.page.locator("#issue-count").get_attribute("data-state"),
+                self.page.locator("#generate-report").is_disabled(),
+            ),
+            (True, "issues", True),
+        )
+
+    def test_appended_prose_discharges_the_default_conclusion(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        conclusion = self._fill_retest_history(report, finding)
+        conclusion.fragments[0].runs.append(Run(text=" Additional tester prose."))
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
+        server_has_issue = expected_issue in generation_issues(main.workspace.load(report_id))
+        self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        self.page.wait_for_selector("#issue-count")
+        self.assertEqual(
+            (
+                server_has_issue,
+                self.page.locator("#issue-count").get_attribute("data-state"),
+                self.page.locator("#generate-report").is_disabled(),
+            ),
+            (False, "ready", False),
+        )
+
+    def _library_finding(self, report_id: str, library_id: str = "VDB-047"):
+        """A finding whose Description and Remediation hold that entry's own content, as an insert leaves it."""
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        entry = main.library.get(library_id)
+        finding.library_ref = LibraryRef(library_id=library_id, source_id=library_id, inserted_at=report.saved_at)
+        finding.likelihood = finding.impact = finding.severity = "low"
+        for content in entry["contents"]:
+            section = next(candidate for candidate in finding.contents if candidate.type == content["type"])
+            section.fragments = [fragment.model_copy(deep=True) for fragment in Content.model_validate(content).fragments]
+        main.workspace.save(report)
+        return report, finding
+
+    def test_editing_a_library_section_offers_it_back(self) -> None:
+        """The offer now keys off the content itself, so a section that no longer matches its entry
+        is offerable however it got that way -- edited, emptied, or left behind by a reopen."""
+        report_id = self.ready_report(include_finding=True)
+        self._library_finding(report_id)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        self.assertEqual(block.locator("[data-content-offer]").count(), 0, "content matching the library was offered back")
+
+        block.locator(".rich").first.click()
+        page.keyboard.type("Changed. ")
+        page.locator("body").click(position={"x": 5, "y": 5})
+        page.wait_for_timeout(400)
+        self.assertEqual(block.locator("[data-content-offer]").count(), 1, "an edited section was not offered the library version")
+
+    def test_the_offer_appears_without_a_reload_once_the_field_is_left(self) -> None:
+        """Typing never redraws the pane -- it would destroy the caret -- so before this the banner
+        waited for a section toggle or a page reload."""
+        report_id = self.ready_report(include_finding=True)
+        self._library_finding(report_id)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        block.locator(".rich").first.click()
+        page.keyboard.type("Changed. ")
+        self.assertEqual(block.locator("[data-content-offer]").count(), 0, "the banner moved while the caret was in the field")
+
+        page.locator("body").click(position={"x": 5, "y": 5})
+        page.wait_for_timeout(400)
+        self.assertEqual(block.locator("[data-content-offer]").count(), 1, "the banner still needs a reload to appear")
+
+    def test_dismissing_an_offer_keeps_it_hidden_until_the_section_changes_again(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        self._library_finding(report_id)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        block.locator(".rich").first.click()
+        page.keyboard.type("Changed. ")
+        page.locator("body").click(position={"x": 5, "y": 5})
+        page.wait_for_timeout(400)
+        block.get_by_role("button", name="Keep mine").click()
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(block.locator("[data-content-offer]").count(), 0, "dismissing did nothing")
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        self.assertEqual(block.locator("[data-content-offer]").count(), 0, "a dismissal did not survive a reload")
+
+        block.locator(".rich").first.click()
+        page.keyboard.type("More. ")
+        page.locator("body").click(position={"x": 5, "y": 5})
+        page.wait_for_timeout(400)
+        self.assertEqual(block.locator("[data-content-offer]").count(), 1, "editing a dismissed section did not offer it again")
+
+    def test_refreshing_offers_never_changes_the_report(self) -> None:
+        """The refresh runs inside a reportchange listener. A write there would call scheduleSave,
+        which dispatches reportchange again -- an unbounded save loop eating the one backup file."""
+        report_id = self.ready_report(include_finding=True)
+        self._library_finding(report_id)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        before = page.evaluate("JSON.stringify(JSON.parse(document.querySelector('main').dataset.report))")
+        page.evaluate("document.dispatchEvent(new Event('reportchange'))")
+        page.wait_for_timeout(300)
+        after = page.evaluate("JSON.stringify(JSON.parse(document.querySelector('main').dataset.report))")
+        self.assertEqual(before, after)
+
+    def test_emptying_the_installed_steps_offers_them_again(self) -> None:
+        """A decline is permanent, an install is not: the record of installing describes content that
+        is no longer there. The two neighbouring tests only pass because their fixture types a step."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.tested_channels = ["web", "api"]
+        report.scope_targets.append(ScopeTarget(target_id="tgt_api", environment="production", channel="api", value="https://prod-api.example.test"))
+        finding.scope = Scope(mode="custom", target_ids=["tgt_browser", "tgt_api"])
+        finding.library_ref = LibraryRef(library_id="VDB-036", source_id="VDB-036", inserted_at=report.saved_at)
+        finding.poc_variants = ["web", "api"]
+        finding.poc_variant_declined = []
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items = [ListItem(runs=[])]
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        offer = page.locator('.content-block[data-content-type="proof_of_concept"] .poc-offer')
+        self.assertEqual(offer.count(), 1, "steps that were installed and then deleted were not offered again")
+        self.assertEqual(offer.get_attribute("data-poc-offer"), "web api")
+
     def test_browser_readiness_verdict_matches_server_generation_issues(self) -> None:
         """The scope and completeness rules live in both Python and JavaScript. If they ever
         disagree the tester is told a report is ready that the server then refuses, so pin
@@ -1338,7 +2195,25 @@ class BrowserWorkflowTests(unittest.TestCase):
             proof = next(content for content in finding.contents if content.type == "proof_of_concept")
             proof.fragments.append(ImageFragment(frag_id="f_stale", type="image", environment="non_production", evidence_id=None, caption=""))
 
-        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment]
+        # Every case above runs on the open_new finding ready_report builds, which has no
+        # in_conclusion section at all. These two are the first that make the section exist, so
+        # without them the conclusion rules are invisible to this contract in both directions.
+        def default_conclusion_left_in_place(report, finding):
+            finding.status = "open_previously_discovered"
+            self._fill_retest_history(report, finding)
+
+        def conclusion_section_emptied(report, finding):
+            finding.status = "open_previously_discovered"
+            self._fill_retest_history(report, finding).fragments = []
+
+        def quoted_step_before_default_conclusion(report, finding):
+            # The only case where the sentence is not the whole paragraph. A client that still
+            # matches whole paragraphs reports nothing here while the server reports an issue.
+            finding.status = "open_previously_discovered"
+            conclusion = self._fill_retest_history(report, finding)
+            conclusion.fragments[0].runs = [Run(text="Observe the balance of another user. "), *conclusion.fragments[0].runs]
+
+        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion]
         for case in cases:
             with self.subTest(case=case.__name__):
                 report_id = self.ready_report(include_finding=True)

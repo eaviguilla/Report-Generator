@@ -93,7 +93,7 @@ def compose_image_caption_sample() -> Path:
     replace_component_token_runs(
         [document.element.body],
         "caption-fragment",
-        [Run(text="Figure 1 Sample imported image with a styled caption.")],
+        [Run(text="Figure 1. Sample imported image with a styled caption.")],
     )
 
     image = Image.new("RGB", (1200, 675), "white")

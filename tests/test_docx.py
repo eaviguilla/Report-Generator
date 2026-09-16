@@ -21,7 +21,16 @@ from app.docx_report import (
     render_report_docx,
 )
 from app.report_service import provision, sync_evidence_image_slots
-from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
+from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
+
+
+def _keeps_next(element) -> bool:
+    properties = element.find(qn("w:pPr"))
+    return properties is not None and properties.find(qn("w:keepNext")) is not None
+
+
+def _is_blank_paragraph(element) -> bool:
+    return element.tag == qn("w:p") and not "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
 
 
 class DocxReportTests(unittest.TestCase):
@@ -84,6 +93,9 @@ class DocxReportTests(unittest.TestCase):
             ]
             report.vulnerabilities[1].status = "resolved"
             provision(report.vulnerabilities[1])
+            # The app's own conclusion sentence now blocks generation, so this finding writes its own.
+            conclusion = next(content for content in report.vulnerabilities[1].contents if content.type == "in_conclusion")
+            conclusion.fragments[0].runs = [Run(text="Session fixation was remediated and could not be reproduced on retest.")]
             previous = next(content for content in report.vulnerabilities[1].contents if content.type == "previous_proof_of_concept")
             next(fragment for fragment in previous.fragments if isinstance(fragment, ListFragment)).items = [
                 ListItem(runs=[Run(text="Reproduce the previously reported behavior.")]),
@@ -258,7 +270,7 @@ class DocxReportTests(unittest.TestCase):
             image_caption = next(paragraph for paragraph in component_document.paragraphs if paragraph.text.endswith("Production response"))
             self.assertEqual(image_caption.style.name, "Figures and Tables")
             self.assertTrue(image_caption._p.getprevious().xpath(".//w:drawing"))
-            self.assertEqual(image_caption.text, "Figure 2 Production response")
+            self.assertEqual(image_caption.text, "Figure 2. Production response")
             self.assertEqual(
                 [node.text for node in image_caption._p.iter(qn("w:instrText"))],
                 [r" SEQ Figure \* ARABIC "],
@@ -376,6 +388,9 @@ class DocxReportTests(unittest.TestCase):
         """Promote a finding to previously discovered and fill the seeded previous proof of concept."""
         finding.status = "open_previously_discovered"
         provision(finding)
+        # Promoting the status seeds a conclusion, and the app's own sentence blocks generation.
+        conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
+        conclusion.fragments[0].runs = [Run(text="The original finding remains exploitable on retest.")]
         previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
         next(fragment for fragment in previous.fragments if isinstance(fragment, ListFragment)).items = [ListItem(runs=[Run(text="Reproduce the original finding.")])]
         history = next(fragment for fragment in previous.fragments if isinstance(fragment, ImageFragment))
@@ -544,6 +559,139 @@ class DocxReportTests(unittest.TestCase):
 
             everything = "\n".join([*(p.text for p in rendered.paragraphs), *(c.text for t in rendered.tables for r in t.rows for c in r.cells)])
             self.assertNotIn("v_unnumbered", everything)
+
+    def _layout_document(self, report_folder: Path, contents: list, *, status: str = "open_new"):
+        """Render one finding through the shipped template, for page-layout assertions."""
+        evidence_folder = report_folder / "evidence"
+        evidence_folder.mkdir(exist_ok=True)
+        buffer = BytesIO()
+        Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+        (evidence_folder / "ev_layout.png").write_bytes(buffer.getvalue())
+        now = datetime.now().astimezone()
+        report = Report(
+            report_id="r_layout", app_id="CI-DOCX", saved_at=now,
+            engagement=Engagement(
+                app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web"],
+                test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
+            ),
+            scope_targets=[ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test")],
+            evidence={"ev_layout": EvidenceItem(file="evidence/ev_layout.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)},
+        )
+        report.vulnerabilities = [Vulnerability(
+            uid="v_layout", display_id="001", title="Layout finding",
+            likelihood="high", impact="high", severity="high", status=status,
+            scope=Scope(mode="custom", target_ids=["t_web"]), contents=contents,
+        )]
+        return Document(BytesIO(render_report_docx(report, Path("resources/MAIN_TEST.docx"), report_folder, allow_incomplete=True)))
+
+    @staticmethod
+    def _table(suffix: str) -> TableFragment:
+        return TableFragment(
+            frag_id=f"f_table_{suffix}", type="table",
+            header=[ListItem(runs=[Run(text="Header")])],
+            rows=[[ListItem(runs=[Run(text=f"Row {suffix}")])]],
+        )
+
+    def test_a_table_is_followed_by_one_spacer_so_two_tables_never_merge(self) -> None:
+        """A table fragment contributes only its w:tbl, and Word silently merges adjacent tables."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="description", fragments=[self._table("a"), self._table("b")]),
+                Content(type="recommended_remediation", fragments=[ParagraphFragment(frag_id="f_fix", type="paragraph", runs=[Run(text="Apply the fix.")])]),
+                Content(type="proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])]),
+                    ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_layout", caption="Production response"),
+                ]),
+            ])
+            body = list(document.element.body.iterchildren())
+            for left, right in zip(body, body[1:]):
+                self.assertFalse(left.tag == qn("w:tbl") and right.tag == qn("w:tbl"), "adjacent tables merge into one in Word")
+
+            first = next(index for index, element in enumerate(body) if element.tag == qn("w:tbl") and "Row a" in "".join(node.text or "" for node in element.iter(qn("w:t"))))
+            spacer = body[first + 1]
+            self.assertTrue(_is_blank_paragraph(spacer), "a mid-section table needs a spacer below it")
+            self.assertEqual(body[first + 2].tag, qn("w:tbl"), "exactly one spacer, not two")
+            properties = spacer.find(qn("w:pPr"))
+            # An empty paragraph carrying either of these is read back as a fragment by docx_import.
+            self.assertIsNone(properties.find(qn("w:numPr")), "a numbered spacer imports as a phantom list")
+            self.assertIsNone(properties.find(qn("w:pStyle")), "a caption-styled spacer erases the previous image caption")
+
+            last_table = body[first + 2]
+            blanks = 0
+            following = last_table.getnext()
+            while following is not None and _is_blank_paragraph(following):
+                blanks += 1
+                following = following.getnext()
+            self.assertEqual(blanks, 1, "a table ending a section keeps only the template blank; its spacer is trimmed")
+
+    def test_section_headings_are_kept_on_the_page_with_the_content_below_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            paragraph = lambda name: [ParagraphFragment(frag_id=f"f_{name}", type="paragraph", runs=[Run(text=f"The {name} text.")])]
+            document = self._layout_document(report_folder, [
+                Content(type="description", fragments=paragraph("description")),
+                Content(type="recommended_remediation", fragments=paragraph("remediation")),
+                Content(type="previous_proof_of_concept", fragments=[ListFragment(frag_id="f_prev", type="numbered_list", items=[ListItem(runs=[Run(text="Reproduce it.")])])]),
+                Content(type="proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])]),
+                    ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_layout", caption="Production response"),
+                ]),
+                Content(type="in_conclusion", fragments=paragraph("conclusion")),
+            ], status="open_previously_discovered")
+
+            for title in ("Description:", "Recommended Remediation:", "Previous Proof of Concept:", "Proof of Concept:", "In Conclusion:", "The following demonstrates the vulnerability:"):
+                heading = next(item for item in document.paragraphs if item.text.strip() == title)
+                self.assertTrue(_keeps_next(heading._p), f"{title!r} must be kept with its content")
+                previous = heading._p.getprevious()
+                if previous is not None and _is_blank_paragraph(previous):
+                    self.assertFalse(_keeps_next(previous), f"the walk above {title!r} must stop at the blank")
+
+            # Filled by token replacement rather than an anchor, so the walk cannot reach it. Pinned
+            # so the gap stays visible instead of being mistaken for coverage.
+            ticket = next(item for item in document.paragraphs if item.text.strip() == "Severity Review Ticket (if applicable):")
+            self.assertFalse(_keeps_next(ticket._p))
+            title = next(item for item in document.paragraphs if item.text.strip() == "Layout finding")
+            self.assertFalse(_keeps_next(title._p), "a finding title already carries its own page break")
+
+    def test_labels_titles_and_lead_ins_are_kept_with_what_they_introduce(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="description", fragments=[
+                    ParagraphFragment(frag_id="f_lead", type="paragraph", runs=[Run(text="Use these values:")]),
+                    self._table("a"),
+                    CodeFragment(frag_id="f_code", type="code_block", caption="Request", text="GET /accounts/123"),
+                    CodeFragment(frag_id="f_bare", type="code_block", caption=None, text="GET /health"),
+                ]),
+                Content(type="recommended_remediation", fragments=[ParagraphFragment(frag_id="f_fix", type="paragraph", runs=[Run(text="Apply the fix.")])]),
+                Content(type="proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])]),
+                    InstanceTitleFragment(frag_id="f_instance", type="instance_title", text="Instance 1: Production"),
+                    ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_layout", caption="Production response"),
+                ]),
+            ])
+            body = list(document.element.body.iterchildren())
+            text_of = lambda element: "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
+
+            for label in ("PROD:", "Instance 1: Production", "Request"):
+                element = next(item for item in body if item.tag == qn("w:p") and text_of(item) == label)
+                self.assertTrue(_keeps_next(element), f"{label!r} must be kept with what follows it")
+
+            lead_in = next(item for item in body if item.tag == qn("w:p") and text_of(item) == "Use these values:")
+            self.assertTrue(_keeps_next(lead_in), "a table lead-in must not be stranded above its table")
+            self.assertTrue(_keeps_next(lead_in.getnext()), "the blank between a lead-in and its table must not break the chain")
+
+            # Located from the caption, because the template's own cover art is the first drawing.
+            caption = next(item for item in body if item.tag == qn("w:p") and text_of(item).endswith("Production response"))
+            image = caption.getprevious()
+            self.assertTrue(image.xpath(".//w:drawing"), "the caption must sit directly below its image")
+            self.assertTrue(_keeps_next(image), "an image must stay with its caption")
+            self.assertFalse(_keeps_next(caption), "a caption ends a chain and must not start another")
+
+            bare_code = next(item for item in body if item.tag == qn("w:p") and text_of(item) == "GET /health")
+            self.assertFalse(_keeps_next(bare_code.getprevious()), "an uncaptioned code block has no heading to keep")
 
     def _assert_image_fragment_format(self, document) -> None:
         for index in range(len(document.inline_shapes)):

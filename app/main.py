@@ -19,13 +19,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import ValidationError
+from starlette.requests import ClientDisconnect
 
 from app.models import Content, EvidenceItem, LibraryRef, Report, Scope, Vulnerability, normalise_scope_modes
 from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, render_report_docx
 from .library import Library
-from .docx_import import ReportImportError, parse_report_docx
+from .docx_import import parse_report_docx
 from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots
 from .storage import atomic_write_bytes
 from .workspace import StaleReportError, Workspace, app_id_for
@@ -250,7 +251,11 @@ def decode_json_object(contents: bytes) -> dict:
 
 async def read_json_object(request: Request) -> dict:
     """Read a request body asynchronously and decode it in the worker pool."""
-    return await run_in_threadpool(decode_json_object, await request.body())
+    try:
+        contents = await request.body()
+    except ClientDisconnect as error:
+        raise HTTPException(400, "Request body was interrupted") from error
+    return await run_in_threadpool(decode_json_object, contents)
 
 
 def provision_report(report: Report) -> None:

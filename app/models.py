@@ -193,8 +193,17 @@ class Vulnerability(BaseModel):
     # refused. Kept on the finding because both library insert paths rebuild library_ref from scratch.
     poc_variants: list[Channel] = Field(default_factory=list)
     poc_variant_declined: list[Channel] = Field(default_factory=list)
-    # Per content section, the library_id whose keep/replace/add offer has been resolved, so it stops reappearing.
+    # Per content section, the library_id whose keep/replace/add offer has been resolved. Write-only
+    # since the offer started keying off content instead: kept because dropping a declared field
+    # silently deletes it from every draft on the next save.
     content_offer_resolved: dict[ContentType, StableId] = Field(default_factory=dict)
+    # Per content section, an opaque client-computed fingerprint of what that section held when its
+    # library offer was last answered. The offer returns the moment the section no longer matches.
+    content_offer_dismissed: dict[ContentType, StableId] = Field(default_factory=dict)
+    # The proof-of-concept last lines the In Conclusion offer has already put to the tester, accepted
+    # or dismissed. Stores the text itself because a list item has no id and the textarea rewrites
+    # every item on any keystroke, so there is nothing stable to point at.
+    conclusion_offer_resolved: list[str] = Field(default_factory=list)
     contents: list[Content] = Field(default_factory=list)
 
 

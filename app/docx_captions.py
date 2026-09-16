@@ -11,7 +11,6 @@ from tempfile import TemporaryDirectory
 
 from docx import Document
 from docx.document import Document as DocumentType
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -174,7 +173,8 @@ def _replace_with_native_caption(paragraph, caption_text: str, number: int) -> N
     _append_field_character(paragraph, "separate", base_properties)
     _append_text_run(paragraph, str(number), base_properties)
     _append_field_character(paragraph, "end", base_properties)
-    _append_text_run(paragraph, f" {caption_text}", base_properties)
+    # Outside the field, so Word renumbering never rewrites the separator away.
+    _append_text_run(paragraph, f". {caption_text}", base_properties)
 
 
 def _new_run(properties):

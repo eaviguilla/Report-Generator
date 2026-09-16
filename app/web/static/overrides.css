@@ -117,6 +117,9 @@ button.danger { color: var(--danger); }
 .finding-title-cell > input { width: calc(100% - 28px); }
 .finding-title-cell > input:not([hidden]) { position: absolute; top: 7px; left: 35px; width: calc(100% - 44px); }
 .finding-id-display { display: flex; width: 100%; min-height: 34px; align-items: center; justify-content: center; overflow: hidden; padding: 0; border: 0; color: var(--ink); background: transparent; cursor: text; font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.finding-id-display.is-empty { color: var(--muted); }
+/* No stylesheet reinstates the browser's own [hidden] rule, so display:flex above would outlive it. */
+.finding-title-display[hidden], .finding-id-display[hidden] { display: none; }
 #setup[data-step="findings"] td:nth-child(5) { position: relative; }
 #setup[data-step="findings"] th:nth-child(5), #setup[data-step="findings"] td:nth-child(5) { min-width: 90px; }
 #setup[data-step="findings"] td:nth-child(5) input:not([hidden]) { position: absolute; inset: 7px 10px; width: calc(100% - 20px); min-width: 0; text-align: center; }
@@ -147,8 +150,8 @@ button.danger { color: var(--danger); }
 .select-all.is-selected { color: var(--danger); }
 .remove-location { width: 24px; height: 24px; min-height: 24px; padding: 0; border-color: var(--line); border-radius: 3px; color: var(--danger); background: #fff; font-size: 14px; line-height: 1; }
 .remove-location:hover { border-color: var(--danger); background: #fff3f2; }
-.location-preview { cursor: pointer; font-size: 11px; }
-.finding-location textarea.location-value { min-height: 28px; height: 28px; padding: 5px 7px; resize: none; overflow: hidden; overflow-wrap: normal; word-break: normal; line-height: 1.35; }
+.location-preview { cursor: pointer; font-size: 11px; overflow-wrap: anywhere; }
+.finding-location textarea.location-value { min-height: 28px; padding: 5px 7px; resize: none; overflow: hidden; overflow-wrap: anywhere; line-height: 1.35; }
 .location-lines-editor { display: grid; gap: 4px; margin-top: 10px; color: var(--muted); font-size: 11px; text-transform: uppercase; }
 .location-lines-input { position: relative; display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: start; }
 .location-lines-gutter { padding-top: 6px; color: var(--muted); font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; text-align: right; user-select: none; }
@@ -269,14 +272,12 @@ button.danger { color: var(--danger); }
 
 .review-panel { position: static; align-self: stretch; padding: 14px 10px; border-left: 1px solid var(--line); background: var(--surface-raised); }
 .review-heading { position: sticky; top: -14px; z-index: 1; display: flex; align-items: center; justify-content: space-between; margin: 0 -10px 11px; padding: 14px 10px 11px; border-bottom: 1px solid var(--line); color: var(--ink); background: #fff; font-size: 11px; font-weight: 700; }
-.review-heading b { padding: 3px 6px; border-radius: 8px; color: #fff; background: var(--danger); font-size: 9px; }
-.review-item { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 7px; margin-bottom: 8px; padding: 9px 10px; border-radius: 3px; color: var(--ink-soft); background: transparent; font-size: 10px; line-height: 1.3; }
-.review-item b { font-weight: 600; }
-.review-item span:not(.review-icon) { color: var(--ink-soft); }
-.review-icon { display: grid; width: 11px; height: 11px; place-items: center; margin-top: 1px; border-radius: 50%; color: #fff; background: var(--warning); font-size: 8px; font-weight: 700; line-height: 1; }
-.review-item button { display: block; margin-top: 3px; padding: 0; border: 0; border-radius: 0; color: var(--accent); background: transparent; font-size: 9px; font-weight: 700; line-height: 1.2; text-align: left; text-decoration: underline; }
-.review-item button:hover { color: var(--accent-strong); }
-.review-item.warning { color: var(--ink-soft); background: transparent; }
+#review-fold-all { display: grid; width: 20px; min-width: 20px; height: 20px; min-height: 20px; place-items: center; margin-left: auto; margin-right: 7px; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--ink-soft); background: transparent; }
+#review-fold-all svg { width: 13px; height: 13px; transition: transform 140ms ease; }
+#review-fold-all[aria-pressed="true"] svg { transform: rotate(180deg); }
+#review-fold-all:hover { border-color: var(--accent); color: var(--accent-strong); background: transparent; }
+#fold-all-findings { padding: 5px 10px; font-size: 11px; white-space: nowrap; }
+.review-heading b { padding: 3px 6px; border-radius: 8px; color: #fff; font-size: 9px; }
 .review-empty { padding: 9px; border-left: 3px solid var(--accent); color: #42629c; background: var(--accent-soft); font-size: 11px; line-height: 1.35; }
 .review-note { margin: 14px 0 0; color: var(--muted); font-size: 10px; font-style: italic; line-height: 1.4; }
 
@@ -298,12 +299,25 @@ input[data-path*="scope"],
 .finding-summary-bar { font-weight: 500; }
 .finding-assessment { font-family: "Inter", "Segoe UI", sans-serif !important; }
 .content-toggle small { font-family: "Inter", "Segoe UI", sans-serif !important; }
-.content-guidance { margin: 0 0 8px; padding: 7px 9px; border-left: 3px solid #d59a25; color: #6f5319; background: #fff9e8; font-size: 10px; line-height: 1.4; }
-.poc-offer, .content-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; padding: 7px 9px; border-left: 3px solid var(--accent); background: var(--accent-soft); }
-.poc-offer p, .content-offer p { flex: 1 1 220px; margin: 0; color: var(--ink-soft); font-size: 10px; line-height: 1.4; }
-.poc-offer button, .content-offer button { font-size: 10px; padding: 4px 9px; }
-.poc-offer-variants { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 10px; }
-.poc-offer-variants label { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+/* A ruled aside rather than a banner: a suggestion must never outweigh the prose it offers to replace. */
+.poc-offer, .content-offer { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 11px; padding: 0 0 10px; border: 0; border-bottom: 1px solid var(--line-strong); background: transparent; }
+.offer-mark { flex: 0 0 auto; width: 13px; height: 13px; margin-top: 1px; color: var(--warning); }
+.offer-body { flex: 1; min-width: 0; }
+.poc-offer p, .content-offer p { margin: 0; color: var(--ink-soft); font-size: 10.5px; line-height: 1.5; }
+.offer-channels { display: inline-flex; overflow: hidden; margin-top: 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
+.offer-channels button { min-height: 0; padding: 3px 9px; border: 0; border-radius: 0; color: var(--muted); background: var(--panel); font-size: 10px; font-weight: 650; }
+.offer-channels button + button { border-left: 1px solid var(--line-strong); }
+.offer-channels button[aria-pressed="true"] { color: var(--accent-strong); background: var(--accent-soft); }
+.offer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 7px; }
+.offer-actions button.primary { min-height: 0; padding: 3px 10px; border: 0; border-radius: var(--radius-sm); color: #fff; background: var(--accent); font-size: 10px; font-weight: 700; }
+.offer-actions button.primary:hover:not(:disabled) { background: var(--accent-strong); }
+.offer-actions button.subtle { min-height: 0; padding: 4px 2px; border: 0; border-radius: var(--radius-sm); color: var(--accent-strong); background: transparent; font-size: 10px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.offer-actions button.subtle:hover:not(:disabled) { color: var(--accent); background: transparent; }
+.offer-actions button.offer-dismiss { margin-left: auto; color: var(--muted); text-decoration: none; }
+.offer-actions button.offer-dismiss:hover:not(:disabled) { color: var(--ink-soft); text-decoration: underline; text-underline-offset: 3px; }
+/* Not an offer: nothing to act on, so it is quieter than one and carries no rule or mark. */
+.content-locked { margin: 0 0 11px; color: var(--muted); font-size: 10.5px; font-style: italic; line-height: 1.5; }
+.review-tag { display: inline-block; margin-right: 5px; padding: 0 5px; border: 1px dashed var(--warning); border-radius: var(--radius-pill); color: var(--warning); font-size: 8px; font-style: normal; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
 
 .vr-dialog-backdrop { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(1, 4, 9, 0.55); }
 .vr-dialog { width: min(560px, 100%); max-height: 85vh; overflow-y: auto; padding: 18px 20px 16px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }

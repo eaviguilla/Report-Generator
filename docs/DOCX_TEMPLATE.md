@@ -127,9 +127,25 @@ Detail sections are generated dynamically:
 
 Each fragment is emitted as a distinct paragraph, list, table, note, code block,
 or image/caption pair using its corresponding document under
-`resources/fragments/`. Rich-text bold, italic, and underline values are layered
+`resources/fragments/`. A table fragment is the exception: only the `w:tbl`
+element of `table_fragment.docx` is used and every paragraph in it is discarded,
+so the renderer appends one empty paragraph after each table. Without it two
+consecutive table fragments become adjacent `w:tbl` siblings, which Word merges
+into a single table. Rich-text bold, italic, and underline values are layered
 onto the formatting supplied by the fragment document. Numbered lists restart
 for each list fragment and increment within that list.
+
+Word decides automatic page breaks itself and never records them in the file, so
+the renderer cannot detect one and move things around it. Instead it sets
+`w:keepNext` on anything that introduces content: section headings (found by
+walking back from their `{{...-fragments-here}}` anchor, never by matching the
+heading text, so `SECTION_HEADINGS` in `app/docx_import.py` stays the only place
+those strings live), the `PROD:`/`UAT:` evidence labels, instance titles, code
+captions, an image that has a caption, and the lead-in paragraph above a table.
+Two cases are deliberately uncovered: `Severity Review Ticket (if applicable):`,
+which is filled by token replacement and has no anchor to walk back from, and an
+uncaptioned code block, which is a run of ordinary paragraphs with no
+all-or-nothing block to strand.
 
 Fragment-template blank paragraphs are preserved between fragments and trimmed
 at content-section boundaries. Generated evidence images clone the centered

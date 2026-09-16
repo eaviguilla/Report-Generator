@@ -560,6 +560,100 @@ class DocxReportTests(unittest.TestCase):
             everything = "\n".join([*(p.text for p in rendered.paragraphs), *(c.text for t in rendered.tables for r in t.rows for c in r.cells)])
             self.assertNotIn("v_unnumbered", everything)
 
+    @staticmethod
+    def _numbering_details(document, paragraph) -> tuple[str, str | None, int | None]:
+        """The numId, nsid and level-0 startOverride behind one list paragraph."""
+        numbering = document.part.numbering_part.element
+        numbering_id = str(paragraph._p.pPr.numPr.numId.val)
+        number = next(element for element in numbering.iterchildren(qn("w:num")) if element.get(qn("w:numId")) == numbering_id)
+        abstract_id = number.find(qn("w:abstractNumId")).get(qn("w:val"))
+        abstract = next(element for element in numbering.iterchildren(qn("w:abstractNum")) if element.get(qn("w:abstractNumId")) == abstract_id)
+        nsid = abstract.find(qn("w:nsid"))
+        override = next(
+            (level.find(qn("w:startOverride")) for level in number.iterchildren(qn("w:lvlOverride")) if level.get(qn("w:ilvl")) == "0"),
+            None,
+        )
+        return (
+            numbering_id,
+            nsid.get(qn("w:val")) if nsid is not None else None,
+            int(override.get(qn("w:val"))) if override is not None else None,
+        )
+
+    def _numbered_sections(self, report_folder: Path, *, continue_second: bool):
+        """A proof of concept holding two numbered lists either side of an image, plus one in the
+        description, so a continued chain can be told apart from a section boundary."""
+        contents = [
+            Content(type="description", fragments=[
+                ListFragment(frag_id="f_desc_list", type="numbered_list", items=[ListItem(runs=[Run(text="Description step")])]),
+            ]),
+            Content(type="recommended_remediation", fragments=[
+                ParagraphFragment(frag_id="f_rem", type="paragraph", runs=[Run(text="Remediate it")]),
+            ]),
+            Content(type="proof_of_concept", fragments=[
+                ListFragment(frag_id="f_poc_one", type="numbered_list", items=[
+                    ListItem(runs=[Run(text="First step")]), ListItem(runs=[Run(text="Second step")]),
+                ]),
+                ImageFragment(frag_id="f_poc_img", type="image", environment="production", evidence_id="ev_layout", caption="Proof"),
+                ListFragment(frag_id="f_poc_two", type="numbered_list", continue_numbering=continue_second, items=[
+                    ListItem(runs=[Run(text="Third step")]), ListItem(runs=[Run(text="Fourth step")]),
+                ]),
+            ]),
+        ]
+        document = self._layout_document(report_folder, contents)
+        listed = [paragraph for paragraph in document.paragraphs if paragraph._p.pPr is not None and paragraph._p.pPr.numPr is not None]
+        by_text = {paragraph.text: self._numbering_details(document, paragraph) for paragraph in listed}
+        return by_text
+
+    def test_a_continued_numbered_list_shares_one_numbering_with_the_list_above_it(self) -> None:
+        """Word reads one numId as one list, so a chain shares it and writes a single startOverride.
+        The chain shares its nsid too, which is why the control case below checks both."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            details = self._numbered_sections(Path(temporary_directory), continue_second=True)
+
+            steps = [details[text] for text in ("First step", "Second step", "Third step", "Fourth step")]
+            self.assertEqual(len({numbering_id for numbering_id, _, _ in steps}), 1, "a continued list did not join the list above it")
+            self.assertEqual(len({nsid for _, nsid, _ in steps}), 1)
+            # One numId means one w:num, so there is one startOverride behind all four paragraphs --
+            # the count is restarted once, at the top of the chain, and never again inside it.
+            self.assertEqual({override for _, _, override in steps}, {1}, "a continued list restarted the count")
+
+            self.assertNotEqual(
+                details["Description step"][0], steps[0][0],
+                "description shares numbering with the proof of concept, so a chain could cross sections",
+            )
+
+    def test_two_numbered_lists_in_one_section_restart_independently_by_default(self) -> None:
+        """New coverage, not a re-assertion: nothing else pins this. The component test that looks
+        similar drives compose_docx_template, which render_report_docx never calls, and its two lists
+        differ only because they sit at separate anchors. This is what stands between a future edit
+        and silently renumbering every report on disk."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            details = self._numbered_sections(Path(temporary_directory), continue_second=False)
+
+            first, second = details["First step"], details["Third step"]
+            self.assertNotEqual(first[0], second[0], "two independent lists shared a numId")
+            self.assertNotEqual(first[1], second[1], "two independent lists shared an nsid")
+            self.assertEqual((first[2], second[2]), (1, 1), "each independent list needs its own restart")
+
+    def test_an_instance_label_is_numbered_once_even_when_the_tester_typed_it(self) -> None:
+        """Three of the instance titles already saved carry the label in their text, from before the
+        generator wrote it. Rendering both would read 'Instance 1: Instance 1: Production'."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="proof_of_concept", fragments=[
+                    InstanceTitleFragment(frag_id="f_typed", type="instance_title", text="Instance 7: Production"),
+                    InstanceTitleFragment(frag_id="f_plain", type="instance_title", text="Non-Production"),
+                ]),
+            ])
+            text_of = lambda element: "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
+            titles = [
+                text_of(item) for item in document.element.body.iterchildren()
+                if item.tag == qn("w:p") and "Production" in text_of(item)
+            ]
+            # The tester's own number goes too: the position in the section is the truth, not the typing.
+            self.assertEqual(titles, ["Instance 1: Production", "Instance 2: Non-Production"])
+
     def _layout_document(self, report_folder: Path, contents: list, *, status: str = "open_new"):
         """Render one finding through the shipped template, for page-layout assertions."""
         evidence_folder = report_folder / "evidence"

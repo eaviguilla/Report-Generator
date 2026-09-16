@@ -114,7 +114,7 @@ class FragmentRecognitionTests(unittest.TestCase):
                     ("Validate independently.", "note"),
                     ("A bullet.", "bulleted_list"),
                     ("Send the request.", "numbered_list"),
-                    ("First instance", "instance_title"),
+                    ("Instance 1: First instance", "instance_title"),
                     ("GET /accounts/123", "code_block"),
                     ("Request", "caption"),
                 ):

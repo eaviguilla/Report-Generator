@@ -82,6 +82,9 @@ class ListFragment(BaseModel):
     frag_id: StableId
     type: Literal["numbered_list", "bulleted_list"]
     items: list[ListItem] = Field(min_length=1)
+    # Carry on from the nearest numbered list before this one in the same section, instead of
+    # restarting at 1. Inert on a bulleted list, and on the first numbered list of a section.
+    continue_numbering: bool = False
 
 
 class TableFragment(BaseModel):

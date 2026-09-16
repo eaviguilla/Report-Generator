@@ -31,6 +31,7 @@ from app.models import (
     Vulnerability,
 )
 from .docx_captions import add_native_image_captions
+from .docx_import import INSTANCE_PREFIX
 from .docx_components import (
     RATING_FONT_COLORS,
     clone_component_elements,
@@ -137,7 +138,7 @@ def generation_issues(report: Report) -> list[str]:
                         missing.append("caption")
                     if missing:
                         issues.append(f"{label}: {'/'.join(missing)} required for image fragment")
-                elif isinstance(fragment, (CodeFragment, InstanceTitleFragment)) and not fragment.text.strip():
+                elif isinstance(fragment, CodeFragment) and not fragment.text.strip():
                     issues.append(f"{label}: {fragment.type} text is required")
                 elif isinstance(fragment, TableFragment):
                     cells = [*fragment.header, *(cell for row in fragment.rows for cell in row)]
@@ -687,6 +688,31 @@ def _render_environment_label(
     return elements
 
 
+def _render_instance_title(
+    document: DocumentType,
+    component_root: Path,
+    fragment: InstanceTitleFragment,
+    number: int,
+) -> list:
+    """The number is the report's and the title is the tester's, so an untitled instance still reads."""
+    # Drafts written before the label was generated have it typed into the title by hand.
+    title = INSTANCE_PREFIX.sub("", fragment.text.strip())
+    # The label is the app's own and stays bold; the tester's words are content, not heading.
+    runs = [Run(text=f"Instance {number}:", bold=True)]
+    if title:
+        runs.append(Run(text=f" {title}"))
+    elements = _render_text_component(
+        document,
+        component_root,
+        "instance_title",
+        runs,
+    )
+    for element in elements:
+        if element.tag == qn("w:p"):
+            _keep_with_next(element)
+    return elements
+
+
 def _render_component_content(
     document: DocumentType,
     content: Content | None,
@@ -713,7 +739,18 @@ def _render_component_content(
     else:
         rendered = []
         labelled_environment = None
+        # Declared here, in the body, and nowhere higher: this is what confines a continued chain to
+        # one section. _render_component_content runs once per anchor per finding, so a numbered list
+        # can never continue one from another section or another finding.
+        numbering_carry: dict[tuple[Path, int], int] | None = None
+        instance_number = 0
         for fragment in fragments:
+            # Numbered here rather than in the fragment renderer, so the count is confined to this
+            # section the same way the numbered-list chain above is.
+            if isinstance(fragment, InstanceTitleFragment):
+                instance_number += 1
+                rendered.extend(_render_instance_title(document, component_root, fragment, instance_number))
+                continue
             # One label per run of images.
             if (
                 label_images
@@ -723,6 +760,14 @@ def _render_component_content(
             ):
                 labelled_environment = fragment.environment
                 rendered.extend(_render_environment_label(document, component_root, report, fragment.environment))
+            if isinstance(fragment, ListFragment) and fragment.type == "numbered_list":
+                # Anything else between two lists leaves the carry alone, so a chain survives an
+                # image or an instance title -- the shape this option exists for.
+                if not (fragment.continue_numbering and numbering_carry is not None):
+                    numbering_carry = {}
+                fragment_numbering = numbering_carry
+            else:
+                fragment_numbering = None
             rendered.extend(
                 _render_component_fragment(
                     document,
@@ -731,6 +776,7 @@ def _render_component_content(
                     report_folder,
                     component_root,
                     allow_incomplete,
+                    numbering_ids=fragment_numbering,
                 )
             )
     rendered = _trim_trailing_empty_paragraphs(rendered)
@@ -745,6 +791,10 @@ def _render_component_fragment(
     report_folder: Path,
     component_root: Path,
     allow_incomplete: bool,
+    *,
+    # Never `{}`: a mutable default is built once at import and would join every list in the report
+    # into one chain. None means "your own cache", which is what makes each list restart.
+    numbering_ids: dict[tuple[Path, int], int] | None = None,
 ) -> list:
     if isinstance(fragment, ParagraphFragment):
         return _render_text_component(document, component_root, "paragraph", fragment.runs)
@@ -753,7 +803,11 @@ def _render_component_fragment(
     if isinstance(fragment, ListFragment):
         component_type = "numbered_list" if fragment.type == "numbered_list" else "bulleted_list"
         filename, token = FRAGMENT_COMPONENT_FILES[component_type]
-        numbering_ids: dict[tuple[Path, int], int] = {}
+        # A cache hit inside _remap_numbering reuses the allocated numId and writes no startOverride,
+        # which is exactly what Word reads as one continuing list. _restart_numbering_levels takes its
+        # levels from the chain's first clone group; harmless while every clone is the same component.
+        if numbering_ids is None:
+            numbering_ids = {}
         rendered = []
         for item in fragment.items:
             elements = clone_component_elements(

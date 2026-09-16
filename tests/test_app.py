@@ -23,7 +23,7 @@ from pydantic import ValidationError
 from starlette.requests import ClientDisconnect
 
 from app import main
-from app import report_service
+from app import docx_report, models, report_service
 from app.docx_report import _finding_locations, _metadata, generation_issues
 from app.library import Library
 from app.report_service import affected_channels, affected_environments, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
@@ -1795,6 +1795,30 @@ class ReportApiTests(unittest.TestCase):
         conclusion.fragments[0].runs = [*report_service.status_conclusion_runs("Quoted", "Open"), Run(text=" The account was fully exposed.")]
         self.assertNotIn(issue, generation_issues(report), "prose after the sentence was treated as boilerplate")
 
+    def test_a_list_fragment_without_the_continue_key_loads_and_gains_the_default(self) -> None:
+        """Every list fragment on disk predates this field, so the model default is the whole
+        migration. A load_path repair would rewrite the file to write a value nothing was missing."""
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{
+            "uid": "v_lists", "title": "Lists", "status": "open_new",
+            "likelihood": "low", "impact": "low", "severity": "low",
+            "contents": [{"type": "description", "fragments": [
+                {"frag_id": "f_old", "type": "numbered_list", "items": [{"runs": [{"text": "Step"}]}]},
+                {"frag_id": "f_set", "type": "numbered_list", "continue_numbering": True, "items": [{"runs": [{"text": "Next"}]}]},
+            ]}],
+        }]
+        stored = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(stored.status_code, 200)
+
+        fragments = next(
+            content for content in stored.json()["report"]["vulnerabilities"][0]["contents"]
+            if content["type"] == "description"
+        )["fragments"]
+        by_id = {fragment["frag_id"]: fragment for fragment in fragments}
+        self.assertIs(by_id["f_old"]["continue_numbering"], False, "a fragment without the key did not gain the default")
+        self.assertIs(by_id["f_set"]["continue_numbering"], True, "an explicit value did not survive the round trip")
+
     def test_the_conclusion_offer_memory_round_trips_and_refuses_null(self) -> None:
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
@@ -1866,6 +1890,58 @@ class ReportApiTests(unittest.TestCase):
         missing = self.client.get("/reports/anystring", headers={"accept": "text/html"})
         self.assertEqual(missing.status_code, 404)
         self.assertIn('href="/"', missing.text)
+
+
+class TwinRuleTests(unittest.TestCase):
+    """A rule living in two languages is only as findable as the pointers between its halves.
+
+    `docs/DATA_MAP.md` section 12 lists roughly thirty such pairs and only one of them has a
+    behavioural drift guard. These tests do not check that the halves agree -- that needs a browser
+    -- but they do keep the pointers honest, so a rename cannot quietly orphan one side."""
+
+    MODULES = {"report_service": report_service, "models": models, "docx_report": docx_report}
+    # `models.py` reads as module.symbol to the regex below but names a file, not a rule.
+    FILE_SUFFIXES = {"py", "js", "md"}
+
+    def named_symbols(self, text: str) -> list[tuple[str, str]]:
+        return [
+            (module_name, symbol)
+            for module_name, symbol in re.findall(r"\b(report_service|models|docx_report)\.(\w+)", text)
+            if symbol not in self.FILE_SUFFIXES
+        ]
+
+    def twin_comments(self) -> list[str]:
+        source = (Path(__file__).resolve().parent.parent / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        return [line.strip() for line in source.splitlines() if "Twin of" in line]
+
+    def test_every_twin_comment_points_at_a_symbol_that_still_exists(self) -> None:
+        comments = self.twin_comments()
+        # A floor, so deleting the comments cannot turn this test green by having nothing to check.
+        self.assertGreaterEqual(len(comments), 15, "the twin markers in app.js have gone missing")
+        checked = 0
+        for comment in comments:
+            for module_name, symbol in self.named_symbols(comment):
+                checked += 1
+                self.assertTrue(
+                    hasattr(self.MODULES[module_name], symbol),
+                    f"app.js claims a twin of {module_name}.{symbol}, which no longer exists: {comment}",
+                )
+        self.assertGreaterEqual(checked, 12, "no twin markers named a Python symbol, so nothing was verified")
+
+    def test_the_data_map_twin_table_names_symbols_that_still_exist(self) -> None:
+        """Section 12 is hand-maintained prose. Renaming a rule and forgetting the table is exactly
+        how it came to claim `validateCurrentPage` was assigned in only one place."""
+        data_map = (Path(__file__).resolve().parent.parent / "docs" / "DATA_MAP.md").read_text(encoding="utf-8")
+        section = data_map.split("## 12. Rules that exist twice", 1)[1].split("## 13.", 1)[0]
+        # Only the Python column is checkable from here; the JavaScript half has no importable names.
+        rows = [line for line in section.splitlines() if line.startswith("| `") or line.startswith("| ")]
+        self.assertGreaterEqual(len(rows), 20, "the twin table in DATA_MAP.md has shrunk unexpectedly")
+        missing = []
+        for row in rows:
+            for module_name, symbol in self.named_symbols(row):
+                if not hasattr(self.MODULES[module_name], symbol):
+                    missing.append(f"{module_name}.{symbol}")
+        self.assertEqual(missing, [], f"DATA_MAP section 12 names Python symbols that no longer exist: {missing}")
 
 
 if __name__ == "__main__":

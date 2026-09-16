@@ -3313,12 +3313,15 @@
     // because it would destroy the caret. Without this, an offer earned by an edit waited for a
     // section toggle or a reload. reportchange already fires 100ms after every keystroke.
     const refreshContentOffers = () => {
-      // Never while a field has focus: it covers the caret's own block and, because description sits
-      // beside remediation in one grid row, the sibling that would otherwise move it.
-      if (activeTextEntry()) return;
       const finding = report.vulnerabilities.find(candidate => candidate.uid === selectedFindingUid);
       if (!finding) return;
+      // Only the caret's own block is held back, because only there would a new banner shift the
+      // line being typed into. .content-row is align-items:start, so a banner in one column never
+      // moves its neighbour. Skipping every block instead left the conclusion quoting a proof step
+      // the tester had already replaced, until they happened to click away.
+      const focusedBlock = activeTextEntry()?.closest(".content-block");
       pane.querySelectorAll(".content-block.is-expanded").forEach(block => {
+        if (block === focusedBlock) return;
         const content = finding.contents?.find(candidate => candidate.type === block.dataset.contentType);
         if (!content) return;
         const existing = [...block.querySelectorAll(":scope > .content-offer, :scope > .poc-offer")];
@@ -3641,14 +3644,19 @@
           heading.innerHTML = `<span>${contentNames[content.type]}</span><span class="content-flag" aria-hidden="true" hidden></span><small>${content.fragments.length} fragment${content.fragments.length === 1 ? "" : "s"}</small>`;
           // Rebuilding the pane loses the reading position, so the toggled block is put back where it sat.
           heading.onclick = () => {
-            const paneTop = pane.getBoundingClientRect().top;
-            const anchor = Math.max(block.getBoundingClientRect().top - paneTop, 0);
+            const anchor = Math.max(block.getBoundingClientRect().top - pane.getBoundingClientRect().top, 0);
             if (isExpanded) expandedContentTypes.delete(content.type); else expandedContentTypes.add(content.type);
             render();
-            const moved = pane.querySelector(`[data-content-type="${content.type}"]`);
-            if (!moved) return;
-            pane.scrollTop += moved.getBoundingClientRect().top - paneTop - anchor;
-            moved.querySelector(".content-toggle")?.focus({preventScroll:true});
+            // Lists, tables and code blocks read scrollHeight to size themselves, which only answers
+            // once they are in the document, so they grow a frame after render() returns. Correcting
+            // now measures a layout that is still about to change, so it is done again once it has.
+            const settle = () => {
+              const moved = pane.querySelector(`[data-content-type="${content.type}"]`);
+              if (moved) pane.scrollTop += moved.getBoundingClientRect().top - pane.getBoundingClientRect().top - anchor;
+            };
+            settle();
+            requestAnimationFrame(settle);
+            pane.querySelector(`[data-content-type="${content.type}"] .content-toggle`)?.focus({preventScroll:true});
           };
           block.append(heading);
           if (!isExpanded) return block;
@@ -3718,7 +3726,11 @@
       if (focusedFindingUid) {
         requestAnimationFrame(() => { const focusedFinding = document.getElementById(`finding-${focusedFindingUid}`); focusedFinding?.scrollIntoView({behavior:"smooth", block:"start"}); focusedFinding?.focus({preventScroll:true}); });
       } else if (restoreScroll) {
+        // Lists, tables and code blocks read scrollHeight to size themselves, which only answers once
+        // they are in the document, so the pane is still short a frame from here and clamps this to
+        // whatever currently fits. Asked again once it has grown, the position survives.
         pane.scrollTop = restoreScroll;
+        requestAnimationFrame(() => { pane.scrollTop = restoreScroll; });
       }
     };
     render();

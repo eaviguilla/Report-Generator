@@ -30,7 +30,7 @@ from app.models import (
     TableFragment,
     Vulnerability,
 )
-from .docx_captions import add_native_image_captions
+from .docx_captions import add_native_image_captions, center_paragraph
 from .docx_import import INSTANCE_PREFIX
 from .docx_components import (
     RATING_FONT_COLORS,
@@ -969,6 +969,26 @@ def _is_empty_component_paragraph(element) -> bool:
     )
 
 
+def _render_image_caption(
+    document: DocumentType,
+    component_root: Path,
+    caption: str | None,
+) -> list:
+    """Centred body text; the post-processor finds it by that, since it carries no caption style."""
+    if not caption:
+        return []
+    elements = _render_text_component(
+        document,
+        component_root,
+        "paragraph",
+        [Run(text=caption)],
+    )
+    for element in elements:
+        if element.tag == qn("w:p"):
+            center_paragraph(element)
+    return elements
+
+
 def _render_caption_component(
     document: DocumentType,
     component_root: Path,
@@ -1020,7 +1040,7 @@ def _render_image_component(
         image_template,
     )
     image_elements = _trim_trailing_empty_paragraphs(image_elements)
-    caption_elements = _render_caption_component(document, component_root, _display_value(fragment.caption))
+    caption_elements = _render_image_caption(document, component_root, _display_value(fragment.caption))
     if caption_elements:
         _keep_with_next(paragraph_element)
     return [*image_elements, *caption_elements]

@@ -3175,8 +3175,14 @@
         jump.onclick = () => { selectedFindingUid = finding.uid; expandedContentTypes = undefined; render(); };
         nav.append(jump);
         // A long list can leave the open finding scrolled out of the rail, which is the other half
-        // of losing track of it; "nearest" does nothing when it is already in view.
-        if (finding.uid === selectedFindingUid) requestAnimationFrame(() => jump.scrollIntoView({block:"nearest", inline:"nearest"}));
+        // of losing track of it. Scrolled by hand rather than with scrollIntoView, which would move
+        // every scrollable ancestor too and undo the pane position render() has just restored.
+        if (finding.uid === selectedFindingUid) requestAnimationFrame(() => {
+          const item = jump.getBoundingClientRect();
+          const rail = nav.getBoundingClientRect();
+          if (item.top < rail.top) nav.scrollTop -= rail.top - item.top;
+          else if (item.bottom > rail.bottom) nav.scrollTop += item.bottom - rail.bottom;
+        });
       });
       // Setup context travels to Content so evidence choices don't depend on memory.
       const contextLabels = {production: "Production", non_production: "Non-Production"};

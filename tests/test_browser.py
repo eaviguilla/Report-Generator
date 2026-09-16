@@ -2051,6 +2051,26 @@ class BrowserWorkflowTests(unittest.TestCase):
             (False, "ready", False),
         )
 
+    def test_a_table_edit_on_screen_survives_adding_a_row(self) -> None:
+        """Add row redraws from the model, so a keystroke that has not reached it yet must be flushed first."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator(".content-block").filter(has_text="Description").first
+        description.get_by_role("combobox", name="Add fragment to Description").select_option("table")
+        cell = page.locator(".table-cell-input").last
+        cell.wait_for()
+        # The state the save-while-typing race leaves behind: on screen, but not in the model.
+        cell.evaluate("node => { node.value = 'UNCOMMITTED'; }")
+        description.get_by_role("button", name="Add row").click()
+        page.wait_for_function("() => document.querySelectorAll('.table-cell-input').length > 2")
+        self.assertIn(
+            "UNCOMMITTED",
+            page.locator(".table-cell-input").evaluate_all("nodes => nodes.map(node => node.value)"),
+            "the redraw dropped an edit that was still only on screen",
+        )
+
     def _library_finding(self, report_id: str, library_id: str = "VDB-047"):
         """A finding whose Description and Remediation hold that entry's own content, as an insert leaves it."""
         report = main.workspace.load(report_id)

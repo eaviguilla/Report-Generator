@@ -787,6 +787,45 @@ class DocxReportTests(unittest.TestCase):
             bare_code = next(item for item in body if item.tag == qn("w:p") and text_of(item) == "GET /health")
             self.assertFalse(_keeps_next(bare_code.getprevious()), "an uncaptioned code block has no heading to keep")
 
+    def test_multiline_text_fragments_render_as_paragraphs_not_manual_breaks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            document = self._layout_document(Path(temporary_directory), [
+                Content(type="description", fragments=[
+                    ParagraphFragment(
+                        frag_id="f_multiline_paragraph",
+                        type="paragraph",
+                        runs=[Run(text="First paragraph.\r\n"), Run(text="Second paragraph.", bold=True)],
+                    ),
+                    NoteFragment(
+                        frag_id="f_multiline_note",
+                        type="note",
+                        runs=[Run(text="First note paragraph.\nSecond note paragraph.")],
+                    ),
+                ]),
+                Content(type="recommended_remediation", fragments=[
+                    ParagraphFragment(frag_id="f_fix", type="paragraph", runs=[Run(text="Apply the fix.")]),
+                ]),
+                Content(type="proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])]),
+                    ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_layout", caption="Production response"),
+                ]),
+            ])
+
+            expected = [
+                "First paragraph.",
+                "Second paragraph.",
+                "Note: First note paragraph.",
+                "Second note paragraph.",
+            ]
+            paragraph_texts = [paragraph.text for paragraph in document.paragraphs]
+            indexes = [paragraph_texts.index(text) for text in expected]
+            paragraphs = [document.paragraphs[index] for index in indexes]
+            self.assertEqual(indexes[1], indexes[0] + 1)
+            self.assertEqual(indexes[3], indexes[2] + 1)
+            self.assertTrue(paragraphs[1].runs[0].bold, "formatting after the newline was lost")
+            self.assertEqual(sum(len(paragraph._p.findall(".//" + qn("w:br"))) for paragraph in paragraphs), 0)
+            self.assertEqual(sum(paragraph.text.startswith("Note:") for paragraph in paragraphs), 1)
+
     def _assert_image_fragment_format(self, document) -> None:
         for index in range(len(document.inline_shapes)):
             shape = document.inline_shapes[index]

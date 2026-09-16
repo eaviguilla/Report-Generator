@@ -22,7 +22,6 @@ from docx.text.paragraph import Paragraph
 from PIL import Image
 
 from .models import CHANNELS
-from .report_service import REPORT_TYPE_LABELS
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
 # renders one of every fragment type and fails if any of these stops identifying it.
@@ -55,7 +54,7 @@ STATUS_BY_LABEL = {
     "Resolved": "resolved",
 }
 RETAINED_STATUSES = {"open_new", "open_previously_discovered"}
-FIGURE_PREFIX = re.compile(r"^Figure\s+\d+\s*")
+FIGURE_PREFIX = re.compile(r"^Figure\s+\d+\s*[.:\-]?\s*")
 DISPLAY_ID = re.compile(r"^[0-9]{1,5}$")
 PRODUCTION_ROW = "Production Environment"
 

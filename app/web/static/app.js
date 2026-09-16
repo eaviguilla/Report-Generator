@@ -38,6 +38,7 @@
   };
   const localDraftPrefix = `vulnreport-pending:${reportId}`;
   const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
+  const tabRevisionKey = `vulnreport-saved-at:${reportId}`;
   let recoveryStorageError = null;
   let tabId;
   try {
@@ -50,7 +51,8 @@
     recoveryStorageError = error;
     tabId = crypto.randomUUID();
   }
-  const localDraftKey = `${localDraftPrefix}:${tabId}`;
+  const legacyLocalDraftKey = `${localDraftPrefix}:${tabId}`;
+  const localDraftKey = `${legacyLocalDraftKey}:${crypto.randomUUID()}`;
   const historyKey = `vulnreport-history:${reportId}`;
   let recoveredDraft = false;
   let recoveryCandidate = null;
@@ -107,10 +109,58 @@
   const statuses = [["open_new", "Open (New)"], ["open_previously_discovered", "Open (Previously Discovered)"], ["resolved", "Resolved"]];
   const contentNames = {description:"Description", recommended_remediation:"Recommended Remediation", previous_proof_of_concept:"Previous Proof of Concept", proof_of_concept:"Proof of Concept", in_conclusion:"In Conclusion"};
   const allowed = {description:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], recommended_remediation:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], previous_proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], in_conclusion:["paragraph","note"]};
-  // Twin of docx_report.generation_issues; these two carry the finding, so neither is ever left empty.
-  const requiresFragment = ["description", "recommended_remediation"];
+  // Twin of docx_report.generation_issues; these carry the finding, so none is ever left empty.
+  const requiresFragment = ["description", "recommended_remediation", "in_conclusion"];
   // Twin of report_service.RESOLVED_REMEDIATION.
   const RESOLVED_REMEDIATION = "None, the vulnerability has been remediated.";
+  // Twin of report_service.status_conclusion_runs and STATUS_CONCLUSION_PATTERN. The builder and the
+  // recogniser must stay a pair: relax one and every default on disk freezes at its stored title.
+  const statusConclusionRuns = (title, statusWord) => [
+    {text: `The finding "${title}" is ${statusWord === "Open" ? "still " : ""}`},
+    {text: statusWord, bold: true},
+    {text: "."},
+  ];
+  const STATUS_CONCLUSION_PATTERN = /^The finding "[\s\S]*" is(?: still)? (?:Open|Resolved)\./;
+  const defaultConclusionSpan = text => {
+    const stripped = text.trimEnd();
+    const marker = 'The finding "';
+    let index = stripped.lastIndexOf(marker);
+    while (index >= 0) {
+      const match = stripped.slice(index).match(STATUS_CONCLUSION_PATTERN);
+      if (match) return [index, index + match[0].length];
+      index = index > 0 ? stripped.lastIndexOf(marker, index - 1) : -1;
+    }
+    return null;
+  };
+  const defaultConclusionStart = text => {
+    const span = defaultConclusionSpan(text);
+    return span && span[1] === text.trimEnd().length ? span[0] : -1;
+  };
+  const runsUpTo = (runs, offset) => {
+    const kept = [];
+    let seen = 0;
+    for (const run of runs) {
+      if (seen >= offset) break;
+      const text = run.text.slice(0, Math.min(run.text.length, offset - seen));
+      if (text) kept.push({...run, text});
+      seen += run.text.length;
+    }
+    return kept;
+  };
+  const runsAfter = (runs, offset) => {
+    const kept = [];
+    let seen = 0;
+    for (const run of runs) {
+      const start = Math.max(0, offset - seen);
+      if (start < run.text.length) kept.push({...run, text:run.text.slice(start)});
+      seen += run.text.length;
+    }
+    return kept;
+  };
+  // The list gutter draws the markers, so a pasted "1." would render as "1. 1.". A separator is
+  // required, which is what keeps "1.2.3.4 is the host" intact; roman and lettered markers are too
+  // close to prose to strip, and a wrong strip deletes text silently.
+  const LIST_MARKER_PREFIX = /^\s*(\d{1,3}[.)]|\(\d{1,3}\)|[-*+•–—])\s+/;
   let autoSaveTimer;
   const autoSaveDelay = Math.max(100, Number(window.VULNREPORT_AUTOSAVE_IDLE_MS ?? window.VULNREPORT_AUTOSAVE_INTERVAL_MS) || 5000);
   let localDraftTimer;
@@ -135,7 +185,6 @@
   let validateSetupInputs = () => true;
   // Assigned by setup(); the server rejects a scope edit that strands a finding, so the save waits for a fix.
   let strandedByScopeEdit = () => [];
-  let validateCurrentPage = () => true;
   let updateFindingSummary = () => {};
   const expandedFindingIds = new Set();
   // Tells "nothing opened yet" apart from "the tester closed them all"; an empty set alone would
@@ -150,6 +199,7 @@
     const warning = includePlaceholder && entry.requires_tester_input ? " | contains placeholder text" : "";
     return `<div class="library-entry" role="option" data-id="${escape(entry.library_id)}"><b>${escape(entry.title)}</b> <small>${tags}${warning}</small></div>`;
   };
+  const libraryMatches = query => library.filter(entry => entry.title.toLowerCase().includes(query.toLowerCase()) || entry.tags.join(" ").toLowerCase().includes(query.toLowerCase()));
   function renderLineMarkers(input, gutter, measure, markerText, markerClass) {
     const style = getComputedStyle(input);
     const contentWidth = input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
@@ -282,6 +332,7 @@
     clearTimeout(localDraftTimer);
     try {
       localStorage.removeItem(localDraftKey);
+      localStorage.removeItem(legacyLocalDraftKey);
       if (restoredDraftKey && restoredDraftKey !== localDraftKey) localStorage.removeItem(restoredDraftKey);
       restoredDraftKey = null;
     } catch (error) { showRecoveryStorageWarning(error); }
@@ -338,11 +389,20 @@
       document.dispatchEvent(new Event("reportchange"));
     }, 100);
   }
+  function rememberTabRevision(savedAt) {
+    if (!savedAt) return;
+    try {
+      const remembered = sessionStorage.getItem(tabRevisionKey);
+      if (!remembered || Date.parse(savedAt) > Date.parse(remembered)) sessionStorage.setItem(tabRevisionKey, savedAt);
+    } catch (error) { showRecoveryStorageWarning(error); }
+  }
+  rememberTabRevision(serverReport.saved_at);
   function applyServerRevision(savedAt) {
     if (!savedAt) return;
     report.saved_at = savedAt;
     previousReport.saved_at = savedAt;
     if (activeTextTransaction) activeTextTransaction.before.saved_at = savedAt;
+    rememberTabRevision(savedAt);
   }
   function applyServerMetadata(savedReport) {
     applyServerRevision(savedReport.saved_at);
@@ -628,6 +688,10 @@
       notice.hidden = false;
       notice.textContent = "Add at least one complete finding before continuing to Content.";
     }
+    // Reveals the live per-finding count too, so the sentence above stops being the only signal and
+    // starts naming what is missing. setup() declares its own #findings handle long after this runs.
+    const findings = document.querySelector("#findings");
+    if (findings) findings.dataset.validationAttempted = "true";
   }
   const activeTextEntry = () => {
     const activeElement = document.activeElement;
@@ -637,6 +701,9 @@
     queueMicrotask(() => {
       if (!activeTextEntry()) {
         finalizeTextTransaction();
+        // The offer refresh sits out every tick while a field has focus, so leaving one is the
+        // moment a banner earned by typing can finally appear. queueReportChange writes nothing.
+        queueReportChange();
       }
     });
   });
@@ -673,7 +740,10 @@
   }
   // Sends the current report object to the server for validation and atomic saving.
   async function save(successStatus) {
-    if (saveConflict) return false;
+    if (saveConflict) {
+      setSaveState(SAVE_STATES.CONFLICT);
+      return false;
+    }
     if (saveInFlight) return saveInFlight;
     if (!pendingSave || savedRevision >= saveRevision) return true;
     if (root.dataset.step === "setup" && !validateSetupInputs(false)) {
@@ -737,11 +807,14 @@
   // nothing pending while one is in flight. Navigation waits on this instead of stranding it.
   let pendingMutation = null;
   function trackMutation(start) {
-    const task = start();
+    const task = pendingMutation ? pendingMutation.then(start) : start();
     const settled = task.catch(() => {});
     pendingMutation = settled;
     settled.then(() => { if (pendingMutation === settled) pendingMutation = null; });
     return task;
+  }
+  async function waitForMutations() {
+    while (pendingMutation) await pendingMutation;
   }
   document.querySelector("#save-button")?.addEventListener("click", () => {
     if (document.querySelector("#save-button")?.dataset.action === "resolve") {
@@ -792,11 +865,9 @@
   });
   document.querySelectorAll(".back-link").forEach(link => link.addEventListener("click", async event => {
     event.preventDefault();
-    // Going back is never gated: the tester is on their way to fix the gaps.
-    if (!document.querySelector("#editor") && !validateCurrentPage(true)) {
-      return;
-    }
-    if (pendingMutation) await pendingMutation;
+    // Back is never gated on any page: completeness is a forward requirement, and the flush below is
+    // what protects the edits. Refusing here would skip that flush entirely.
+    await waitForMutations();
     if (await save()) window.location.assign(link.dataset.href);
   }));
   const undo = async () => {
@@ -828,6 +899,14 @@
     if (event.shiftKey) redo(); else undo();
   });
   updateHistoryControls();
+  window.addEventListener("pageshow", event => {
+    const historyRestore = event.persisted || performance.getEntriesByType("navigation")[0]?.type === "back_forward";
+    if (!historyRestore || pendingSave) return;
+    try {
+      const latest = sessionStorage.getItem(tabRevisionKey);
+      if (latest && Date.parse(latest) > Date.parse(report.saved_at)) window.location.reload();
+    } catch (error) { showRecoveryStorageWarning(error); }
+  });
   window.addEventListener("pagehide", () => {
     if (!pendingSave) return;
     clearTimeout(autoSaveTimer);
@@ -898,21 +977,39 @@
     || (fragment.items || []).some(item => (item.runs || []).some(run => run.text?.trim()))
     || [...(fragment.header || []), ...(fragment.rows || []).flat()].some(cell => (cell.runs || []).some(run => run.text?.trim()))
     || Boolean(fragment.text?.trim() || fragment.caption?.trim() || fragment.evidence_id);
-  const isDefaultStatusConclusion = fragment => fragment.type === "paragraph" && /^The finding ".*" is(?: still)? (?:Open|Resolved)\.$/.test((fragment.runs || []).map(run => run.text).join(""));
+  const evidenceIdsIn = finding => new Set((finding.contents || []).flatMap(content => content.fragments || []).filter(fragment => fragment.evidence_id).map(fragment => fragment.evidence_id));
+  const dropUnreferencedEvidence = previousIds => {
+    if (!report.evidence || !previousIds.size) return;
+    const stillUsed = new Set(report.vulnerabilities.flatMap(candidate => [...evidenceIdsIn(candidate)]));
+    previousIds.forEach(evidenceId => { if (!stillUsed.has(evidenceId)) delete report.evidence[evidenceId]; });
+  };
+  const conclusionText = fragment => (fragment.runs || []).map(run => run.text).join("");
+  const defaultSpanIn = fragment => fragment.type === "paragraph" ? defaultConclusionSpan(conclusionText(fragment)) : null;
+  const isDefaultStatusConclusion = fragment => {
+    const text = conclusionText(fragment);
+    const span = defaultSpanIn(fragment);
+    return span && span[0] === 0 && span[1] === text.trimEnd().length;
+  };
+  const hasDefaultStatusConclusion = fragment => defaultSpanIn(fragment) !== null;
   function syncConclusion(vulnerability) {
     const conclusion = vulnerability.contents?.find(content => content.type === "in_conclusion");
     if (!conclusion) return;
     const status = vulnerability.status === "resolved" ? "Resolved" : "Open";
     const paragraphs = conclusion.fragments.filter(fragment => fragment.type === "paragraph");
     const generated = paragraphs.find(fragment => fragment.generated === "status_conclusion");
-    let defaultParagraph = generated || paragraphs.find(isDefaultStatusConclusion) || paragraphs.find(fragment => !fragmentHasText(fragment));
-    if (!defaultParagraph && !paragraphs.length) {
-      defaultParagraph = newFragment("paragraph");
-      conclusion.fragments.unshift(defaultParagraph);
-    }
-    if (defaultParagraph && (generated || !fragmentHasText(defaultParagraph) || isDefaultStatusConclusion(defaultParagraph))) {
+    // The regex alone decides: the marker outlives the text and overwrote written conclusions.
+    const defaultParagraph = paragraphs.find(hasDefaultStatusConclusion);
+    if (!paragraphs.length) {
+      // Created empty, never filled. The Content page offers the sentence instead.
+      conclusion.fragments.unshift(newFragment("paragraph"));
+    } else if (defaultParagraph) {
+      const span = defaultSpanIn(defaultParagraph);
       delete defaultParagraph.generated;
-      defaultParagraph.runs = [{text: `The finding "${vulnerability.title}" is ${status === "Open" ? "still " : ""}`}, {text:status, bold:true}, {text:"."}];
+      defaultParagraph.runs = [
+        ...runsUpTo(defaultParagraph.runs || [], span[0]),
+        ...statusConclusionRuns(vulnerability.title, status),
+        ...runsAfter(defaultParagraph.runs || [], span[1]),
+      ];
     }
     if (generated) conclusion.fragments = conclusion.fragments.filter(fragment => fragment === generated || fragment.type !== "paragraph" || fragmentHasText(fragment));
   }
@@ -934,7 +1031,9 @@
     const existing = Object.fromEntries((vulnerability.contents || []).map(content => [content.type, content]));
     // A status change must not destroy work. A section this status does not print is kept when it
     // still holds something written, so changing status and back brings the tester's work with it.
-    const carried = (vulnerability.contents || []).filter(content => !types.includes(content.type) && contentHasWork(content));
+    // in_conclusion is the exception: it is a statement about the status, so carrying it would keep a
+    // sentence the status has just made false. It is dropped, and offered back fresh on the way in.
+    const carried = (vulnerability.contents || []).filter(content => !types.includes(content.type) && content.type !== "in_conclusion" && contentHasWork(content));
     vulnerability.contents = [...types.map(type => existing[type] || {type, fragments:[]}), ...carried];
     const required = {description:["paragraph"], recommended_remediation:["paragraph"], previous_proof_of_concept:["numbered_list","image"], proof_of_concept:["numbered_list","image"], in_conclusion:[]};
     vulnerability.contents.forEach(content => {
@@ -951,6 +1050,49 @@
     }
     syncConclusion(vulnerability);
     syncEvidenceImageSlots(vulnerability);
+  }
+  // The sentence names the finding and its status, so a rename or a status change can leave a
+  // tester-written conclusion describing something no longer true. Boilerplate is re-derived
+  // silently as before; only prose is worth interrupting for. Returns whether it rewrote anything.
+  const conclusionParagraphText = finding => {
+    const first = finding.contents?.find(content => content.type === "in_conclusion")?.fragments.find(fragment => fragment.type === "paragraph");
+    return first ? conclusionText(first) : "";
+  };
+  // syncConclusion has already rewritten the sentence by the time this runs at every call site, so
+  // the caller passes what the paragraph said beforehand. Boilerplate gets a notice rather than a
+  // choice: "keep mine" on a sentence the app owns is a promise the next save would undo, because
+  // provision re-derives any paragraph that still contains a recognised sentence.
+  async function offerConclusionRewrite(finding, previousText) {
+    const conclusion = finding.contents?.find(content => content.type === "in_conclusion");
+    if (!conclusion || !contentTypesForStatus(finding.status).includes("in_conclusion")) return false;
+    const first = conclusion.fragments.find(fragment => fragment.type === "paragraph");
+    if (!first || first.generated || !fragmentHasText(first)) return false;
+    const statusWord = finding.status === "resolved" ? "Resolved" : "Open";
+    const derived = statusConclusionRuns(finding.title, statusWord).map(run => run.text).join("");
+    const before = previousText ?? conclusionText(first);
+    // Nothing to announce when there was no sentence: a status change that brings the section back
+    // creates one rather than updating one.
+    if (!before.trim()) return false;
+    const span = defaultConclusionSpan(before);
+    // Nothing to announce when the sentence did not move: both open statuses read "Open".
+    if (span && before.slice(span[0], span[1]) === derived) return false;
+    if (span) {
+      await window.vrDialog.ask({
+        title: "The closing sentence was updated",
+        message: `The standard closing sentence now reads "${derived}". Replace it with your own wording before generating.`,
+        actions: [{key: "ok", label: "OK", tone: "primary"}],
+      });
+      // syncConclusion already wrote it, so nothing here changed and no caller needs to re-render.
+      return false;
+    }
+    if (!await window.vrDialog.confirm({
+      title: "Replace the conclusion?",
+      message: `This finding's conclusion reads "${before}". The standard sentence would now read "${derived}".`,
+      confirmLabel: "Replace it",
+      cancelLabel: "Keep mine",
+    })) return false;
+    first.runs = statusConclusionRuns(finding.title, statusWord);
+    return true;
   }
   const scopeTargetIds = scope => scope?.target_ids || [];
   // Twin of report_service.location_lines: blanks are nothing, a "#" line is a note to the tester,
@@ -1060,16 +1202,19 @@
   // Deep-clones library fragments with fresh frag_ids; frag_id uniqueness is report-wide, so nothing
   // copied in from the library may keep its original id. Shared by every replace/merge offer.
   const remintFragments = fragments => { const copied = JSON.parse(JSON.stringify(fragments)); copied.forEach(fragment => { fragment.frag_id = id("f"); }); return copied; };
-  // Twin of report_service.merge_step_lists; keep both in step. Appended steps are one procedure, so
-  // the numbered lists collapse into one -- two list fragments each restart at 1 in the document.
+  // Twin of report_service.merge_step_lists; adjacent steps are one procedure, while an intervening
+  // note or other fragment is an ordering boundary that appended content must not cross.
   const mergeStepLists = fragments => {
-    const lists = fragments.filter(fragment => fragment.type === "numbered_list");
-    if (lists.length < 2) return fragments;
-    const items = lists.flatMap(fragment => fragment.items || []);
-    const written = items.filter(item => (item.runs || []).some(run => run.text.trim()));
-    lists[0].items = written.length ? written : items.slice(0, 1);
-    const absorbed = new Set(lists.slice(1));
-    return fragments.filter(fragment => !absorbed.has(fragment));
+    const merged = [];
+    fragments.forEach(fragment => {
+      const previous = merged[merged.length - 1];
+      if (fragment.type === "numbered_list" && previous?.type === "numbered_list") {
+        const items = [...(previous.items || []), ...(fragment.items || [])];
+        const written = items.filter(item => (item.runs || []).some(run => run.text.trim()));
+        previous.items = written.length ? written : items.slice(0, 1);
+      } else merged.push(fragment);
+    });
+    return merged;
   };
   // Twin of report_service.apply_poc_variant; keep both in step. mode "replace" overwrites the
   // non-image fragments; "merge" appends the library's steps after what is already there.
@@ -1086,26 +1231,79 @@
     finding.poc_variant_declined = (finding.poc_variant_declined || []).filter(channel => !variants.includes(channel));
   };
   const pocStepsFor = (finding, variant) => libraryEntryFor(finding)?.proof_of_concept?.[variant] || null;
+  // The conclusion quotes the steps, so only prose-bearing fragments have a "last line" at all. An
+  // image or table has none, and a command line or a heading quoted into a conclusion reads as a bug.
+  // Consequence: a proof of concept ending in a code block is offered the line above it.
+  const pocLastStep = finding => {
+    const fragments = finding.contents?.find(content => content.type === "proof_of_concept")?.fragments || [];
+    for (let index = fragments.length - 1; index >= 0; index -= 1) {
+      const fragment = fragments[index];
+      if (!["numbered_list", "bulleted_list", "note"].includes(fragment.type)) continue;
+      const values = fragment.type === "note"
+        ? [(fragment.runs || []).map(run => run.text).join("")]
+        : (fragment.items || []).map(item => (item.runs || []).map(run => run.text).join(""));
+      const lines = values.flatMap(value => value.split(/\r?\n/));
+      const last = lines.map(line => line.trim()).filter(Boolean).pop();
+      if (last) return last;
+    }
+    return "";
+  };
   // A library entry's description/recommended_remediation fragments, for the Content-page offer.
   const libraryContentFor = (entry, type) => entry?.contents?.find(content => content.type === type)?.fragments || [];
+  // Absent, null and false read identically to a tester, but the server dumps every optional field
+  // explicitly, so a freshly typed section changes shape the first time it is saved. Coerce rather
+  // than strip, or a fingerprint taken before a save stops matching the moment the save returns.
+  const normalizedRuns = runs => (runs || []).map(run => [run.text || "", run.bold ? 1 : 0, run.italic ? 1 : 0, run.underline ? 1 : 0]);
+  const normalizedCells = cells => (cells || []).map(cell => normalizedRuns(cell.runs));
+  const normalizedSection = fragments => JSON.stringify((fragments || []).map(fragment => [
+    fragment.type, normalizedRuns(fragment.runs), normalizedCells(fragment.items),
+    normalizedCells(fragment.header), (fragment.rows || []).map(normalizedCells),
+    fragment.text || "", fragment.caption || "", fragment.evidence_id || "",
+    fragment.environment || "", fragment.generated || "",
+  ]));
   // frag_ids are reminted on every copy, so they are the one thing two identical sections never share.
-  const sameFragments = (left, right) => JSON.stringify(left, (key, value) => key === "frag_id" ? undefined : value)
-    === JSON.stringify(right, (key, value) => key === "frag_id" ? undefined : value);
+  const sameFragments = (left, right) => normalizedSection(left) === normalizedSection(right);
+  // 32-bit FNV-1a over the same normalisation. Client-only: Python stores the string and never
+  // computes it, so this is not a twin. A collision hides one banner until the next edit, and the
+  // length prefix means a collision needs a matching length too.
+  const sectionFingerprint = fragments => {
+    const text = normalizedSection(fragments);
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return `${text.length}-${(hash >>> 0).toString(16)}`;
+  };
+  // Dismissals of the conclusion step offer, for this sitting only. The persisted record cannot do
+  // this job: while the conclusion is still boilerplate the offer is meant to keep standing, so a
+  // Dismiss that only wrote to the draft would be redrawn immediately and mean nothing.
+  const dismissedStepOffers = new Set();
+  // Whether the tester has written any steps. Images are excluded deliberately: a screenshot is not
+  // a step, and "I have a screenshot but no steps" is exactly the state worth offering.
+  const pocHasWrittenSteps = finding => (finding.contents?.find(content => content.type === "proof_of_concept")?.fragments || [])
+    .some(fragment => fragment.type !== "image" && fragmentHasContent(fragment));
   // Single owner of "which sections still have an unanswered library offer", so the Content-page
   // banners and the review panel can never disagree about what is outstanding.
   const pendingLibraryOffers = finding => {
     const entry = libraryEntryFor(finding);
     if (!entry) return [];
     const offers = ["description", "recommended_remediation"]
+      // Stays first: a resolved finding's remediation renders locked, with no fragment editors, so
+      // a banner there would offer an action the tester has no way to complete.
       .filter(type => !(finding.status === "resolved" && type === "recommended_remediation"))
-      .filter(type => finding.content_offer_resolved?.[type] !== entry.library_id)
       .filter(type => libraryContentFor(entry, type).length)
-      // Offering what the section already holds is noise: a finding inserted from the library
-      // arrives carrying the entry's own content.
-      .filter(type => !sameFragments(finding.contents?.find(content => content.type === type)?.fragments || [], libraryContentFor(entry, type)))
-      .map(type => ({type, entry}));
+      .map(type => ({type, fragments: finding.contents?.find(content => content.type === type)?.fragments || []}))
+      // Offering what the section already holds is noise; offering what the tester already answered
+      // for this exact content is nagging. Both release the moment the section changes again.
+      .filter(({type, fragments}) => !sameFragments(fragments, libraryContentFor(entry, type)))
+      .filter(({type, fragments}) => finding.content_offer_dismissed?.[type] !== sectionFingerprint(fragments))
+      .map(({type}) => ({type, entry}));
     const variants = applicablePocVariants(finding)
-      .filter(variant => !(finding.poc_variants || []).includes(variant) && !(finding.poc_variant_declined || []).includes(variant));
+      // A decline is permanent; an install is not. Emptying the steps you pulled in re-offers them,
+      // because the record of installing them describes content that is no longer there.
+      .filter(variant => !(finding.poc_variant_declined || []).includes(variant))
+      .filter(variant => !pocHasWrittenSteps(finding) || !(finding.poc_variants || []).includes(variant));
     if (variants.length) offers.push({type:"proof_of_concept", entry, variants});
     return offers;
   };
@@ -1311,14 +1509,12 @@
     // instead of the report silently omitting it.
     const dropTargetsEverywhere = targetIds => {
       if (!targetIds.size) return;
-      const targetById = new Map((report.scope_targets || []).map(target => [target.target_id, target]));
-      const environmentsOf = ids => [...new Set(ids.map(targetId => targetById.get(targetId)?.environment).filter(Boolean))];
       (report.vulnerabilities || []).forEach(finding => {
         const scope = finding.scope || {};
-        const had = environmentsOf(scope.target_ids || []);
+        const had = scopeEnvironments({target_ids:scope.target_ids || []});
         scope.target_ids = (scope.target_ids || []).filter(targetId => !targetIds.has(targetId));
         targetIds.forEach(targetId => { delete scope.location_values?.[targetId]; });
-        const kept = environmentsOf(scope.target_ids);
+        const kept = scopeEnvironments({target_ids:scope.target_ids});
         // A typed-in endpoint keeps its environment alive even with no target selected there.
         const typed = Object.entries(scope.custom_locations || {})
           .filter(([, byChannel]) => Object.values(byChannel || {}).flat().some(value => value.trim()))
@@ -1336,8 +1532,6 @@
     };
     // What a scope change costs the findings, for a dialog that has to say so before it happens.
     const scopeChangeImpact = targetIds => {
-      const targetById = new Map((report.scope_targets || []).map(target => [target.target_id, target]));
-      const environmentsOf = ids => [...new Set(ids.map(targetId => targetById.get(targetId)?.environment).filter(Boolean))];
       let findings = 0;
       let images = 0;
       (report.vulnerabilities || []).forEach(finding => {
@@ -1345,11 +1539,11 @@
         const selected = scope.target_ids || [];
         if (!selected.some(targetId => targetIds.has(targetId))) return;
         findings += 1;
-        const kept = environmentsOf(selected.filter(targetId => !targetIds.has(targetId)));
+        const kept = scopeEnvironments({target_ids:selected.filter(targetId => !targetIds.has(targetId))});
         const typed = Object.entries(scope.custom_locations || {})
           .filter(([, byChannel]) => Object.values(byChannel || {}).flat().some(value => value.trim()))
           .map(([environment]) => environment);
-        const lost = environmentsOf(selected).filter(environment => !kept.includes(environment) && !typed.includes(environment));
+        const lost = scopeEnvironments({target_ids:selected}).filter(environment => !kept.includes(environment) && !typed.includes(environment));
         if (!lost.length) return;
         (finding.contents || []).forEach(content => {
           if (content.type === "previous_proof_of_concept") return;
@@ -1577,7 +1771,6 @@
     }
     const findingBody = document.querySelector("#findings");
     if (findingBody) {
-    const libraryMatches = query => library.filter(entry => entry.title.toLowerCase().includes(query.toLowerCase()) || entry.tags.join(" ").toLowerCase().includes(query.toLowerCase()));
     const locationGroups = {production:[], non_production:[]};
     report.scope_targets.forEach(target => locationGroups[target.environment]?.push(target));
     const locationLabels = {production:"Production", non_production:"Non-Production"};
@@ -1650,7 +1843,6 @@
       note.hidden = !incomplete.length;
       note.textContent = incomplete.length ? `${incomplete.length} finding${incomplete.length === 1 ? " is" : "s are"} incomplete: ${incomplete[0].join(", ")}.` : "";
     };
-    const evidenceIdsIn = finding => new Set((finding.contents || []).flatMap(content => content.fragments || []).filter(fragment => fragment.evidence_id).map(fragment => fragment.evidence_id));
     // Losing an environment's last location strands that environment's evidence, so confirm before dropping it.
     const settleScopeChange = async (finding, previousScope) => {
       const remaining = affectedEnvironments(finding);
@@ -1680,11 +1872,6 @@
       syncEvidenceImageSlots(finding);
       return true;
     };
-    const dropUnreferencedEvidence = previousIds => {
-      if (!report.evidence || !previousIds.size) return;
-      const stillUsed = new Set(report.vulnerabilities.flatMap(candidate => [...evidenceIdsIn(candidate)]));
-      previousIds.forEach(evidenceId => { if (!stillUsed.has(evidenceId)) delete report.evidence[evidenceId]; });
-    };
     // A title match applies the finding's non-content fields immediately and silently; each content
     // section offers its own keep/replace/add banner on the Content page instead of one whole-finding confirm.
     const replaceFromLibrary = (finding, entry) => {
@@ -1692,7 +1879,27 @@
       return true;
     };
     const applyLibraryEntry = (finding, entry) => {
+      if (finding.library_ref?.library_id !== entry.library_id) {
+        finding.poc_variants = [];
+        finding.poc_variant_declined = [];
+        finding.content_offer_resolved = {};
+        // The fingerprint describes the section, not the entry, so without this a dismissal taken
+        // against the old entry would go on suppressing the new one's offer.
+        finding.content_offer_dismissed = {};
+      }
       Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || "informational", library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}});
+      // The only title write that did not re-derive the sentence. Harmless while the server fixed it
+      // on the next save; not harmless now the tester is prompted about that sentence right here.
+      syncConclusion(finding);
+    };
+    const foldAllFindings = document.querySelector("#fold-all-findings");
+    const anyFindingExpanded = () => report.vulnerabilities.some(finding => expandedFindingIds.has(finding.uid));
+    const updateFoldAllFindings = () => {
+      if (!foldAllFindings) return;
+      const open = anyFindingExpanded();
+      foldAllFindings.hidden = !report.vulnerabilities.length;
+      foldAllFindings.textContent = open ? "Collapse all" : "Expand all";
+      foldAllFindings.setAttribute("aria-pressed", String(open));
     };
     const enhanceFindingRows = () => {
       const targetById = new Map(report.scope_targets.map(target => [target.target_id, target]));
@@ -1714,6 +1921,8 @@
         toggle.type = "button";
         toggle.title = "Show affected locations";
         row.querySelector(".finding-title-cell").prepend(toggle);
+        // A textarea measured while hidden reports no height, so re-measure when the row is shown.
+        const growLocationValue = textarea => { textarea.style.height = "auto"; textarea.style.height = `${Math.max(28, textarea.scrollHeight)}px`; };
         const setExpanded = expanded => {
           row.classList.toggle("finding-expanded", expanded);
           locationRow.hidden = !expanded;
@@ -1721,6 +1930,8 @@
           toggle.title = expanded ? "Hide affected locations" : "Show affected locations";
           if (expanded) expandedFindingIds.add(finding.uid);
           else expandedFindingIds.delete(finding.uid);
+          updateFoldAllFindings();
+          if (expanded) locationRow.querySelectorAll("textarea.location-value").forEach(growLocationValue);
         };
         toggle.onclick = () => setExpanded(!row.classList.contains("finding-expanded"));
         setExpanded(expandedFindingIds.has(finding.uid) || (index === 0 && !findingFoldDefaulted));
@@ -1751,30 +1962,26 @@
         idInput.inputMode = "numeric";
         idInput.pattern = "[0-9]*";
         idInput.addEventListener("input", event => { event.target.value = event.target.value.replace(/\D/g, "").slice(0, 5); }, true);
-        if (idInput.value.trim()) {
-          const idDisplay = document.createElement("button");
-          idDisplay.className = "finding-id-display";
-          idDisplay.type = "button";
-          idDisplay.setAttribute("aria-label", "Edit vulnerability ID");
-          idDisplay.textContent = idInput.value;
-          const setIdEditing = editing => {
-            idInput.hidden = !editing;
-            idDisplay.hidden = editing;
-            if (editing) idInput.focus();
-            else idDisplay.textContent = idInput.value;
-          };
-          idDisplay.addEventListener("click", () => setIdEditing(true));
-          idInput.addEventListener("input", () => { idDisplay.textContent = idInput.value; });
-          idInput.addEventListener("blur", () => {
-            if (idInput.value.trim()) setIdEditing(false);
-            else renderFindings();
-            scheduleSave();
-          });
-          idInput.insertAdjacentElement("beforebegin", idDisplay);
-          setIdEditing(false);
-        } else {
-          idInput.addEventListener("blur", () => { if (idInput.value.trim()) renderFindings(); });
-        }
+        const idDisplay = document.createElement("button");
+        idDisplay.className = "finding-id-display";
+        idDisplay.type = "button";
+        idDisplay.setAttribute("aria-label", "Edit vulnerability ID");
+        // Rebuilding the table to swap button for field would take focus and fold state with it.
+        const showId = () => {
+          idDisplay.textContent = idInput.value || "\u2014";
+          idDisplay.classList.toggle("is-empty", !idInput.value);
+        };
+        const setIdEditing = editing => {
+          idInput.hidden = !editing;
+          idDisplay.hidden = editing;
+          if (editing) idInput.focus();
+          else showId();
+        };
+        idDisplay.addEventListener("click", () => setIdEditing(true));
+        idInput.addEventListener("input", showId);
+        idInput.addEventListener("blur", () => { setIdEditing(false); scheduleSave(); });
+        idInput.insertAdjacentElement("beforebegin", idDisplay);
+        setIdEditing(false);
         row.querySelectorAll("select").forEach((control, controlIndex) => {
           if (controlIndex > 2) return;
           const setBadge = () => {
@@ -1880,22 +2087,23 @@
           input.replaceWith(textarea);
         });
         locationRow.querySelectorAll("textarea.location-value").forEach(textarea => {
-          const resize = () => { textarea.style.height = "auto"; textarea.style.height = `${textarea.scrollHeight}px`; };
-          textarea.addEventListener("input", resize);
-          resize();
+          textarea.addEventListener("input", () => growLocationValue(textarea));
+          growLocationValue(textarea);
         });
       });
     };
     const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.target_ids || []; const locationValues = finding.scope.location_values || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
       let titleBeforeEdit = finding.title || "";
+      let conclusionBeforeEdit = conclusionParagraphText(finding);
       const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = async () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (!entry || finding.library_ref?.library_id === entry.library_id) { clearResults(); return; } if (await replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); } }); };
-      titleInput.oninput = event => { finding.title = event.target.value; syncConclusion(finding); renderRowResults(); scheduleSave(); }; titleInput.onfocus = () => { titleBeforeEdit = finding.title || ""; renderRowResults(); }; titleInput.onkeydown = event => { if (event.key === "Escape") clearResults(); };
+      titleInput.oninput = event => { finding.title = event.target.value; syncConclusion(finding); renderRowResults(); scheduleSave(); }; titleInput.onfocus = () => { titleBeforeEdit = finding.title || ""; conclusionBeforeEdit = conclusionParagraphText(finding); renderRowResults(); }; titleInput.onkeydown = event => { if (event.key === "Escape") clearResults(); };
       // A committed title that names a library entry pulls that entry in; any other title is just a rename.
-      titleInput.onchange = () => {
+      titleInput.onchange = async () => {
         const typed = titleInput.value.trim().toLowerCase();
         const entry = library.find(candidate => candidate.title.trim().toLowerCase() === typed);
-        if (!entry || finding.library_ref?.library_id === entry.library_id) return;
-        if (replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); }
+        const swapped = Boolean(entry) && finding.library_ref?.library_id !== entry.library_id && await replaceFromLibrary(finding, entry, titleBeforeEdit);
+        const rewrote = await offerConclusionRewrite(finding, conclusionBeforeEdit);
+        if (swapped || rewrote) { renderFindings(); scheduleSave(); }
       };
       titleInput.onblur = () => setTimeout(clearResults, 150);
       controls[1].onchange = event => { finding.likelihood = event.target.value || null; scheduleSave(); };
@@ -1924,7 +2132,10 @@
           return;
         }
         finding.status = nextStatus;
+        const conclusionBeforeStatus = conclusionParagraphText(finding);
         provision(finding);
+        // Strictly after the status dialog settles: vrDialog cancels whatever is already open.
+        await offerConclusionRewrite(finding, conclusionBeforeStatus);
         scheduleSave();
       };
       const updateLocations = async () => {
@@ -1977,6 +2188,16 @@
     new MutationObserver(() => { enhanceFindingRows(); labelAssessmentPlaceholders(); showFindingValidationErrors(); updateFindingSummary(); }).observe(findingBody, {childList:true});
     const addFinding = () => { report.vulnerabilities.push({uid:id("v"),title:"",severity:null,status:"open_new",scope:{mode:"custom",target_ids:[],location_values:{},custom_locations:{}},contents:[]}); renderFindings(); scheduleSave(); };
     document.querySelector("#add-finding").onclick = addFinding;
+    if (foldAllFindings) foldAllFindings.onclick = () => {
+      const collapsing = anyFindingExpanded();
+      expandedFindingIds.clear();
+      if (!collapsing) report.vulnerabilities.forEach(finding => expandedFindingIds.add(finding.uid));
+      // Marks the default as spent, or the rebuild would re-open the first finding after a collapse.
+      findingFoldDefaulted = true;
+      renderFindings();
+      updateFoldAllFindings();
+    };
+    updateFoldAllFindings();
     const emptyAdd = document.querySelector("#empty-add-finding");
     if (emptyAdd) emptyAdd.onclick = addFinding;
     const results = document.querySelector("#library-results");
@@ -2080,11 +2301,11 @@
       }
       return true;
     };
-    validateCurrentPage = root.dataset.step === "setup" ? validateSetupPage : validateFindingsPage;
+    const validateCurrentPage = root.dataset.step === "setup" ? validateSetupPage : validateFindingsPage;
     document.querySelector("#next").onclick = async event => {
       event.preventDefault();
       if (!validateCurrentPage(true)) return;
-      if (pendingMutation) await pendingMutation;
+      await waitForMutations();
       const saved = await save();
       if (saved && document.querySelector("#save-button").dataset.saveState === SAVE_STATES.SAVED) {
         const nextPage = root.dataset.step === "setup" ? "findings" : "edit";
@@ -2140,7 +2361,11 @@
         else showOperationError(error, "upload_evidence", "Upload failed");
       }
     });
-    upload.onchange = () => uploadImage(upload.files?.[0]);
+    upload.onchange = () => {
+      const selectedFile = upload.files?.[0];
+      upload.value = "";
+      uploadImage(selectedFile);
+    };
     tile.onpaste = event => {
       const pasted = [...(event.clipboardData?.files || [])].find(item => item.type.startsWith("image/"));
       if (!pasted) return;
@@ -2419,6 +2644,23 @@
         resize();
         changed();
       };
+      // Bracketed by finalize so the strip is one undo step, not folded into the whole time the
+      // tester spent in this field. oninput stays the only writer of fragment.items.
+      input.onpaste = event => {
+        const pasted = event.clipboardData?.getData("text/plain");
+        if (!pasted) return;
+        event.preventDefault();
+        finalizeTextTransaction();
+        const selectionStart = input.selectionStart;
+        const lineStart = input.value.lastIndexOf("\n", selectionStart - 1) + 1;
+        const startsItem = !input.value.slice(lineStart, selectionStart).trim();
+        const cleaned = pasted.split(/\r?\n/)
+          .map((line, index) => index || startsItem ? line.replace(LIST_MARKER_PREFIX, "") : line)
+          .join("\n");
+        input.setRangeText(cleaned, selectionStart, input.selectionEnd, "end");
+        input.oninput();
+        finalizeTextTransaction();
+      };
       let observedWidth = 0;
       new ResizeObserver(() => {
         if (input.clientWidth !== observedWidth) {
@@ -2551,6 +2793,24 @@
     let expandedContentTypes;
     let engagementContextOpen = false;
     let reviewTargetId = null;
+    // A `<details>` rendered `open` unconditionally springs back the moment an autosave rebuilds.
+    const collapsedReviewGroups = new Set();
+    // One shape for every library prompt, quieter than the section it offers to rewrite.
+    const buildOffer = (className, message) => {
+      const banner = document.createElement("div");
+      banner.className = className;
+      banner.innerHTML = '<svg class="offer-mark" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 2.4h5.7l3.1 3.1v8.1a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z"/><path d="M9.2 2.4v3.2h3.2"/><path d="M5.3 9h5.4M5.3 11.4h3.6"/></svg><div class="offer-body"><p></p><div class="offer-actions"></div></div>';
+      banner.querySelector("p").textContent = message;
+      return {banner, body: banner.querySelector(".offer-body"), actions: banner.querySelector(".offer-actions")};
+    };
+    const offerButton = (label, kind, onclick) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = kind === "primary" ? "primary" : kind === "dismiss" ? "subtle offer-dismiss" : "subtle";
+      button.textContent = label;
+      button.onclick = onclick;
+      return button;
+    };
     // Held as state rather than left behind as a class, so a re-render cannot drop the highlight
     // before the tester has dealt with the field.
     const showReviewTarget = () => {
@@ -2558,9 +2818,7 @@
       const target = reviewTargetId && pane.querySelector(`[data-fragment-id="${reviewTargetId}"]`);
       if (!target) return;
       target.classList.add("is-review-target");
-      target.addEventListener("click", () => { reviewTargetId = null; showReviewTarget(); }, {once: true});
     };
-    const libraryMatches = query => library.filter(entry => entry.title.toLowerCase().includes(query.toLowerCase()) || entry.tags.join(" ").toLowerCase().includes(query.toLowerCase()));
     const ordered = () => report.vulnerabilities.slice().sort((left, right) => severity.indexOf(left.severity) - severity.indexOf(right.severity) || left.title.localeCompare(right.title));
     const updateReadinessPanel = () => {
       const panel = document.querySelector("#editor-notifications");
@@ -2578,6 +2836,9 @@
         // An image for an environment this finding does not affect is not the tester's to complete.
         const relevant = affectedEnvironments(finding);
         const printed = contentTypesForStatus(finding.status);
+        // Environments the per-environment rule already reports, so a slot serving one stays quiet.
+        const proofImages = (finding.contents.find(content => content.type === "proof_of_concept")?.fragments || []).filter(fragment => fragment.type === "image");
+        const uncovered = relevant.filter(environment => !proofImages.some(image => image.environment === environment && image.evidence_id));
         // A section this status does not print is carried for safekeeping, not for completing.
         return finding.contents.filter(content => printed.includes(content.type)).flatMap(content => {
         const contentLabel = contentNames[content.type];
@@ -2591,6 +2852,13 @@
         const staleImage = fragment.type === "image" && content.type !== "previous_proof_of_concept"
           && Boolean(fragment.environment) && !relevant.includes(fragment.environment);
         if (staleImage) return issues;
+        // Twin of the in_conclusion rule in docx_report.generation_issues. Carries a fragmentId so
+        // the review panel's arrow lands on the paragraph and the field is marked incomplete.
+        // Nothing but the sentence counts; text either side of it is the tester's own conclusion.
+        if (content.type === "in_conclusion" && isDefaultStatusConclusion(fragment)) {
+          issues.push({contentLabel, fragmentLabel:optionLabel("paragraph"), message:"still holds the default sentence", fragmentId:fragment.frag_id});
+          return issues;
+        }
         if (fragment.runs && !hasText(fragment.runs)) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (fragment.items) {
           // Steps are one textarea, so a per-line message would point at a field the tester cannot see.
@@ -2605,7 +2873,9 @@
         if (fragment.type === "image" && (content.type === "previous_proof_of_concept" || !fragment.environment || relevant.includes(fragment.environment))) {
           const environment = fragment.environment === "production" ? "Production" : fragment.environment === "non_production" ? "Non-Production" : "Unassigned";
           const missing = [!fragment.environment && "environment", !fragment.evidence_id && "image", !fragment.caption?.trim() && "caption"].filter(Boolean);
-          if (missing.length) issues.push({contentLabel, fragmentLabel:`${environment} evidence`, message:`requires ${missing.join(" and ")}`, fragmentId:fragment.frag_id});
+          // "Production evidence image required" already names this slot; listing its parts repeats it.
+          const alreadyNamed = content.type === "proof_of_concept" && !fragment.evidence_id && uncovered.includes(fragment.environment);
+          if (missing.length && !alreadyNamed) issues.push({contentLabel, fragmentLabel:`${environment} evidence`, message:`requires ${missing.join(" and ")}`, fragmentId:fragment.frag_id, evidenceSlot:true});
         }
         if (!fragment.runs && !fragment.items && fragment.type !== "table" && fragment.type !== "image" && !fragment.text?.trim()) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (placeholderPattern.test(fragmentText(fragment))) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"replace placeholder text", fragmentId:fragment.frag_id, level:"warning"});
@@ -2622,15 +2892,19 @@
         const proof = finding.contents.find(content => content.type === "proof_of_concept");
         const images = (proof?.fragments || []).filter(fragment => fragment.type === "image");
         const missingEvidence = affectedEnvironments(finding).filter(environment => !images.some(image => image.environment === environment && image.evidence_id));
-        const environmentIssues = missingEvidence.map(environment => ({
-          finding,
-          contentType: "proof_of_concept",
-          contentLabel: contentNames.proof_of_concept,
-          fragmentLabel: "evidence",
-          // Points at the slot the tester has to fill, so the jump lands on the tile and not the section.
-          fragmentId: images.find(image => image.environment === environment && !image.evidence_id)?.frag_id,
-          message: `${environment === "production" ? "Production" : "Non-Production"} evidence image required`,
-        }));
+        const environmentIssues = missingEvidence.map(environment => {
+          const slot = images.find(image => image.environment === environment && !image.evidence_id);
+          return {
+            finding,
+            contentType: "proof_of_concept",
+            contentLabel: contentNames.proof_of_concept,
+            fragmentLabel: "evidence",
+            // Points at the slot the tester has to fill, so the jump lands on the tile and not the section.
+            fragmentId: slot?.frag_id,
+            evidenceSlot: true,
+            message: `${environment === "production" ? "Production" : "Non-Production"} evidence image required`,
+          };
+        });
         // Ordered by section so every proof of concept row sits with the others.
         const order = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"];
         const rank = issue => {
@@ -2644,9 +2918,10 @@
       });
       count.textContent = issues.length ? `${issues.length} to fill in` : "Ready";
       count.dataset.state = issues.length ? "issues" : "ready";
-      // The panel lists what is missing; marking the fragment lets the empty field say it too, so a
-      // tester scrolling the page does not have to read the panel to find the gaps.
-      const incomplete = new Set(issues.filter(issue => issue.fragmentId && (issue.level || "error") === "error").map(issue => issue.fragmentId));
+      // Empty evidence slots are never ringed, and a jump silences the rest so it stands alone.
+      const incomplete = reviewTargetId ? new Set() : new Set(issues
+        .filter(issue => issue.fragmentId && !issue.evidenceSlot && (issue.level || "error") === "error")
+        .map(issue => issue.fragmentId));
       pane.querySelectorAll("[data-fragment-id]").forEach(node => node.classList.toggle("is-incomplete", incomplete.has(node.dataset.fragmentId)));
       // Each section carries its own count, so a tester scrolling the page sees the gap without the panel.
       const typeByLabel = Object.fromEntries(Object.entries(contentNames).map(([type, label]) => [label, type]));
@@ -2673,6 +2948,7 @@
       const offers = report.vulnerabilities.flatMap(finding => pendingLibraryOffers(finding).map(offer => ({
         finding,
         level: "warning",
+        suggestion: true,
         contentType: offer.type,
         contentLabel: contentNames[offer.type],
         fragmentLabel: offer.variants ? `saved ${offer.variants.map(variant => channelLabels[variant]).join(" and ")} steps` : "saved library content",
@@ -2688,16 +2964,47 @@
       const renderGroup = group => {
         const errors = group.issues.filter(issue => (issue.level || "error") === "error").length;
         const level = errors ? "error" : "warning";
-        const cells = group.issues.map(({finding, message, fragmentId, contentType, contentLabel, fragmentLabel, level: rowLevel}) => {
+        const cells = group.issues.map(({finding, message, fragmentId, contentType, contentLabel, fragmentLabel, level: rowLevel, suggestion}) => {
           const target = `data-review-finding="${escape(finding.uid)}"${fragmentId ? ` data-review-fragment="${escape(fragmentId)}"` : ""}${contentType ? ` data-review-content="${escape(contentType)}"` : ""}`;
-          return `<tr class="review-row" data-level="${rowLevel || "error"}"><td class="review-content"><i aria-hidden="true"></i>${escape(contentLabel || "Finding")}${fragmentLabel ? `<small>${escape(fragmentLabel)}</small>` : ""}</td><td class="review-need">${escape(message)}</td><td class="review-arrow"><button type="button" ${target} title="Go to" aria-label="Go to ${escape(contentLabel || "finding")}">&#8594;</button></td></tr>`;
+          return `<tr class="review-row" data-level="${rowLevel || "error"}"><td class="review-content"><i aria-hidden="true"></i>${escape(contentLabel || "Finding")}${fragmentLabel ? `<small>${escape(fragmentLabel)}</small>` : ""}</td><td class="review-need">${suggestion ? '<em class="review-tag">Suggested</em>' : ""}${escape(message)}</td><td class="review-arrow"><button type="button" ${target} title="Go to" aria-label="Go to ${escape(contentLabel || "finding")}">&#8594;</button></td></tr>`;
         }).join("");
         // Suggestions are never counted with gaps, or the badge would disagree with the Generate button.
-        return `<details class="review-group" data-level="${level}" open><summary><span class="review-caret" aria-hidden="true"></span><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count" data-level="${level}">${errors || group.issues.length}</span></summary><table class="review-table"><thead><tr><th>Content</th><th>Needs</th><th></th></tr></thead><tbody>${cells}</tbody></table></details>`;
+        return `<details class="review-group" data-level="${level}" data-review-group="${escape(group.finding.uid)}"${collapsedReviewGroups.has(group.finding.uid) ? "" : " open"}><summary><span class="review-caret" aria-hidden="true"></span><span class="review-group-title">${escape(group.finding.title || "Untitled finding")}</span><span class="review-group-count" data-level="${level}">${errors || group.issues.length}</span></summary><table class="review-table"><thead><tr><th>Content</th><th>Needs</th><th></th></tr></thead><tbody>${cells}</tbody></table></details>`;
       };
       panel.innerHTML = rows.length
         ? groups.map(renderGroup).join("")
         : '<div class="review-empty">Every finding is complete. The report is ready to generate.</div>';
+      const foldAllReview = document.querySelector("#review-fold-all");
+      const reviewGroups = [...panel.querySelectorAll(".review-group")];
+      const updateFoldAllReview = () => {
+        if (!foldAllReview) return;
+        foldAllReview.hidden = !reviewGroups.length;
+        const open = reviewGroups.some(group => group.open);
+        const label = open ? "Collapse all" : "Expand all";
+        foldAllReview.setAttribute("aria-label", label);
+        foldAllReview.title = label;
+        foldAllReview.setAttribute("aria-pressed", String(!open));
+      };
+      reviewGroups.forEach(group => {
+        // `toggle` fires a tick late; a save landing in that gap would rebuild from stale state.
+        group.querySelector("summary").addEventListener("click", () => {
+          if (group.open) collapsedReviewGroups.add(group.dataset.reviewGroup);
+          else collapsedReviewGroups.delete(group.dataset.reviewGroup);
+        });
+        group.addEventListener("toggle", updateFoldAllReview);
+      });
+      if (foldAllReview) foldAllReview.onclick = () => {
+        const collapsing = reviewGroups.some(group => group.open);
+        // `toggle` fires asynchronously, so the set is written here too or a save landing in the
+        // same tick rebuilds the panel from stale state.
+        reviewGroups.forEach(group => {
+          group.open = !collapsing;
+          if (collapsing) collapsedReviewGroups.add(group.dataset.reviewGroup);
+          else collapsedReviewGroups.delete(group.dataset.reviewGroup);
+        });
+        updateFoldAllReview();
+      };
+      updateFoldAllReview();
       // The whole row is the target; the arrow stays a real button so keyboard and AT still reach it.
       panel.querySelectorAll(".review-row").forEach(row => {
         row.onclick = event => {
@@ -2730,22 +3037,48 @@
             target?.scrollIntoView({behavior:"smooth", block:"center"});
             target?.focus?.({preventScroll:true});
             showReviewTarget();
+            updateReadinessPanel();
           });
         });
       });
       return issues;
     };
-    validateCurrentPage = reveal => {
-      const issues = updateReadinessPanel();
-      if (!issues.length) return true;
-      if (reveal) {
-        const firstIssue = document.querySelector("#editor-notifications [data-review-finding]");
-        firstIssue?.click();
-        firstIssue?.focus({preventScroll:true});
-      }
-      return false;
-    };
     document.addEventListener("reportchange", updateReadinessPanel);
+    // The jump marker is a pointer, not a verdict: it lets go when the tester looks elsewhere.
+    document.addEventListener("click", event => {
+      if (!reviewTargetId) return;
+      // A click in the panel is how a jump is asked for, so it must not undo the one just made.
+      if (event.target.closest("#editor-notifications, .is-review-target")) return;
+      reviewTargetId = null;
+      showReviewTarget();
+      updateReadinessPanel();
+    });
+    // The banners are pure functions of current state, so they can be rebuilt without redrawing the
+    // pane. Declared out here, taking the finding explicitly, so both render() and the refresh below
+    // produce byte-identical nodes from one source.
+    let contentOffersFor = () => [];
+    // render() is the only thing that rebuilds the pane, and typing never calls it -- deliberately,
+    // because it would destroy the caret. Without this, an offer earned by an edit waited for a
+    // section toggle or a reload. reportchange already fires 100ms after every keystroke.
+    const refreshContentOffers = () => {
+      // Never while a field has focus: it covers the caret's own block and, because description sits
+      // beside remediation in one grid row, the sibling that would otherwise move it.
+      if (activeTextEntry()) return;
+      const finding = report.vulnerabilities.find(candidate => candidate.uid === selectedFindingUid);
+      if (!finding) return;
+      pane.querySelectorAll(".content-block.is-expanded").forEach(block => {
+        const content = finding.contents?.find(candidate => candidate.type === block.dataset.contentType);
+        if (!content) return;
+        const existing = [...block.querySelectorAll(":scope > .content-offer, :scope > .poc-offer")];
+        const fresh = contentOffersFor(finding, content);
+        // Replacing an unchanged banner would swap a button out from under a click.
+        if (existing.map(node => node.outerHTML).join("") === fresh.map(node => node.outerHTML).join("")) return;
+        existing.forEach(node => node.remove());
+        const anchor = block.querySelector(":scope > .content-toggle");
+        if (anchor && fresh.length) anchor.after(...fresh);
+      });
+    };
+    document.addEventListener("reportchange", refreshContentOffers);
     const render = (focusedFindingUid) => {
       // Rebuilding the pane resets its scroll, which would throw the tester back to the top after an upload.
       const restoreScroll = pane.scrollTop;
@@ -2849,11 +3182,13 @@
           heading.replaceWith(titleEditor);
           titleInput.focus();
           let titleCommitted = false;
-          const finishTitle = () => {
+          const finishTitle = async () => {
             if (titleCommitted) return;
             titleCommitted = true;
+            const conclusionBefore = conclusionParagraphText(finding);
             finding.title = titleInput.value.trim();
             syncConclusion(finding);
+            await offerConclusionRewrite(finding, conclusionBefore);
             render();
             scheduleSave();
           };
@@ -2867,7 +3202,7 @@
               // Renaming here never replaces content; library swaps belong to the Findings page.
               item.onclick = () => {
                 const entry = library.find(candidate => candidate.library_id === item.dataset.id);
-                if (entry) { finding.title = entry.title; syncConclusion(finding); finishTitle(); }
+                if (entry) { titleInput.value = entry.title; finishTitle(); }
               };
             });
           };
@@ -2877,6 +3212,144 @@
           titleInput.onblur = () => setTimeout(finishTitle, 150);
         };
         if (expandedContentTypes === undefined) expandedContentTypes = new Set(finding.contents.map(content => content.type));
+        // Pure function of current state, so render() and the reportchange refresh build the
+        // same nodes. Returns them rather than appending, which is what lets the refresh
+        // replace only the banners without redrawing the section around them.
+        contentOffersFor = (finding, content) => {
+          const nodes = [];
+          // Both can show at once. Order mirrors the paragraphs they produce: quoted step above,
+          // standard sentence below, so the pair reads as a preview of the finished section.
+          if (content.type === "in_conclusion" && contentTypesForStatus(finding.status).includes("in_conclusion")) {
+            const resolved = finding.conclusion_offer_resolved || [];
+            const lastStep = pocLastStep(finding);
+            // A conclusion still holding nothing but the standard sentence holds nothing the tester
+            // chose, so a step they answered against an older conclusion no longer describes anything.
+            const onlyDefault = content.fragments.length === 1 && hasDefaultStatusConclusion(content.fragments[0]) && isDefaultStatusConclusion(content.fragments[0]);
+            const stepKey = `${finding.uid}|${lastStep}`;
+            if (lastStep && !dismissedStepOffers.has(stepKey) && (onlyDefault || !resolved.includes(lastStep))) {
+              const first = content.fragments.find(fragment => fragment.type === "paragraph");
+              const firstText = first ? conclusionText(first) : "";
+              const sentenceStart = first ? defaultConclusionStart(firstText) : -1;
+              const prefix = sentenceStart >= 0 ? firstText.slice(0, sentenceStart).trimEnd() : firstText;
+              // Only a paragraph still holding a line this banner wrote is replaced; once the tester
+              // edits it, it is theirs and a corrected step is inserted as a new one instead.
+              const quoted = first && resolved.includes(prefix) ? first : null;
+              const resolve = write => {
+                if (write && first && sentenceStart >= 0 && (!prefix || quoted)) {
+                  first.runs = [{text:`${lastStep} `}, ...runsAfter(first.runs || [], sentenceStart)];
+                }
+                else if (write && quoted) quoted.runs = [{text:lastStep}];
+                else if (write) content.fragments.unshift(Object.assign(newFragment("paragraph"), {runs:[{text:lastStep}]}));
+                if (!write) dismissedStepOffers.add(stepKey);
+                finding.conclusion_offer_resolved = [...new Set([...resolved, lastStep])];
+                render();
+                scheduleSave();
+              };
+              const {banner, actions} = buildOffer("content-offer", `Start the conclusion with your last step: "${lastStep}"`);
+              banner.dataset.conclusionStep = lastStep;
+              actions.append(
+                offerButton(quoted ? "Update the quoted step" : "Use it", "primary", () => resolve(true)),
+                offerButton("Dismiss", "dismiss", () => resolve(false)),
+              );
+              nodes.push(banner);
+            }
+            const emptied = content.fragments.filter(fragment => fragment.type === "paragraph" && !fragmentHasText(fragment));
+            if (emptied.length && !content.fragments.some(hasDefaultStatusConclusion)) {
+              const {banner, actions} = buildOffer("content-offer", "The standard closing sentence is missing. Put it back as a starting point; you will still need to replace it with your own wording before generating.");
+              banner.dataset.conclusionRestore = "";
+              actions.append(offerButton("Put it back", "primary", () => {
+                emptied[emptied.length - 1].runs = statusConclusionRuns(finding.title, finding.status === "resolved" ? "Resolved" : "Open");
+                // Back to boilerplate means the conclusion holds nothing the tester chose, so an
+                // earlier "not that step" no longer describes anything and the offer starts over.
+                finding.conclusion_offer_resolved = [];
+                render();
+                scheduleSave();
+              }));
+              nodes.push(banner);
+            }
+          }
+          if (content.type === "proof_of_concept") {
+            // Derived from current state, so it survives a reload and can never double-fire or leak a missed event.
+            const offered = pendingLibraryOffers(finding).find(offer => offer.type === "proof_of_concept")?.variants || [];
+            if (offered.length) {
+              const written = pocHasWrittenSteps(finding);
+              const chosen = new Set(offered);
+              const {banner, body, actions} = buildOffer("poc-offer", offered.length === 1
+                ? `Saved ${channelLabels[offered[0]]} steps are available for this finding.`
+                : `This finding affects ${offered.map(variant => channelLabels[variant]).join(" and ")}. Saved steps exist for both; they arrive as one list you can edit.`);
+              banner.dataset.pocOffer = offered.join(" ");
+              banner.dataset.offerFor = content.type;
+              const install = mode => {
+                const picked = offered.filter(variant => chosen.has(variant));
+                applyPocVariant(finding, picked.flatMap(variant => pocStepsFor(finding, variant) || []), picked, mode);
+                render();
+                scheduleSave();
+              };
+              const accept = offerButton(written ? "Use saved steps" : "Fill from library", "primary", () => install("replace"));
+              const add = offerButton("Add below", "subtle", () => install("merge"));
+              const refuse = offerButton(written ? "Keep mine" : "Dismiss", "dismiss", () => {
+                finding.poc_variant_declined = [...new Set([...(finding.poc_variant_declined || []), ...offered])];
+                render();
+                scheduleSave();
+              });
+              if (offered.length > 1) {
+                const picker = document.createElement("div");
+                picker.className = "offer-channels";
+                offered.forEach(variant => {
+                  const toggle = document.createElement("button");
+                  toggle.type = "button";
+                  toggle.textContent = channelLabels[variant];
+                  toggle.setAttribute("aria-pressed", "true");
+                  toggle.setAttribute("aria-label", `Include ${channelLabels[variant]} steps`);
+                  toggle.onclick = () => {
+                    const on = toggle.getAttribute("aria-pressed") !== "true";
+                    toggle.setAttribute("aria-pressed", String(on));
+                    if (on) chosen.add(variant); else chosen.delete(variant);
+                    accept.disabled = add.disabled = !chosen.size;
+                  };
+                  picker.append(toggle);
+                });
+                body.insertBefore(picker, actions);
+              }
+              actions.append(accept, add, refuse);
+              nodes.push(banner);
+            }
+          }
+          if (content.type === "description" || content.type === "recommended_remediation") {
+            // Derived from current state, like the proof-of-concept offer: survives a reload, never double-fires.
+            const offer = pendingLibraryOffers(finding).find(candidate => candidate.type === content.type);
+            if (offer) {
+              const entry = offer.entry;
+              const libraryFragments = libraryContentFor(entry, content.type);
+              const written = content.fragments.some(fragment => fragmentHasContent(fragment));
+              const resolve = mode => {
+                const previousEvidence = mode === "replace" ? evidenceIdsIn(finding) : null;
+                (finding.content_offer_resolved ||= {})[content.type] = entry.library_id;
+                if (mode !== "keep") {
+                  const copied = remintFragments(libraryFragments);
+                  content.fragments = mode === "replace" ? copied : [...(written ? content.fragments : []), ...copied];
+                }
+                if (previousEvidence) dropUnreferencedEvidence(previousEvidence);
+                // Recorded after the mutation, so the rule reads as one sentence: the banner
+                // remembers what the section looked like when the tester left it. "Add below"
+                // needs it most, since merged content still differs from the entry.
+                (finding.content_offer_dismissed ||= {})[content.type] = sectionFingerprint(content.fragments);
+                render();
+                scheduleSave();
+              };
+              const {banner, actions} = buildOffer("content-offer", `The library has a saved ${contentNames[content.type]} for this finding.`);
+              banner.dataset.contentOffer = content.type;
+              banner.dataset.offerFor = content.type;
+              actions.append(
+                offerButton(written ? "Use library version" : "Fill from library", "primary", () => resolve("replace")),
+                offerButton("Add below", "subtle", () => resolve("merge")),
+                offerButton(written ? "Keep mine" : "Dismiss", "dismiss", () => resolve("keep")),
+              );
+              nodes.push(banner);
+            }
+          }
+          return nodes;
+        };
         const buildContentBlock = content => {
           const block = document.createElement("div");
           const isExpanded = expandedContentTypes.has(content.type);
@@ -2900,111 +3373,7 @@
           };
           block.append(heading);
           if (!isExpanded) return block;
-          if (content.type === "in_conclusion") {
-            const guidance = document.createElement("p");
-            guidance.className = "content-guidance";
-            guidance.textContent = "Include a brief justification or explanation.";
-            block.append(guidance);
-          }
-          if (content.type === "proof_of_concept") {
-            // Derived from current state, so it survives a reload and can never double-fire or leak a missed event.
-            const offered = pendingLibraryOffers(finding).find(offer => offer.type === "proof_of_concept")?.variants || [];
-            if (offered.length) {
-              const written = content.fragments.some(fragment => fragment.type !== "image" && fragmentHasContent(fragment));
-              const chosen = new Set(offered);
-              const banner = document.createElement("div");
-              banner.className = "poc-offer";
-              banner.dataset.pocOffer = offered.join(" ");
-              banner.dataset.offerFor = content.type;
-              const message = document.createElement("p");
-              message.textContent = offered.length === 1
-                ? `Saved ${channelLabels[offered[0]]} steps are available for this finding.`
-                : `This finding affects ${offered.map(variant => channelLabels[variant]).join(" and ")}. Pick the steps to use; they are added as one list you can edit.`;
-              const accept = document.createElement("button");
-              accept.type = "button";
-              accept.className = "primary";
-              accept.textContent = written ? "Use saved steps" : "Fill from library";
-              const add = document.createElement("button");
-              add.type = "button";
-              add.className = "subtle";
-              add.textContent = "Add saved steps";
-              const refuse = document.createElement("button");
-              refuse.type = "button";
-              refuse.className = "subtle";
-              refuse.textContent = written ? "Keep mine" : "Dismiss";
-              const install = mode => {
-                const picked = offered.filter(variant => chosen.has(variant));
-                applyPocVariant(finding, picked.flatMap(variant => pocStepsFor(finding, variant) || []), picked, mode);
-                render();
-                scheduleSave();
-              };
-              accept.onclick = () => install("replace");
-              add.onclick = () => install("merge");
-              refuse.onclick = () => { finding.poc_variant_declined = [...new Set([...(finding.poc_variant_declined || []), ...offered])]; render(); scheduleSave(); };
-              banner.append(message);
-              if (offered.length > 1) {
-                const picker = document.createElement("div");
-                picker.className = "poc-offer-variants";
-                offered.forEach(variant => {
-                  const option = document.createElement("label");
-                  const box = document.createElement("input");
-                  box.type = "checkbox";
-                  box.checked = true;
-                  box.setAttribute("aria-label", `Include ${channelLabels[variant]} steps`);
-                  box.onchange = () => {
-                    if (box.checked) chosen.add(variant); else chosen.delete(variant);
-                    accept.disabled = add.disabled = !chosen.size;
-                  };
-                  option.append(box, document.createTextNode(channelLabels[variant]));
-                  picker.append(option);
-                });
-                banner.append(picker);
-              }
-              banner.append(accept, add, refuse);
-              block.append(banner);
-            }
-          }
-          if (content.type === "description" || content.type === "recommended_remediation") {
-            // Derived from current state, like the proof-of-concept offer: survives a reload, never double-fires.
-            const offer = pendingLibraryOffers(finding).find(candidate => candidate.type === content.type);
-            if (offer) {
-              const entry = offer.entry;
-              const libraryFragments = libraryContentFor(entry, content.type);
-              const written = content.fragments.some(fragment => fragmentHasContent(fragment));
-              const banner = document.createElement("div");
-              banner.className = "content-offer";
-              banner.dataset.contentOffer = content.type;
-              banner.dataset.offerFor = content.type;
-              const message = document.createElement("p");
-              message.textContent = `"${entry.title}" has saved ${contentNames[content.type].toLowerCase()} content.`;
-              const resolve = mode => {
-                (finding.content_offer_resolved ||= {})[content.type] = entry.library_id;
-                if (mode !== "keep") {
-                  const copied = remintFragments(libraryFragments);
-                  content.fragments = mode === "replace" ? copied : [...content.fragments, ...copied];
-                }
-                render();
-                scheduleSave();
-              };
-              const useLibrary = document.createElement("button");
-              useLibrary.type = "button";
-              useLibrary.className = "primary";
-              useLibrary.textContent = written ? "Use library version" : "Fill from library";
-              useLibrary.onclick = () => resolve("replace");
-              const addLibrary = document.createElement("button");
-              addLibrary.type = "button";
-              addLibrary.className = "subtle";
-              addLibrary.textContent = "Add library content";
-              addLibrary.onclick = () => resolve("merge");
-              const keep = document.createElement("button");
-              keep.type = "button";
-              keep.className = "subtle";
-              keep.textContent = written ? "Keep mine" : "Dismiss";
-              keep.onclick = () => resolve("keep");
-              banner.append(message, useLibrary, addLibrary, keep);
-              block.append(banner);
-            }
-          }
+          block.append(...contentOffersFor(finding, content));
           const appendFragmentMenu = () => {
             const menu = document.createElement("select");
             menu.className = "add-fragment";
@@ -3025,7 +3394,10 @@
             block.append(menu);
           };
           if (finding.status === "resolved" && content.type === "recommended_remediation") {
-            block.append(document.createTextNode("Locked for resolved findings."));
+            const locked = document.createElement("p");
+            locked.className = "content-locked";
+            locked.textContent = "Locked for resolved findings. The remediation reads \u201cNone, the vulnerability has been remediated.\u201d";
+            block.append(locked);
           } else {
             for (let index = 0; index < content.fragments.length; index += 1) {
               if (content.fragments[index].type !== "image") { block.append(renderFragment(content.fragments[index], content, render, finding)); continue; }

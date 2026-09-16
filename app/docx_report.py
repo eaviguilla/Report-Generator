@@ -39,7 +39,7 @@ from .docx_components import (
     replace_pattern_across_text_nodes,
 )
 from .models import CHANNELS
-from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, location_lines, setup_issues
+from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, setup_issues
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
 # Targets number from zero within each channel, so channel rank has to come first when ordering them.
@@ -111,9 +111,15 @@ def generation_issues(report: Report) -> list[str]:
             # A section this status does not print is carried for safekeeping, not for completing.
             if content.type not in printed:
                 continue
-            # Twin of the editor's requiresFragment rule: these two carry the finding, so neither is ever left empty.
-            if content.type in {"description", "recommended_remediation"} and not content.fragments:
+            # Twin of the editor's requiresFragment rule: these carry the finding, so none is ever left empty.
+            if content.type in {"description", "recommended_remediation", "in_conclusion"} and not content.fragments:
                 issues.append(f"{label}: {content.type} needs at least one fragment")
+            # The app writes this sentence itself, so leaving it is the same as leaving the section blank.
+            if content.type == "in_conclusion" and any(
+                isinstance(fragment, ParagraphFragment) and is_default_status_conclusion(fragment)
+                for fragment in content.fragments
+            ):
+                issues.append(f"{label}: in_conclusion still holds the default sentence")
             for fragment in content.fragments:
                 if isinstance(fragment, (ParagraphFragment, NoteFragment)) and not _runs_have_text(fragment.runs):
                     issues.append(f"{label}: {content.type} text is required")
@@ -651,6 +657,9 @@ def _render_finding_component(
             finding=finding,
             label_images=anchor in {"poc-fragments-here", "prev-poc-fragments-here"},
         )
+        # Before the splice: the anchor has to still be present, and re-located each pass because
+        # an earlier replacement has already shifted the indices.
+        _keep_anchor_lead_in(elements, anchor)
         elements = _replace_component_anchor(elements, anchor, rendered)
     return elements
 
@@ -674,6 +683,7 @@ def _render_environment_label(
     for element in elements:
         if element.tag == qn("w:p"):
             Paragraph(element, document._body).paragraph_format.space_after = Pt(0)
+            _keep_with_next(element)
     return elements
 
 
@@ -723,7 +733,9 @@ def _render_component_content(
                     allow_incomplete,
                 )
             )
-    return _trim_trailing_empty_paragraphs(rendered)
+    rendered = _trim_trailing_empty_paragraphs(rendered)
+    _keep_tables_with_lead_in(rendered)
+    return rendered
 
 
 def _render_component_fragment(
@@ -754,6 +766,9 @@ def _render_component_fragment(
         return rendered
     if isinstance(fragment, CodeFragment):
         rendered = _render_caption_component(document, component_root, fragment.caption)
+        for element in rendered:
+            if element.tag == qn("w:p"):
+                _keep_with_next(element)
         rendered.extend(
             _render_text_component(
                 document,
@@ -764,12 +779,16 @@ def _render_component_fragment(
         )
         return rendered
     if isinstance(fragment, InstanceTitleFragment):
-        return _render_text_component(
+        rendered = _render_text_component(
             document,
             component_root,
             "instance_title",
             [Run(text=fragment.text)],
         )
+        for element in rendered:
+            if element.tag == qn("w:p"):
+                _keep_with_next(element)
+        return rendered
     if isinstance(fragment, TableFragment):
         return _render_table_component(document, fragment, component_root)
     if isinstance(fragment, ImageFragment):
@@ -801,6 +820,24 @@ def _trim_trailing_empty_paragraphs(elements: list) -> list:
     while end and _is_empty_component_paragraph(elements[end - 1]):
         end -= 1
     return elements[:end]
+
+
+def _keep_tables_with_lead_in(elements: list) -> None:
+    """Tie each table to the paragraph that introduces it.
+
+    Runs after the trim, so a table ending a section has already lost its spacer. A caption is not
+    enough on its own: the caption component carries a trailing blank, and most tables have no
+    caption at all, so the walk reaches back to the real lead-in sentence.
+    """
+    for index, element in enumerate(elements):
+        if element.tag != qn("w:tbl"):
+            continue
+        for previous in reversed(elements[:index]):
+            if previous.tag != qn("w:p"):
+                break
+            _keep_with_next(previous)
+            if _element_text(previous).strip():
+                break
 
 
 def _is_empty_component_paragraph(element) -> bool:
@@ -864,10 +901,10 @@ def _render_image_component(
         image_template,
     )
     image_elements = _trim_trailing_empty_paragraphs(image_elements)
-    return [
-        *image_elements,
-        *_render_caption_component(document, component_root, _display_value(fragment.caption)),
-    ]
+    caption_elements = _render_caption_component(document, component_root, _display_value(fragment.caption))
+    if caption_elements:
+        _keep_with_next(paragraph_element)
+    return [*image_elements, *caption_elements]
 
 
 def _render_table_component(
@@ -918,6 +955,14 @@ def _render_table_component(
             runs = source_row[column_index].runs if column_index < len(source_row) else []
             replace_component_token_runs([cell._tc], "table-body-cell", runs)
     rendered.append(table_element)
+    # A table fragment contributes only its w:tbl, so without this two in a row become one in Word.
+    rendered.append(
+        next(
+            element
+            for element in _render_text_component(document, component_root, "paragraph", [])
+            if element.tag == qn("w:p")
+        )
+    )
     return rendered
 
 
@@ -991,6 +1036,19 @@ def _component_anchor_index(elements: list, token: str) -> int:
     return matches[0]
 
 
+def _keep_anchor_lead_in(elements: list, token: str) -> None:
+    """Keep a section heading with the content that replaces its anchor.
+
+    Walks by position rather than by heading text, so docx_import's SECTION_HEADINGS stays the only
+    place those strings live. "Severity Review Ticket" has no anchor and is deliberately not covered.
+    """
+    index = _component_anchor_index(elements, token)
+    for element in reversed(elements[:index]):
+        if element.tag != qn("w:p") or not _element_text(element).strip():
+            break
+        _keep_with_next(element)
+
+
 def _set_page_break_before(paragraph_element) -> None:
     paragraph_properties = paragraph_element.find(qn("w:pPr"))
     if paragraph_properties is None:
@@ -998,6 +1056,24 @@ def _set_page_break_before(paragraph_element) -> None:
         paragraph_element.insert(0, paragraph_properties)
     if paragraph_properties.find(qn("w:pageBreakBefore")) is None:
         paragraph_properties.append(OxmlElement("w:pageBreakBefore"))
+
+
+def _keep_with_next(paragraph_element) -> None:
+    """Word decides automatic page breaks itself and never records them in the file, so keeping a
+    heading beside the content it introduces has to be declared here rather than measured."""
+    properties = paragraph_element.find(qn("w:pPr"))
+    if properties is None:
+        properties = OxmlElement("w:pPr")
+        paragraph_element.insert(0, properties)
+    if properties.find(qn("w:keepNext")) is not None:
+        return
+    keep = OxmlElement("w:keepNext")
+    # CT_PPr is a sequence: w:keepNext has to follow w:pStyle and precede every other child.
+    style = properties.find(qn("w:pStyle"))
+    if style is None:
+        properties.insert(0, keep)
+    else:
+        style.addnext(keep)
 
 
 def _finding_locations(report: Report, finding: Vulnerability) -> dict[str, list[str]]:

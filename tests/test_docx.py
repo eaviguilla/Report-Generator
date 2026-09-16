@@ -268,7 +268,8 @@ class DocxReportTests(unittest.TestCase):
                     self.assertEqual(rating_run.font.size, Pt(12))
             self.assertTrue(any(paragraph.text == "Request" and paragraph.style.name == "Figures and Tables" for paragraph in component_document.paragraphs))
             image_caption = next(paragraph for paragraph in component_document.paragraphs if paragraph.text.endswith("Production response"))
-            self.assertEqual(image_caption.style.name, "Figures and Tables")
+            self.assertEqual(image_caption.style.name, "Normal")
+            self.assertEqual(image_caption._p.find(qn("w:pPr")).find(qn("w:jc")).get(qn("w:val")), "center")
             self.assertTrue(image_caption._p.getprevious().xpath(".//w:drawing"))
             self.assertEqual(image_caption.text, "Figure 2. Production response")
             self.assertEqual(

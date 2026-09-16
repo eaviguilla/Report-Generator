@@ -18,7 +18,6 @@ CLAUDE.md
 .impeccable/
 .graphifyignore
 graphify-out/
-.github/
 
 # customer reports used for local testing; these never belong in the repository
 /*.docx
@@ -34,7 +33,3 @@ vuln_library.bak.json
 
 # local master copy of the library; the app only reads resources/vuln_library.json
 /vuln_library.json
-
-# local-only library authoring tool, deliberately not shipped
-app/library_editor.py
-app/web/templates/library_editor.html

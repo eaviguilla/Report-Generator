@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Library Editor</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px "Inter", "Segoe UI", sans-serif; color: #1f2a33; background: #f4f6f8; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; background: #21394d; color: #fff; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  header .warn { margin-left: auto; font-size: 11px; opacity: .85; }
+  main { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; padding: 18px; align-items: start; }
+  .panel { background: #fff; border: 1px solid #dbe2e8; border-radius: 6px; }
+  #list { max-height: calc(100vh - 140px); overflow: auto; }
+  #list button { display: block; width: 100%; padding: 8px 12px; border: 0; border-bottom: 1px solid #eef2f5; background: none; text-align: left; font: inherit; cursor: pointer; }
+  #list button:hover { background: #f2f7fb; }
+  #list button[aria-current="true"] { background: #e6f0f8; font-weight: 600; }
+  #list small { display: block; color: #6b7a88; font-size: 11px; }
+  form { padding: 16px; display: grid; gap: 12px; }
+  label { display: grid; gap: 4px; font-size: 11px; font-weight: 600; color: #48596a; text-transform: uppercase; letter-spacing: .03em; }
+  input, select, textarea { padding: 6px 8px; border: 1px solid #cbd5dd; border-radius: 4px; font: 13px inherit; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  textarea { min-height: 90px; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  fieldset { margin: 0; padding: 12px; border: 1px solid #dbe2e8; border-radius: 5px; }
+  legend { padding: 0 6px; font-size: 11px; font-weight: 600; color: #48596a; text-transform: uppercase; }
+  .actions { display: flex; gap: 8px; align-items: center; }
+  button.primary { padding: 7px 14px; border: 0; border-radius: 4px; background: #21394d; color: #fff; font: inherit; cursor: pointer; }
+  button.subtle { padding: 7px 12px; border: 1px solid #cbd5dd; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+  #status { font-size: 12px; }
+  #status.ok { color: #1d6b3f; }
+  #status.bad { color: #a32020; }
+  .hint { margin: 0; font-size: 11px; color: #6b7a88; font-weight: 400; text-transform: none; letter-spacing: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vulnerability Library Editor</h1>
+  <span class="warn">Local tool. Writes resources/vuln_library.json. Reload open report tabs after saving.</span>
+</header>
+<main>
+  <div class="panel" id="list"></div>
+  <div class="panel">
+    <form id="editor">
+      <label>Library ID
+        <input id="library_id" readonly>
+        <p class="hint">Fixed. Saved reports point at this value.</p>
+      </label>
+      <label>Title <input id="title"></label>
+      <label>Tags <input id="tags" placeholder="comma separated"></label>
+      <div class="row">
+        <label>Likelihood <select id="default_likelihood"></select></label>
+        <label>Impact <select id="default_impact"></select></label>
+        <label>Severity <select id="default_severity"></select></label>
+      </div>
+      <div class="row">
+        <label>Status <input id="status_field"></label>
+        <label>Needs tester input
+          <select id="requires_tester_input"><option value="false">No</option><option value="true">Yes</option></select>
+        </label>
+      </div>
+      <fieldset>
+        <legend>Proof of concept steps</legend>
+        <p class="hint">One step per line. Leave a box empty for app types with no saved steps.</p>
+        <label>Web <textarea id="poc_web"></textarea></label>
+        <label>API <textarea id="poc_api"></textarea></label>
+        <label>Mobile <textarea id="poc_mobile"></textarea></label>
+      </fieldset>
+      <div class="actions">
+        <button class="primary" type="submit">Save entry</button>
+        <button class="subtle" type="button" id="add">New entry</button>
+        <span id="status"></span>
+      </div>
+    </form>
+  </div>
+</main>
+<script>
+  const entries = __ENTRIES__;
+  const severities = ["", "critical", "high", "medium", "low", "informational"];
+  const variants = ["web", "api", "mobile"];
+  const field = name => document.querySelector(`#${name}`);
+  const status = field("status");
+  let current = null;
+
+  severities.forEach(value => ["default_likelihood", "default_impact", "default_severity"].forEach(name => {
+    field(name).append(new Option(value || "(none)", value));
+  }));
+
+  const renderList = () => {
+    const list = document.querySelector("#list");
+    list.innerHTML = "";
+    entries.forEach(entry => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("aria-current", String(entry === current));
+      const saved = variants.filter(variant => (entry.proof_of_concept?.[variant] || []).length);
+      button.innerHTML = `${entry.title}<small>${entry.library_id}${saved.length ? ` &middot; PoC: ${saved.join(", ")}` : ""}</small>`;
+      button.onclick = () => select(entry);
+      list.append(button);
+    });
+  };
+
+  const select = entry => {
+    current = entry;
+    field("library_id").value = entry.library_id;
+    field("title").value = entry.title || "";
+    field("tags").value = (entry.tags || []).join(", ");
+    field("default_likelihood").value = entry.default_likelihood || "";
+    field("default_impact").value = entry.default_impact || "";
+    field("default_severity").value = entry.default_severity || "";
+    field("status_field").value = entry.status || "approved";
+    field("requires_tester_input").value = String(Boolean(entry.requires_tester_input));
+    variants.forEach(variant => { field(`poc_${variant}`).value = (entry.proof_of_concept?.[variant] || []).join("\n"); });
+    status.textContent = "";
+    renderList();
+  };
+
+  const say = (message, ok) => { status.textContent = message; status.className = ok ? "ok" : "bad"; };
+
+  document.querySelector("#editor").onsubmit = async event => {
+    event.preventDefault();
+    if (!current) return say("Pick an entry first.", false);
+    const body = {
+      title: field("title").value.trim(),
+      tags: field("tags").value.split(",").map(tag => tag.trim()),
+      default_likelihood: field("default_likelihood").value,
+      default_impact: field("default_impact").value,
+      default_severity: field("default_severity").value,
+      status: field("status_field").value.trim() || "approved",
+      requires_tester_input: field("requires_tester_input").value === "true",
+      proof_of_concept: Object.fromEntries(variants.map(variant => [variant, field(`poc_${variant}`).value.split(/\r?\n/)])),
+    };
+    const response = await fetch(`/library-editor/entries/${encodeURIComponent(current.library_id)}`, {
+      method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    });
+    if (!response.ok) return say((await response.json()).detail || "Save failed.", false);
+    Object.assign(current, body, {proof_of_concept: Object.fromEntries(variants.map(variant => [variant, body.proof_of_concept[variant].filter(line => line.trim())]).filter(([, lines]) => lines.length))});
+    renderList();
+    say("Saved. Reload any open report tabs.", true);
+  };
+
+  document.querySelector("#add").onclick = async () => {
+    const library_id = prompt("New library ID (letters, digits, dot, dash, underscore):");
+    if (!library_id) return;
+    const response = await fetch("/library-editor/entries", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({library_id, title: library_id}),
+    });
+    if (!response.ok) return say((await response.json()).detail || "Create failed.", false);
+    location.reload();
+  };
+
+  renderList();
+  if (entries.length) select(entries[0]);
+</script>
+</body>
+</html>

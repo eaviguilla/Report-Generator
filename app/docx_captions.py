@@ -156,7 +156,13 @@ def add_native_image_captions(document: DocumentType) -> int:
         if caption is None or caption.tag != qn("w:p"):
             index += 1
             continue
-        if _paragraph_style_id(caption) not in caption_style_ids or _has_figure_sequence(caption):
+        # Either signal will do, and both still require the paragraph to sit directly under an image:
+        # our own generator centres captions and gives them no caption style, while a document that
+        # came from elsewhere carries the style but may be left aligned.
+        if _has_figure_sequence(caption):
+            index += 1
+            continue
+        if _paragraph_style_id(caption) not in caption_style_ids and not _is_centered(caption):
             index += 1
             continue
         caption_text = _paragraph_text_with_breaks(caption).strip()
@@ -273,6 +279,12 @@ def _proof_error(error_type: str):
     return marker
 
 
+def _is_centered(paragraph) -> bool:
+    properties = paragraph.find(qn("w:pPr"))
+    alignment = properties.find(qn("w:jc")) if properties is not None else None
+    return alignment is not None and alignment.get(qn("w:val")) == "center"
+
+
 def _paragraph_style_id(paragraph) -> str | None:
     properties = paragraph.find(qn("w:pPr"))
     style = properties.find(qn("w:pStyle")) if properties is not None else None
@@ -289,13 +301,17 @@ def _is_image_paragraph(paragraph) -> bool:
     )
 
 
-def _center_paragraph(paragraph) -> None:
+def center_paragraph(paragraph) -> None:
     properties = paragraph.get_or_add_pPr()
     alignment = properties.find(qn("w:jc"))
     if alignment is None:
         alignment = OxmlElement("w:jc")
         properties.append(alignment)
     alignment.set(qn("w:val"), "center")
+
+
+def _center_paragraph(paragraph) -> None:
+    center_paragraph(paragraph)
 
 
 def _has_figure_sequence(paragraph) -> bool:

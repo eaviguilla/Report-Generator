@@ -64,6 +64,7 @@
         <label>Web <textarea id="poc_web"></textarea></label>
         <label>API <textarea id="poc_api"></textarea></label>
         <label>Mobile <textarea id="poc_mobile"></textarea></label>
+        <label>Thick Client <textarea id="poc_thick_client"></textarea></label>
       </fieldset>
       <div class="actions">
         <button class="primary" type="submit">Save entry</button>
@@ -76,7 +77,9 @@
 <script>
   const entries = __ENTRIES__;
   const severities = ["", "critical", "high", "medium", "low", "informational"];
-  const variants = ["web", "api", "mobile"];
+  // Third copy of models.CHANNELS: this page cannot import app.js. Drift here silently drops a
+  // whole app type's saved steps on save.
+  const variants = ["web", "api", "mobile", "thick_client"];
   const field = name => document.querySelector(`#${name}`);
   const status = field("status");
   let current = null;

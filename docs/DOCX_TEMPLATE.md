@@ -1,9 +1,27 @@
 # DOCX Template Contract
 
-`resources/MAIN.docx` is the canonical Word template used by
-`app/docx_report.py`.
-The renderer preserves its styles, sections, headers, footers, numbering, and
-static content while replacing the fields below.
+`app/docx_report.py` renders into one of four canonical Word templates under
+`resources/`. The renderer preserves their styles, sections, headers, footers,
+numbering, and static content while replacing the fields below.
+
+## Template selection
+
+`main_template_path(report, resources)` is the sole owner of the choice, and it
+switches on two independent axes. Its `.parent` is also the component fragment
+root, so every branch must stay inside `resources/`.
+
+| | not Asia | `segment == "Asia"` |
+|---|---|---|
+| no component app type | `MAIN.docx` | `MAIN_ASIA.docx` |
+| Mobile or Thick Client covered | `MAIN_THICK_MOBILE.docx` | `MAIN_THICK_MOBILE_ASIA.docx` |
+
+Each template is a superset of the one above and left of it. The component pair
+adds a Component/Description table; the Asia pair adds a Section table. Tables
+are resolved by their first header cell, never by index, so a template may carry
+a table the others do not without disturbing anything.
+
+The scripts under `scripts/` hard-code `MAIN.docx` and bypass this function, so a
+fixture rendered through them never has the extra tables. That is deliberate.
 
 ## Render path
 
@@ -44,6 +62,49 @@ are rendered by `_render_component_fragment`.
 
 Tokens may be wrapped in `{{...}}` or appear as plain text where the template
 already uses that form. Split Word runs are supported.
+
+## Component scope, in the two `THICK_MOBILE` templates
+
+| Template token | Report value |
+|---|---|
+| `mobile-thick`, `thick-mobile` | `Mobile` or `Thick Client` |
+| `binaries`, `binaries-description` | The prototype row of the `Component` table |
+
+The two templates spell the caption token in opposite orders, so `_metadata`
+always supplies both keys; `_replace_metadata` no-ops on the one that is absent,
+which is also why the other two templates are unaffected by them.
+
+The `Component` table is filled by cloning its single data row once per
+component, production rows first. The table has no environment column, so that
+ordering is the only thing carrying the distinction to the reader. An empty
+component list yields one `N/A` row, mirroring `User Roles` — leaving the
+prototype row intact would instead fail the unresolved-placeholder check at the
+very end of generation.
+
+## The Section table, in the two `ASIA` templates
+
+Header row `Section | Vulnerability Name | Severity | CVSS Score | CVSS Vector`,
+filled by cloned rows in the same order the findings body renders them — the
+order is returned by `_populate_component_findings` and consumed, not derived a
+second time.
+
+**`{{section-number}}` becomes a Word `REF` field, never a number counted in
+Python.** `_populate_component_findings` bookmarks each finding-title paragraph
+as `vuln_<uid>`, and the Section cell holds ` REF vuln_<uid> \w \h `. Word
+resolves it against the heading's own numbering, so the two cannot disagree, and
+it keeps working if the heading styles are ever re-levelled. `\w` rather than
+`\r` because the reference sits in a different section, where a relative number
+is short. The existing `mark_all_fields_for_update` pass marks the field dirty
+and sets `updateFields`, so the Word finalization step bakes the value in.
+
+With the template as it stands, a finding title is `ReportHeading2` under a
+`ReportHeading1` severity heading, and the severity headings begin at section 7 —
+so the first Critical finding reads **7.1**, not `6.2.1`.
+
+**`{{cvss-score}}` and `{{cvss-vector}}` are replaced with an empty string.** The
+app does not collect CVSS yet; blank rather than `N/A` so that only the value
+changes when it does. `MAIN_ASIA.docx` was unreachable before this, because those
+tokens had no source and every unresolved token fails generation.
 
 ## Tag formatting
 

@@ -415,7 +415,48 @@ class ReportApiTests(unittest.TestCase):
         # Both keys can only coexist in a hand-edited file; union is the only rule that drops nothing.
         self.assertEqual(resolve_tested_channels({"engagement": {"tested_channels": ["mobile"], "test_type": "web_api"}}), ["web", "api", "mobile"])
 
+    def test_thick_client_widens_the_channel_set_without_disturbing_the_existing_three(self) -> None:
+        """Widening a Literal is only safe if every value that validated before still does, and if
+        the canonical order absorbs the new member without reordering the old ones."""
+        self.assertEqual(models.CHANNELS, ("web", "api", "mobile", "thick_client"))
+        self.assertEqual(models.COMPONENT_CHANNELS, ("mobile", "thick_client"))
+        # Twin of channelLabels in app.js. Every channel needs an entry or a message prints "undefined".
+        self.assertEqual(sorted(models.CHANNEL_LABELS), sorted(models.CHANNELS))
+
+        # A draft written before description existed still validates, and identity is unaffected.
+        target = ScopeTarget(target_id="tgt_thick", environment="production", channel="thick_client", value="Acme.exe")
+        self.assertEqual(target.description, "")
+
+        # Present-only-in-targets fallback and the legacy test_type union both still resolve.
+        self.assertEqual(resolve_tested_channels({"scope_targets": [
+            {"target_id": "tgt_t", "environment": "production", "channel": "thick_client", "value": "Acme.exe"},
+            {"target_id": "tgt_w", "environment": "production", "channel": "web", "value": "https://prod.example.test"},
+        ]}), ["web", "thick_client"])
+        self.assertEqual(resolve_tested_channels({"engagement": {"test_type": "web_api"}}), ["web", "api"])
+
+        # A retired scope mode resolves in canonical order, and thick client files last.
+        mapping = {
+            "scope_targets": [
+                {"target_id": "tgt_thick", "environment": "production", "channel": "thick_client", "value": "Acme.exe"},
+                {"target_id": "tgt_web", "environment": "production", "channel": "web", "value": "https://prod.example.test"},
+                {"target_id": "tgt_mobile", "environment": "production", "channel": "mobile", "value": "Wallet app"},
+            ],
+            "vulnerabilities": [{"uid": "v_all", "scope": {"mode": "all"}}],
+        }
+        models.normalise_scope_modes(mapping)
+        self.assertEqual(mapping["vulnerabilities"][0]["scope"]["target_ids"], ["tgt_web", "tgt_mobile", "tgt_thick"])
+
+    def test_the_library_editor_offers_every_channel_the_model_knows(self) -> None:
+        """Third copy of the channel list, in a page that cannot import app.js. Drift here silently
+        drops a whole app type's saved steps on save, and no browser test loads that page."""
+        template = (Path(main.__file__).parent / "web" / "templates" / "library_editor.html").read_text(encoding="utf-8")
+        variants = re.search(r"const variants = \[(.*?)\]", template).group(1)
+        for channel in models.CHANNELS:
+            self.assertIn(f'"{channel}"', variants)
+            self.assertIn(f'id="poc_{channel}"', template)
+
     def test_workflow_routes_enforce_setup_and_finding_gates(self) -> None:
+
         report_id = self.new_report()
         self.assertEqual(self.client.get(f"/reports/{report_id}/findings", follow_redirects=False).headers["location"], f"/reports/{report_id}/setup?incomplete=setup")
         self.assertEqual(self.client.get(f"/reports/{report_id}/edit", follow_redirects=False).headers["location"], f"/reports/{report_id}/setup?incomplete=setup")
@@ -719,6 +760,91 @@ class ReportApiTests(unittest.TestCase):
         # Narrowing with no finding to strand is allowed and silent server-side; warning the tester
         # before it happens is the Setup page's job.
         self.assertEqual([target.channel for target in main.workspace.load(report_id).scope_targets], ["web"])
+
+    def _component_scope_payload(self, report_id: str, channel: str, scope_text) -> dict:
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"].update({
+            "app_name": "Binary Scope",
+            "ci_number": "CI-BINARY",
+            "segment": "JH",
+            "report_type": "annual_pentest",
+            "tested_channels": [channel],
+            "tested_environments": ["production"],
+            "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-01"}},
+        })
+        report["scope_text"] = {"production": {channel: scope_text}}
+        return report
+
+    def test_component_scope_pairs_each_line_with_its_description_by_raw_index(self) -> None:
+        """Pairing after cleaning would let one commented component line shift every description
+        below it onto the wrong binary -- wrong, silent, and printed into the delivered report."""
+        report_id = self.new_report()
+        saved = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", {
+            "component": "# not a binary\nAcme.exe\n\nAcme.Updater.exe",
+            "description": "# ignored\nMain client\n\nBackground updater",
+        }))
+        self.assertEqual(saved.status_code, 200)
+        stored = main.workspace.load(report_id)
+        self.assertEqual([(target.value, target.description, target.order) for target in stored.scope_targets], [
+            ("Acme.exe", "Main client", 0),
+            ("Acme.Updater.exe", "Background updater", 1),
+        ])
+
+        # Identity is the (environment, channel, value) triple, so retyping a description alone must
+        # not remint the ID and strand every finding that selected the target.
+        before = {target.value: target.target_id for target in stored.scope_targets}
+        payload = self._component_scope_payload(report_id, "thick_client", {
+            "component": "Acme.exe\nAcme.Updater.exe",
+            "description": "Main desktop client\nBackground updater",
+        })
+        payload["saved_at"] = stored.saved_at.isoformat()
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=payload).status_code, 200)
+        after = main.workspace.load(report_id)
+        self.assertEqual({target.value: target.target_id for target in after.scope_targets}, before)
+        self.assertEqual(after.scope_targets[0].description, "Main desktop client")
+
+    def test_component_scope_ignores_an_unpaired_description_and_refuses_a_repeat(self) -> None:
+        report_id = self.new_report()
+        # A description with no component at its index names nothing, so it creates no target.
+        orphan = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "mobile", {
+            "component": "Wallet app",
+            "description": "Android build\nOrphaned line",
+        }))
+        self.assertEqual(orphan.status_code, 200)
+        self.assertEqual([(target.value, target.description) for target in main.workspace.load(report_id).scope_targets], [("Wallet app", "Android build")])
+
+        # Two builds of one name would silently lose the second row and its description.
+        repeated = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "mobile", {
+            "component": "Wallet app\nWallet app",
+            "description": "Android build\niOS build",
+        }))
+        self.assertEqual(repeated.status_code, 422)
+        self.assertEqual(repeated.json()["error"]["code"], "invalid_scope")
+        self.assertIn('Production Mobile scope lists the same component twice: "Wallet app"', repeated.json()["error"]["message"])
+
+    def test_component_scope_shares_one_widened_character_set_across_both_boxes(self) -> None:
+        """A strict superset of the retired mobile set: an install path must be typable, and the
+        message must name which of the two boxes rejected it."""
+        report_id = self.new_report()
+        allowed = "C:\\Program Files\\Acme\\acme.exe [x64]"
+        saved = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", {
+            "component": allowed,
+            "description": "Client's \"main\" binary; build 2.1 (x64)",
+        }))
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(main.workspace.load(report_id).scope_targets[0].value, allowed)
+
+        rejected = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", {
+            "component": "Acme.exe",
+            "description": "Crashes on start!",
+        }))
+        self.assertEqual(rejected.status_code, 422)
+        self.assertIn('Production Thick Client scope description contains invalid character: "!" (exclamation mark)', rejected.json()["error"]["message"])
+
+        # The plain string form is still valid for every channel, so a browser cached from before
+        # this shape existed degrades rather than 422ing.
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", "Acme.exe")).status_code, 200)
+        self.assertEqual([(target.value, target.description) for target in main.workspace.load(report_id).scope_targets], [("Acme.exe", "")])
 
     def test_image_slots_follow_affected_environments_and_allow_multiple(self) -> None:
         report_id = self.new_report()
@@ -1484,6 +1610,66 @@ class ReportApiTests(unittest.TestCase):
         editor = self.client.get(f"/reports/{report_id}/edit", follow_redirects=False)
         self.assertEqual(editor.status_code, 303)
         self.assertIn("incomplete=findings", editor.headers["location"])
+
+    def _component_scope_report(self, report_id: str, channel: str, description: str) -> Report:
+        report = main.workspace.load(report_id)
+        report.engagement.segment = "JH"
+        report.engagement.app_name = "Binary"
+        report.engagement.report_type = "annual_pentest"
+        report.engagement.tester = "QA Tester"
+        report.engagement.tested_environments = ["production"]
+        report.engagement.tested_channels = [channel]
+        report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
+        report.scope_targets = [ScopeTarget(target_id="tgt_bin", environment="production", channel=channel, value="Acme.exe", description=description)]
+        return report
+
+    def test_mobile_and_thick_client_together_block_setup_without_stranding_the_draft(self) -> None:
+        """The rule lives only in setup_issues. Raising on the load path would demote the draft to
+        the manager's legacy list, where the checkboxes that caused it cannot be reached."""
+        report_id = self.new_report()
+        report = self._component_scope_report(report_id, "thick_client", "Windows desktop client")
+        report.engagement.tested_channels = ["mobile", "thick_client"]
+        report.scope_targets.append(ScopeTarget(target_id="tgt_app", environment="production", channel="mobile", value="Wallet app", description="Android build"))
+
+        self.assertIn("only one of Mobile and Thick Client -- deselect the other", report_service.setup_issues(report))
+        self.assertFalse(report_service.setup_is_complete(report))
+
+        # Savable and loadable: the tester must be able to reach Setup and untick one.
+        main.workspace.save(report)
+        self.assertEqual(main.workspace.load(report_id).engagement.tested_channels, ["mobile", "thick_client"])
+        self.assertIn("incomplete=setup", self.client.get(f"/reports/{report_id}/findings", follow_redirects=False).headers["location"])
+        self.assertIn("only one of Mobile and Thick Client -- deselect the other", generation_issues(main.workspace.load(report_id)))
+
+        # The union branch of resolve_tested_channels can produce the illegal pair from a file that
+        # never submitted it. That file must still open.
+        payload = report.model_dump(mode="json", by_alias=True)
+        payload["engagement"]["tested_channels"] = ["thick_client"]
+        payload["engagement"]["test_type"] = "mobile"
+        payload["report_id"] = "r_unioned"
+        self.assertEqual(main.workspace.import_report(payload).engagement.tested_channels, ["mobile", "thick_client"])
+
+    def test_a_component_without_a_description_blocks_setup_and_names_itself(self) -> None:
+        """A blank description would reach the binaries table as an empty cell. Naming the component
+        is the point: a tally cannot say which of ten rows is missing one."""
+        report_id = self.new_report()
+        self.assertTrue(report_service.setup_is_complete(self._component_scope_report(report_id, "thick_client", "Windows desktop client")))
+
+        blank = self._component_scope_report(report_id, "thick_client", "")
+        self.assertEqual(report_service.setup_issues(blank), ['production Thick Client description for "Acme.exe"'])
+        self.assertFalse(report_service.setup_is_complete(blank))
+
+        mobile = self._component_scope_report(report_id, "mobile", "")
+        self.assertEqual(report_service.setup_issues(mobile), ['production Mobile description for "Acme.exe"'])
+
+        # Web and API carry locations, not components, so the rule never fires for them.
+        web = self._component_scope_report(report_id, "web", "")
+        web.scope_targets[0].value = "https://prod.example.test"
+        self.assertEqual(report_service.setup_issues(web), [])
+
+        # The existing per-environment check still counts value alone.
+        empty = self._component_scope_report(report_id, "thick_client", "Windows desktop client")
+        empty.scope_targets = []
+        self.assertIn("production scope target", report_service.setup_issues(empty))
 
     def test_generate_docx_route_uses_template_and_report_filename(self) -> None:
         report_id = self.new_report()

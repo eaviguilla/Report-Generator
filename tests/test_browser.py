@@ -447,7 +447,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/new")
         page.get_by_label("Test Mobile").check()
         page.get_by_label("Test Web").uncheck()
-        mobile = page.get_by_role("textbox", name="Mobile", exact=True).first
+        mobile = page.get_by_role("textbox", name="Mobile Component", exact=True).first
 
         mobile.fill("# ignored ! []\nClient's \"Mobile\" App: iOS/Android_v2.1, QA-&")
         self.assertEqual(mobile.evaluate("input => input.validationMessage"), "")
@@ -458,6 +458,131 @@ class BrowserWorkflowTests(unittest.TestCase):
             'Production Mobile scope contains invalid character: "!" (exclamation mark)',
         )
         self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
+
+    def test_a_cached_draft_written_before_the_two_box_scope_still_accepts_typing(self) -> None:
+        """A tab open across the deploy restores scope_text holding a bare string. This script is not
+        in strict mode, so writing .component onto that string would no-op and swallow every
+        keystroke -- no error, and the stale value saved instead."""
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["tested_channels"] = ["mobile"]
+        report["scope_text"] = {"production": {"mobile": "Stale wallet app"}, "non_production": {"mobile": ""}}
+        draft_key = f"vulnreport-pending:{report_id}:orphan"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "orphan",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+
+        mobile = page.get_by_role("textbox", name="Mobile Component", exact=True).first
+        self.assertEqual(mobile.input_value(), "Stale wallet app", "the cached string must survive into the new shape")
+        mobile.fill("Wallet app")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+
+        stored = main.workspace.load(report_id)
+        self.assertEqual(
+            [(target.channel, target.value) for target in stored.scope_targets],
+            [("mobile", "Wallet app")],
+            "the keystroke was written onto a string primitive and silently discarded",
+        )
+
+    def test_a_component_needs_a_description_before_setup_will_let_you_leave(self) -> None:
+        """A description-only entry would pass an unnarrowed textarea count and 422 server-side.
+        The notice must also read the same as setup_issues, or the two describe one report differently."""
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        page.get_by_label("Test Thick Client").check()
+        page.get_by_label("Test Web").uncheck()
+        # Production only, so the one empty box on the page is the one under test.
+        page.get_by_label("Non-Production", exact=True).uncheck()
+        page.get_by_label("Segment").select_option("JH")
+        page.get_by_label("Application Name").fill("Binary Scope")
+        page.get_by_label("Report Type").select_option("annual_pentest")
+        page.get_by_label("Tester").fill("QA Tester")
+        page.locator('input[aria-label="Production start date"]').fill("2026-01-01")
+        page.locator('input[aria-label="Production end date"]').fill("2026-01-02")
+
+        component = page.get_by_role("textbox", name="Thick Client Component", exact=True).first
+        description = page.get_by_role("textbox", name="Thick Client Description", exact=True).first
+
+        # Description only: the component box is what names a target, so this is still empty scope.
+        description.fill("Main desktop client")
+        page.locator("#next").click()
+        notice = page.locator("#setup-validation-note")
+        self.assertIn("production scope target", notice.text_content())
+        self.assertTrue(component.evaluate("input => input.classList.contains('validation-error')"))
+
+        # Component only: now a target exists, and the missing description is named by component.
+        component.fill("Acme.exe")
+        description.fill("")
+        page.locator("#next").click()
+        self.assertIn('production Thick Client description for "Acme.exe"', notice.text_content())
+        self.assertTrue(description.evaluate("input => input.classList.contains('validation-error')"))
+        self.assertEqual(description.evaluate("input => document.activeElement === input"), True)
+
+        # Both boxes share one character set, and the message names which of the two rejected it.
+        description.fill("Crashes on start!")
+        self.assertEqual(
+            description.evaluate("input => input.validationMessage"),
+            'Production Thick Client scope description contains invalid character: "!" (exclamation mark)',
+        )
+
+        description.fill("Main desktop client")
+        page.locator("#next").click()
+        page.wait_for_url("**/findings")
+
+        # The pair survives the round trip, which is the whole point of storing it on the target.
+        page.goto(f"{self.base_url}{page.url.split(self.base_url)[1].replace('/findings', '/setup')}")
+        self.assertEqual(page.get_by_role("textbox", name="Thick Client Component", exact=True).first.input_value(), "Acme.exe")
+        self.assertEqual(page.get_by_role("textbox", name="Thick Client Description", exact=True).first.input_value(), "Main desktop client")
+
+    def test_thick_client_and_mobile_swap_silently_but_ask_when_scope_would_be_lost(self) -> None:
+        """The request is a silent swap. Silent is right when the outgoing panel is empty, and wrong
+        when it holds typed work -- which is deleted with no undo."""
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        page.get_by_label("Test Mobile").check()
+        page.get_by_label("Test Web").uncheck()
+
+        # Nothing typed yet, so the swap is instant and unprompted.
+        page.get_by_label("Test Thick Client").check()
+        self.assertFalse(page.get_by_label("Test Mobile").is_checked())
+        self.assertTrue(page.get_by_label("Test Thick Client").is_checked())
+
+        page.get_by_role("textbox", name="Thick Client Component", exact=True).first.fill("Acme.exe")
+        page.get_by_role("textbox", name="Thick Client Description", exact=True).first.fill("Main desktop client")
+        # The impact count reads saved targets, so unsaved typing is invisible to the confirmation.
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+
+        page.get_by_label("Test Mobile").check()
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for()
+        self.assertIn("Replace Thick Client with Mobile?", dialog.text_content())
+        dialog.get_by_role("button", name="Keep Thick Client").click()
+
+        # Cancelling restores both boxes, so the list is never momentarily empty.
+        self.assertFalse(page.get_by_label("Test Mobile").is_checked())
+        self.assertTrue(page.get_by_label("Test Thick Client").is_checked())
+        self.assertEqual(page.get_by_role("textbox", name="Thick Client Component", exact=True).first.input_value(), "Acme.exe")
+
+        # Confirming completes the swap and takes the outgoing app type's scope with it.
+        page.get_by_label("Test Mobile").check()
+        page.locator(".vr-dialog").wait_for()
+        page.get_by_role("button", name="Switch to Mobile anyway").click()
+        self.assertTrue(page.get_by_label("Test Mobile").is_checked())
+        self.assertFalse(page.get_by_label("Test Thick Client").is_checked())
+        self.assertEqual(page.get_by_role("textbox", name="Mobile Component", exact=True).first.input_value(), "")
 
     def test_unchecking_an_app_type_confirms_then_clears_it_from_every_finding(self) -> None:
         """Dropping an app type deletes its scope targets and every affected location and additional

@@ -18,6 +18,7 @@ from app.docx_report import (
     ReportGenerationError,
     _wrap_long_value,
     generation_issues,
+    main_template_path,
     render_report_docx,
 )
 from app.report_service import provision, sync_evidence_image_slots
@@ -847,6 +848,190 @@ class DocxReportTests(unittest.TestCase):
             alignment = paragraph.find(qn("w:pPr") + "/" + qn("w:jc"))
             self.assertIsNotNone(alignment)
             self.assertEqual(alignment.get(qn("w:val")), "center")
+
+    def _component_report(self, report_folder: Path, channel: str, segment: str, targets: list[ScopeTarget]) -> Report:
+        """A complete single-finding report covering one component app type."""
+        evidence_folder = report_folder / "evidence"
+        evidence_folder.mkdir(exist_ok=True)
+        buffer = BytesIO()
+        Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+        (evidence_folder / "ev_prod.png").write_bytes(buffer.getvalue())
+        now = datetime.now().astimezone()
+        report = Report(
+            report_id="r_component",
+            app_id="CI-DOCX",
+            saved_at=now,
+            engagement=Engagement(
+                app_name="Northstar Banking",
+                ci_number="CI-DOCX",
+                segment=segment,
+                report_type="annual_pentest",
+                report_date=date(2026, 9, 9),
+                tester="QA Tester",
+                tested_environments=["production"],
+                tested_channels=[channel],
+                test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST")},
+            ),
+            scope_targets=targets,
+            evidence={"ev_prod": EvidenceItem(file="evidence/ev_prod.png", original_name="ev_prod.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)},
+        )
+        report.vulnerabilities = [
+            self._finding("v_component", "Authorization bypass", "high", "001", [next(target.target_id for target in targets if target.environment == "production")], [
+                ImageFragment(frag_id="f_img_prod", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
+            ]),
+        ]
+        return report
+
+    def test_main_template_path_selects_on_both_axes(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for channel, segment, expected in (
+                ("web", "JH", "MAIN.docx"),
+                ("web", "Asia", "MAIN_ASIA.docx"),
+                ("thick_client", "JH", "MAIN_THICK_MOBILE.docx"),
+                ("mobile", "Asia", "MAIN_THICK_MOBILE_ASIA.docx"),
+            ):
+                report = self._component_report(Path(temporary_directory), channel, segment, [
+                    ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
+                ])
+                chosen = main_template_path(report, resources)
+                self.assertEqual(chosen.name, expected)
+                # The parent doubles as the component fragment root, so every branch must stay in resources.
+                self.assertEqual(chosen.parent, resources)
+                self.assertTrue(chosen.is_file())
+
+    def test_every_shipped_template_renders_without_unresolved_placeholders(self) -> None:
+        """None of the four has been through this renderer before. Each carries its own anchors,
+        table headers and tokens, and every one of them is a hard precondition."""
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia")):
+            with self.subTest(channel=channel, segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
+                report_folder = Path(temporary_directory)
+                report = self._component_report(report_folder, channel, segment, [
+                    ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
+                ])
+                self.assertEqual(generation_issues(report), [])
+                render_report_docx(report, main_template_path(report, resources), report_folder)
+
+    def test_component_scope_fills_the_binaries_table_production_first(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._component_report(report_folder, "thick_client", "JH", [
+                ScopeTarget(target_id="t_nonprod", environment="non_production", channel="thick_client", value="Acme.Staging.exe", description="UAT build", order=0),
+                ScopeTarget(target_id="t_prod", environment="production", channel="thick_client", value="Acme.exe", description="Main client", order=0),
+                ScopeTarget(target_id="t_prod_2", environment="production", channel="thick_client", value="Acme.Updater.exe", description="Background updater", order=1),
+            ])
+            report.engagement.tested_environments = ["production", "non_production"]
+            report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30))
+            rendered = Document(BytesIO(render_report_docx(report, main_template_path(report, resources), report_folder)))
+
+            table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Component")
+            # One cloned row per component: stacked paragraphs would misalign every row below a wrap.
+            self.assertEqual([(row.cells[0].text, row.cells[1].text) for row in table.rows[1:]], [
+                ("Acme.exe", "Main client"),
+                ("Acme.Updater.exe", "Background updater"),
+                ("Acme.Staging.exe", "UAT build"),
+            ])
+            self.assertIn("Thick Client", "\n".join(paragraph.text for paragraph in rendered.paragraphs))
+
+    def test_an_empty_component_list_leaves_one_placeholder_row_not_the_prototype(self) -> None:
+        """An untouched {{binaries}} row would fail the unresolved-placeholder check at the very end
+        of generation, which is the least useful place to discover an empty scope."""
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._component_report(report_folder, "mobile", "JH", [
+                ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test"),
+            ])
+            report.engagement.tested_channels = ["web", "mobile"]
+            rendered = Document(BytesIO(render_report_docx(report, main_template_path(report, resources), report_folder)))
+
+            table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Component")
+            self.assertEqual([(row.cells[0].text, row.cells[1].text) for row in table.rows[1:]], [("N/A", "N/A")])
+            self.assertIn("Mobile", "\n".join(paragraph.text for paragraph in rendered.paragraphs))
+
+    def _asia_multi_finding_document(self, report_folder: Path):
+        report = self._component_report(report_folder, "thick_client", "Asia", [
+            ScopeTarget(target_id="t_prod", environment="production", channel="thick_client", value="Acme.exe", description="Main client"),
+        ])
+        report.vulnerabilities = [
+            self._finding(uid, title, severity, display_id, ["t_prod"], [
+                ImageFragment(frag_id=f"f_img_{uid}", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
+            ])
+            for uid, title, severity, display_id in (
+                ("v_low", "Verbose error messages", "low", "003"),
+                ("v_crit", "Remote code execution", "critical", "001"),
+                ("v_crit_b", "Authentication bypass", "critical", "002"),
+            )
+        ]
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        return Document(BytesIO(render_report_docx(report, main_template_path(report, resources), report_folder)))
+
+    def test_asia_section_column_references_each_findings_own_heading(self) -> None:
+        """Word owns the numbering, so the reference cannot disagree with the heading it points at.
+        Counting headings in Python could, silently, in a delivered report."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            rendered = self._asia_multi_finding_document(Path(temporary_directory))
+            table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Section")
+
+            bookmarks = [node.get(qn("w:name")) for node in rendered.element.body.iter(qn("w:bookmarkStart"))]
+            referenced = []
+            for row in table.rows[1:]:
+                instructions = [node.text for node in row.cells[0]._tc.iter(qn("w:instrText"))]
+                self.assertEqual(len(instructions), 1, "one field per Section cell, or Word shows the wrong one")
+                name = instructions[0].split()[1]
+                self.assertEqual(instructions[0], f" REF {name} \\w \\h ")
+                referenced.append(name)
+
+            # A duplicate name resolves to whichever bookmark Word finds first, without complaining.
+            self.assertEqual(len(set(referenced)), len(referenced))
+            for name in referenced:
+                self.assertEqual(bookmarks.count(name), 1)
+            bookmarked_styles = {
+                paragraph.style.style_id
+                for paragraph in rendered.paragraphs
+                if any(node.get(qn("w:name")) in referenced for node in paragraph._p.iter(qn("w:bookmarkStart")))
+            }
+            self.assertEqual(bookmarked_styles, {"ReportHeading2"})
+            self.assertNotIn("{{section-number}}", "\n".join(cell.text for row in table.rows for cell in row.cells))
+
+    def test_asia_section_rows_follow_the_rendered_finding_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            rendered = self._asia_multi_finding_document(Path(temporary_directory))
+            table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Section")
+
+            # ReportHeading2 also carries static sections like "Findings Summary", so the bookmarks
+            # are what identify a finding title -- and what a Section cell can point at.
+            headings = [
+                paragraph.text
+                for paragraph in rendered.paragraphs
+                if any(node.get(qn("w:name")).startswith("vuln_") for node in paragraph._p.iter(qn("w:bookmarkStart")))
+            ]
+            self.assertEqual([row.cells[1].text for row in table.rows[1:]], headings)
+            # Severity order first, then title. The body and this table must not sort independently.
+            self.assertEqual(headings, ["Authentication bypass", "Remote code execution", "Verbose error messages"])
+            self.assertEqual([row.cells[2].text for row in table.rows[1:]], ["Critical", "Critical", "Low"])
+            # CVSS is a tester input the app does not collect yet.
+            self.assertEqual({row.cells[3].text for row in table.rows[1:]} | {row.cells[4].text for row in table.rows[1:]}, {""})
+
+    def test_asia_section_references_are_marked_for_word_to_compute(self) -> None:
+        """A field left clean renders blank until someone presses F9, which nobody does."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._component_report(report_folder, "thick_client", "Asia", [
+                ScopeTarget(target_id="t_prod", environment="production", channel="thick_client", value="Acme.exe", description="Main client"),
+            ])
+            resources = Path(__file__).resolve().parent.parent / "resources"
+            contents = render_report_docx(report, main_template_path(report, resources), report_folder)
+            rendered = Document(BytesIO(contents))
+
+            table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Section")
+            starts = [node for row in table.rows[1:] for node in row.cells[0]._tc.iter(qn("w:fldChar")) if node.get(qn("w:fldCharType")) == "begin"]
+            self.assertTrue(starts)
+            self.assertTrue(all(node.get(qn("w:dirty")) == "true" for node in starts))
+            with ZipFile(BytesIO(contents)) as archive:
+                self.assertIn("w:updateFields", archive.read("word/settings.xml").decode("utf-8"))
 
     @staticmethod
     def _finding(

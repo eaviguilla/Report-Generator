@@ -617,8 +617,11 @@
     if ([...root.querySelectorAll('#test-windows input[type="date"]')].some(input => !input.value)) missing.push("testing dates");
     ["production", "non_production"].forEach(environment => {
       const panel = root.querySelector(`#scope-grid .scope-panel.${environment}`);
-      if (panel && ![...panel.querySelectorAll("textarea")].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) missing.push(`${environment.replace("_", "-")} scope target`);
+      if (panel && ![...panel.querySelectorAll('textarea[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) missing.push(`${environment.replace("_", "-")} scope target`);
     });
+    const exclusion = componentExclusionIssue();
+    if (exclusion) missing.push(exclusion);
+    missing.push(...missingDescriptionIssues());
     const invalidMessages = [...new Set(
       [...root.querySelectorAll("[data-setup-validated]")]
         .filter(input => !input.validity.valid)
@@ -646,7 +649,7 @@
       return section.querySelector("textarea")?.value.trim() ? "set" : "empty";
     }
     if (section.querySelector("#scope-grid")) {
-      const targets = [...section.querySelectorAll("#scope-grid textarea")]
+      const targets = [...section.querySelectorAll('#scope-grid textarea[data-scope-field="component"]')]
         .flatMap(input => input.value.split("\n"))
         .filter(line => line.trim() && !line.trimStart().startsWith("#")).length;
       return `${targets} target${targets === 1 ? "" : "s"}`;
@@ -1127,8 +1130,53 @@
   };
   const affectedEnvironments = finding => scopeEnvironments(finding.scope);
   // Twin of models.CHANNELS; the one canonical app-type order on this side.
-  const CHANNELS = ["web", "api", "mobile"];
-  const channelLabels = {web:"Web", api:"API", mobile:"Mobile"};
+  const CHANNELS = ["web", "api", "mobile", "thick_client"];
+  // Twin of models.CHANNEL_LABELS.
+  const channelLabels = {web:"Web", api:"API", mobile:"Mobile", thick_client:"Thick Client"};
+  // Twin of models.COMPONENT_CHANNELS: scoped as a named component plus a description, and mutually
+  // exclusive with each other.
+  const COMPONENT_CHANNELS = ["mobile", "thick_client"];
+  const isComponentChannel = channel => COMPONENT_CHANNELS.includes(channel);
+  // scope_text holds a string for a location channel and {component, description} for a component
+  // one. Reading through these keeps every call site out of the business of knowing which.
+  const emptyScopeText = channel => isComponentChannel(channel) ? {component:"", description:""} : "";
+  const componentText = value => typeof value === "string" ? value : (value?.component ?? "");
+  const descriptionText = value => typeof value === "string" ? "" : (value?.description ?? "");
+  const scopeTextField = (environment, channel, field) => field === "description"
+    ? descriptionText(report.scope_text?.[environment]?.[channel])
+    : componentText(report.scope_text?.[environment]?.[channel]);
+  const setScopeTextField = (environment, channel, field, value) => {
+    const current = report.scope_text[environment][channel];
+    if (!isComponentChannel(channel)) { report.scope_text[environment][channel] = value; return; }
+    report.scope_text[environment][channel] = field === "description"
+      ? {component:componentText(current), description:value}
+      : {component:value, description:descriptionText(current)};
+  };
+  // Twin of the mutual-exclusion line in report_service.setup_issues. Same string, or the Setup
+  // notice and the server's refusal describe the same report differently.
+  const componentExclusionIssue = () => {
+    const covered = COMPONENT_CHANNELS.filter(channel => report.engagement.tested_channels.includes(channel));
+    return covered.length > 1 ? `only one of ${covered.map(channel => channelLabels[channel]).join(" and ")} -- deselect the other` : null;
+  };
+  // Twin of the required-description line in report_service.setup_issues, pairing by raw index with
+  // the same clean rules as reconcile_targets so a commented component line cannot shift the rest.
+  const missingDescriptionIssues = () => {
+    const issues = [];
+    (report.engagement.tested_environments || []).forEach(environment => {
+      COMPONENT_CHANNELS.filter(channel => report.engagement.tested_channels.includes(channel)).forEach(channel => {
+        const descriptions = scopeTextField(environment, channel, "description").split(/\r?\n/);
+        const seen = new Set();
+        scopeTextField(environment, channel, "component").split(/\r?\n/).forEach((raw, index) => {
+          const value = raw.trim();
+          // A repeat is refused by the server with its own message, so it is not reported twice here.
+          if (!value || value.startsWith("#") || seen.has(value)) return;
+          seen.add(value);
+          if (!(descriptions[index] || "").trim()) issues.push(`${environment.replace("_", "-")} ${channelLabels[channel]} description for "${value}"`);
+        });
+      });
+    });
+    return issues;
+  };
   // Twin of report_service.affected_channels; keep both in step.
   const affectedChannels = finding => {
     const scope = finding.scope;
@@ -1348,14 +1396,17 @@
       return {label, invalidCharacters, valid:value => !invalidCharacters(value).length};
     };
     const usernameCharacters = characterRule("Username", /^[A-Za-z0-9._@\\-]$/);
-    const mobileScopeCharacters = characterRule("Mobile scope", /^[\p{L}\p{Nd} :'"/.,\-_&]$/u);
-    const mobileScopeInvalidCharacters = value => mobileScopeCharacters.invalidCharacters(
+    // Twin of report_service.COMPONENT_SCOPE_SYMBOLS. A strict superset of the retired mobile set,
+    // so nothing that validated before is rejected now; the backslash and brackets are what make an
+    // install path typable. Applied to component channels only -- a URL carries ? and =.
+    const componentScopeCharacters = characterRule("Component scope", /^[\p{L}\p{Nd} \/,.;:()&'"\-_\\\[\]]$/u);
+    const componentScopeInvalidCharacters = value => componentScopeCharacters.invalidCharacters(
       value.split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith("#")).join("")
     );
-    const mobileScopeRule = {
-      label:"Mobile scope",
-      invalidCharacters:mobileScopeInvalidCharacters,
-      valid:value => !mobileScopeInvalidCharacters(value).length,
+    const componentScopeRule = {
+      label:"Component scope",
+      invalidCharacters:componentScopeInvalidCharacters,
+      valid:value => !componentScopeInvalidCharacters(value).length,
     };
     const setupRules = {
       app_name: characterRule("Application name", /^[\p{L}\p{Nd} :;.()\-]$/u),
@@ -1430,8 +1481,19 @@
     ["production", "non_production"].forEach(environment => {
       report.scope_text[environment] ||= {};
       CHANNELS.forEach(channel => {
-        if (report.scope_text[environment][channel] === undefined) {
-          report.scope_text[environment][channel] = report.scope_targets.filter(target => target.environment === environment && target.channel === channel).sort((left, right) => left.order - right.order).map(target => target.value).join("\n");
+        const current = report.scope_text[environment][channel];
+        // A total normalisation, not an undefined-fill. A tab cached before component channels
+        // gained two boxes restores a bare string here, and this script is not in strict mode, so a
+        // later `.component = value` on that string would no-op and swallow every keystroke.
+        if (current === undefined || current === null) {
+          const seeded = report.scope_targets.filter(target => target.environment === environment && target.channel === channel).sort((left, right) => left.order - right.order);
+          report.scope_text[environment][channel] = isComponentChannel(channel)
+            ? {component:seeded.map(target => target.value).join("\n"), description:seeded.map(target => target.description || "").join("\n")}
+            : seeded.map(target => target.value).join("\n");
+        } else if (isComponentChannel(channel) && typeof current === "string") {
+          report.scope_text[environment][channel] = {component:current, description:""};
+        } else if (!isComponentChannel(channel) && typeof current !== "string") {
+          report.scope_text[environment][channel] = componentText(current);
         }
       });
     });
@@ -1642,7 +1704,7 @@
     };
     const dropChannelEverywhere = channel => {
       const targetIds = new Set((report.scope_targets || []).filter(target => target.channel === channel).map(target => target.target_id));
-      Object.values(report.scope_text || {}).forEach(byChannel => { if (byChannel) byChannel[channel] = ""; });
+      Object.values(report.scope_text || {}).forEach(byChannel => { if (byChannel) byChannel[channel] = emptyScopeText(channel); });
       // Typed endpoints go first, so an environment kept alive only by one under this app type
       // counts as lost when the image labels are reconsidered.
       (report.vulnerabilities || []).forEach(finding => {
@@ -1655,17 +1717,19 @@
       dropTargetsEverywhere(targetIds);
       report.scope_targets = (report.scope_targets || []).filter(target => target.channel !== channel);
     };
-    const confirmChannelRemoval = async channel => {
+    const confirmChannelRemoval = async (channel, {replacedBy = null} = {}) => {
       const impact = channelRemovalImpact(channel);
       if (!impact.targets && !impact.findings.length) return true;
       const stranded = findingsStrandedBy(report.engagement.tested_environments, report.engagement.tested_channels.filter(value => value !== channel));
       const losses = [impact.targets && `${count(impact.targets, "scope target")} in Setup`, impact.endpoints && count(impact.endpoints, "additional affected endpoint")].filter(Boolean);
+      // During a swap the tester ticked the incoming box, so a dialog about the outgoing one alone
+      // reads as though it arrived unprompted.
       return window.vrDialog.confirm({
-        title: `Remove ${channelLabels[channel]} from the scope?`,
+        title: replacedBy ? `Replace ${channelLabels[channel]} with ${channelLabels[replacedBy]}?` : `Remove ${channelLabels[channel]} from the scope?`,
         message: `${losses.join(", and ")} will be deleted, along with every ${channelLabels[channel]} affected location selected in the findings below.${stranded.length ? ` ${count(stranded.length, "finding")} will be left with no affected location at all.` : ""} This cannot be undone.`,
         list: impact.findings,
-        confirmLabel: `Remove ${channelLabels[channel]} anyway`,
-        cancelLabel: "Keep this app type",
+        confirmLabel: replacedBy ? `Switch to ${channelLabels[replacedBy]} anyway` : `Remove ${channelLabels[channel]} anyway`,
+        cancelLabel: replacedBy ? `Keep ${channelLabels[channel]}` : "Keep this app type",
         tone: "danger",
       });
     };
@@ -1673,9 +1737,9 @@
     // under an app type the report still covers.
     const survivingAfterScopeText = () => report.scope_targets.filter(target => {
       if (!report.engagement.tested_channels.includes(target.channel)) return false;
-      const text = report.scope_text?.[target.environment]?.[target.channel];
-      if (text === undefined) return true;
-      return text.split(/\r?\n/).map(value => value.trim()).filter(value => value && !value.startsWith("#")).includes(target.value);
+      const stored = report.scope_text?.[target.environment]?.[target.channel];
+      if (stored === undefined) return true;
+      return componentText(stored).split(/\r?\n/).map(value => value.trim()).filter(value => value && !value.startsWith("#")).includes(target.value);
     });
     // The server refuses to strand a finding, so catch it here rather than letting the save fail.
     const scopeTextStrandedFindings = () => {
@@ -1733,9 +1797,19 @@
             box.checked = true;
             return;
           }
+          // Mobile and Thick Client describe one kind of binary each, so ticking one unticks the
+          // other. Silent when there is nothing to lose, which is the usual case.
+          const displaced = box.checked && isComponentChannel(channel)
+            ? COMPONENT_CHANNELS.find(value => value !== channel && report.engagement.tested_channels.includes(value))
+            : null;
+          if (displaced && !await confirmChannelRemoval(displaced, {replacedBy:channel})) {
+            box.checked = false;
+            return;
+          }
           if (!box.checked) dropChannelEverywhere(channel);
+          if (displaced) dropChannelEverywhere(displaced);
           report.engagement.tested_channels = box.checked
-            ? CHANNELS.filter(value => value === channel || report.engagement.tested_channels.includes(value))
+            ? CHANNELS.filter(value => value !== displaced && (value === channel || report.engagement.tested_channels.includes(value)))
             : report.engagement.tested_channels.filter(value => value !== channel);
           renderCoverage();
           scheduleSave();
@@ -1840,45 +1914,58 @@
         panel.className = `scope-panel ${environment}`;
         panel.innerHTML = `<h2>${environmentLabels[environment]}</h2>`;
         CHANNELS.filter(channel => report.engagement.tested_channels.includes(channel)).forEach(channel => {
-          const label = document.createElement("label");
-          label.textContent = channelLabels[channel];          const textarea = document.createElement("textarea");
-          textarea.value = report.scope_text[environment][channel];
-          // Two lines to start, then grow with the target list instead of scrolling.
-          textarea.rows = 2;
-          const grow = () => {
-            textarea.style.height = "auto";
-            textarea.style.height = `${textarea.scrollHeight}px`;
-          };
-          textarea.oninput = () => { report.scope_text[environment][channel] = textarea.value; grow(); if ([...root.querySelectorAll("#scope-grid textarea")].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) root.querySelectorAll("#scope-grid textarea.validation-error").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
-          textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
-          // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
-          textarea.onchange = async () => {
-            if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) return;
-            if (await confirmScopeTextLoss()) {
-              const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
-              dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id)));
-              textarea.dataset.scopeTextBefore = textarea.value;
-              return;
+          const group = document.createElement("div");
+          group.className = "scope-channel";
+          group.dataset.channel = channel;
+          // The two boxes of a component channel are read as a pair, by index, so the grouping
+          // element is what lets a validator find a component's own description.
+          if (isComponentChannel(channel)) group.dataset.componentChannel = "true";
+          // Component first: every channel has one, and narrowing a counter to it must never drop a
+          // whole app type from the count.
+          const fields = isComponentChannel(channel) ? ["component", "description"] : ["component"];
+          fields.forEach(field => {
+            const label = document.createElement("label");
+            label.textContent = isComponentChannel(channel)
+              ? `${channelLabels[channel]} ${field === "description" ? "Description" : "Component"}`
+              : channelLabels[channel];
+            const textarea = document.createElement("textarea");
+            textarea.dataset.scopeField = field;
+            textarea.value = scopeTextField(environment, channel, field);
+            // Two lines to start, then grow with the target list instead of scrolling.
+            textarea.rows = 2;
+            const grow = () => {
+              textarea.style.height = "auto";
+              textarea.style.height = `${textarea.scrollHeight}px`;
+            };
+            textarea.oninput = () => { setScopeTextField(environment, channel, field, textarea.value); grow(); if ([...root.querySelectorAll('#scope-grid textarea[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) root.querySelectorAll("#scope-grid textarea.validation-error").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
+            textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
+            // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
+            textarea.onchange = async () => {
+              if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) return;
+              // Only the component names a target, so retyping a description strands nothing.
+              if (field === "description" || await confirmScopeTextLoss()) {
+                if (field === "component") {
+                  const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
+                  dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id)));
+                }
+                textarea.dataset.scopeTextBefore = textarea.value;
+                return;
+              }
+              textarea.value = textarea.dataset.scopeTextBefore;
+              setScopeTextField(environment, channel, field, textarea.value);
+              grow();
+              scheduleSave();
+            };
+            if (isComponentChannel(channel)) {
+              wireSetupRule(textarea, componentScopeRule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
             }
-            textarea.value = textarea.dataset.scopeTextBefore;
-            report.scope_text[environment][channel] = textarea.value;
+            label.append(textarea);
+            group.append(label);
             grow();
-            scheduleSave();
-          };
-          if (channel === "mobile") wireSetupRule(textarea, mobileScopeRule, `${environmentLabels[environment]} Mobile scope`);
-          label.append(textarea);
-          panel.append(label);
-          // Outside the label so it stays out of the textarea's accessible name. Delete this together
-          // with the mobile scope table when the .docx template gains one.
-          if (channel === "mobile") {
-            const note = document.createElement("p");
-            note.className = "scope-note";
-            note.textContent = "Mobile scope does not appear in the generated report yet.";
-            panel.append(note);
-          }
-          grow();
-          document.fonts?.ready.then(grow);
-          observeWidth(textarea, grow);
+            document.fonts?.ready.then(grow);
+            observeWidth(textarea, grow);
+          });
+          panel.append(group);
         });
         scopeGrid.append(panel);
       });
@@ -2370,17 +2457,26 @@
       const requiredDates = [...root.querySelectorAll('#test-windows input[type="date"]')];
       const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => !input?.value.trim());
       const missingEnvironment = !root.querySelector('#test-windows input[type="checkbox"]:checked');
-      const missingScopePanels = [...root.querySelectorAll("#scope-grid .scope-panel")].filter(panel => ![...panel.querySelectorAll("textarea")].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#"))));
-      if (incompleteSetup.length || missingEnvironment || missingScopePanels.length) {
+      const missingScopePanels = [...root.querySelectorAll("#scope-grid .scope-panel")].filter(panel => ![...panel.querySelectorAll('textarea[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#"))));
+      // A description-only entry would pass an unnarrowed count here and 422 on the server instead.
+      const blankDescriptions = missingDescriptionIssues();
+      const exclusion = componentExclusionIssue();
+      if (incompleteSetup.length || missingEnvironment || missingScopePanels.length || blankDescriptions.length || exclusion) {
         if (reveal) {
           const setupNotice = document.querySelector("#setup-validation-note");
           if (setupNotice) setupNotice.dataset.validationAttempted = "true";
           incompleteSetup.forEach(input => input.classList.add("validation-error"));
-          missingScopePanels.forEach(panel => panel.querySelectorAll("textarea").forEach(input => input.classList.add("validation-error")));
-          const firstIncomplete = incompleteSetup[0] || missingScopePanels[0]?.querySelector("textarea");
+          // Mark the box the tester has to type into: the component when none is named, the
+          // description when one is named without it.
+          missingScopePanels.forEach(panel => panel.querySelectorAll('textarea[data-scope-field="component"]').forEach(input => input.classList.add("validation-error")));
+          const blankDescriptionBoxes = blankDescriptions.length
+            ? [...root.querySelectorAll('#scope-grid .scope-channel[data-component-channel] textarea[data-scope-field="description"]')].filter(input => input.value.split("\n").some(line => !line.trim()) || !input.value.trim())
+            : [];
+          blankDescriptionBoxes.forEach(input => input.classList.add("validation-error"));
+          const firstIncomplete = incompleteSetup[0] || missingScopePanels[0]?.querySelector('textarea[data-scope-field="component"]') || blankDescriptionBoxes[0];
           firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
           firstIncomplete?.focus({preventScroll:true});
-          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : "Define at least one scope target for each selected environment");
+          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
           updateSetupValidationNotice();
         }
         return false;

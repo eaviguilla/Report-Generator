@@ -31,7 +31,7 @@ from app.models import (
     Vulnerability,
 )
 from .docx_captions import add_native_image_captions, center_paragraph
-from .docx_import import INSTANCE_PREFIX
+from .docx_import import FINDING_HEADING_STYLE, INSTANCE_PREFIX
 from .docx_components import (
     RATING_FONT_COLORS,
     clone_component_elements,
@@ -39,7 +39,7 @@ from .docx_components import (
     replace_component_token_runs,
     replace_pattern_across_text_nodes,
 )
-from .models import CHANNELS
+from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS
 from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, setup_issues
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
@@ -149,6 +149,16 @@ def generation_issues(report: Report) -> list[str]:
     return list(dict.fromkeys(issues))
 
 
+def main_template_path(report: Report, resources: Path) -> Path:
+    """Pick the main template on both axes: Asia segment, and whether a component app type is covered.
+
+    Sole owner of the choice, because `template_path.parent` is also the component fragment root."""
+    component = any(channel in report.engagement.tested_channels for channel in COMPONENT_CHANNELS)
+    asia = report.engagement.segment == "Asia"
+    stem = "MAIN_THICK_MOBILE" if component else "MAIN"
+    return resources / f"{stem}{'_ASIA' if asia else ''}.docx"
+
+
 def render_report_docx(
     report: Report,
     template_path: Path,
@@ -171,13 +181,16 @@ def render_report_docx(
     _replace_metadata(document, report)
     if not _has_exact_body_token(document, "findings"):
         raise ReportGenerationError(f"Template has no {{{{findings}}}} anchor paragraph: {template_path}")
-    _populate_component_findings(
+    rendered = _populate_component_findings(
         document,
         report,
         report_folder,
         template_path.parent,
         allow_incomplete,
     )
+    # After the findings so the headings exist to bookmark, before the caption pass so its
+    # mark-every-field-dirty sweep reaches the references this writes.
+    _populate_cvss_table(document, rendered)
     add_native_image_captions(document)
     unresolved = _unresolved_placeholders(document)
     if unresolved:
@@ -222,6 +235,24 @@ def _target_values(report: Report, environment: str, channel: str) -> list[str]:
     ]
 
 
+def _component_rows(report: Report) -> list[tuple[str, str]]:
+    """Every component in one list, production first. The table has no environment column, so the
+    ordering is the only thing carrying that distinction to the reader."""
+    return [
+        (target.value, target.description)
+        for environment in ("production", "non_production")
+        for target in sorted(report.scope_targets, key=lambda item: item.order)
+        if target.environment == environment and target.channel in COMPONENT_CHANNELS and target.value.strip()
+    ]
+
+
+def _component_channel_label(report: Report) -> str:
+    """Names the one component app type in the caption. The pair is refused by setup_issues long
+    before generation, so the CHANNELS-order tie-break only ever settles a scripted render."""
+    covered = [channel for channel in COMPONENT_CHANNELS if channel in report.engagement.tested_channels]
+    return CHANNEL_LABELS[covered[0]] if covered else "N/A"
+
+
 def _metadata(report: Report) -> dict[str, str]:
     engagement = report.engagement
     # Windows are kept for an unchecked environment so re-checking restores them, but an
@@ -250,6 +281,9 @@ def _metadata(report: Report) -> dict[str, str]:
         "non-prod-api": "; ".join(_target_values(report, "non_production", "api")) or "N/A",
         "limitation-set": _display_value(engagement.limitations),
     }
+    # The two component templates spell the same token in opposite orders. Both keys are always
+    # supplied: _replace_metadata no-ops on a token the template does not carry.
+    values["mobile-thick"] = values["thick-mobile"] = _component_channel_label(report)
     for index in range(2):
         account = accounts[index] if index < len(accounts) else None
         values[f"role{index + 1}"] = _display_value(account.user_role if account else None)
@@ -306,6 +340,34 @@ def _find_table(document: DocumentType, header: str) -> Table:
         if table.rows and table.rows[0].cells and table.rows[0].cells[0].text.strip().casefold() == header.casefold():
             return table
     raise ReportGenerationError(f"Template table not found: {header}")
+
+
+def _optional_table(document: DocumentType, header: str) -> Table | None:
+    """For a table only some of the four templates carry.
+
+    Keyed on the table being present rather than on the report, so rendering stays a function of
+    the template it was handed -- the scripts pass MAIN.docx to reports of every shape."""
+    try:
+        return _find_table(document, header)
+    except ReportGenerationError:
+        return None
+
+
+def _append_prototype_row(table: Table, prototype):
+    """Clone the template's data row so each entry keeps that row's own formatting.
+
+    Stacking values as paragraphs inside one cell instead would misalign every row below the first
+    value that wraps -- silently, in the delivered document."""
+    row_element = deepcopy(prototype)
+    table._tbl.append(row_element)
+    return _Row(row_element, table)
+
+
+def _strip_data_rows(table: Table):
+    prototype = deepcopy(table.rows[1]._tr)
+    for row in list(table.rows)[1:]:
+        table._tbl.remove(row._tr)
+    return prototype
 
 
 def _clear_paragraph(paragraph: Paragraph) -> None:
@@ -399,21 +461,23 @@ def _populate_scope_tables(document: DocumentType, report: Report) -> None:
         _center_plain(limitations.cell(1, 0))
 
     accounts = _find_table(document, "User Roles")
-    prototype = deepcopy(accounts.rows[1]._tr)
-    for row in list(accounts.rows)[1:]:
-        accounts._tbl.remove(row._tr)
+    prototype = _strip_data_rows(accounts)
     for account in engagement.test_accounts or []:
-        row_element = deepcopy(prototype)
-        accounts._tbl.append(row_element)
-        row = _Row(row_element, accounts)
+        row = _append_prototype_row(accounts, prototype)
         _set_cell_lines(row.cells[0], [_display_value(account.user_role)])
         _set_cell_lines(row.cells[1], [_display_value(account.username)])
     if len(accounts.rows) == 1:
-        row_element = deepcopy(prototype)
-        accounts._tbl.append(row_element)
-        row = _Row(row_element, accounts)
+        row = _append_prototype_row(accounts, prototype)
         _set_cell_lines(row.cells[0], ["N/A"])
         _set_cell_lines(row.cells[1], ["N/A"])
+
+    components = _optional_table(document, "Component")
+    if components is not None:
+        prototype = _strip_data_rows(components)
+        for value, description in _component_rows(report) or [("N/A", "N/A")]:
+            row = _append_prototype_row(components, prototype)
+            _set_cell_lines(row.cells[0], [_display_value(value)], wrap=SCOPE_WRAP_CHARACTERS)
+            _set_cell_lines(row.cells[1], [_display_value(description)])
 
 
 def _populate_summary_table(document: DocumentType, report: Report) -> None:
@@ -431,9 +495,7 @@ def _populate_summary_table(document: DocumentType, report: Report) -> None:
         table._tbl.remove(row._tr)
     for finding in sorted(report.vulnerabilities, key=lambda item: (SEVERITY_ORDER.index(item.severity or "informational"), item.title.casefold())):
         severity = finding.severity or "informational"
-        row_element = deepcopy(prototypes[severity])
-        table._tbl.append(row_element)
-        row = _Row(row_element, table)
+        row = _append_prototype_row(table, prototypes[severity])
         likelihood = finding.likelihood or "informational"
         impact = finding.impact or "informational"
         values = [
@@ -502,16 +564,80 @@ def _normalize_page_numbering(document: DocumentType) -> None:
                 properties.remove(page_numbering)
 
 
+def _paragraph_style_id(element) -> str | None:
+    properties = element.find(qn("w:pPr"))
+    style = properties.find(qn("w:pStyle")) if properties is not None else None
+    return style.get(qn("w:val")) if style is not None else None
+
+
+def _bookmark_paragraph(paragraph, name: str, bookmark_id: int) -> None:
+    """Wrap a heading so a REF field elsewhere can quote the number Word gives it."""
+    start = OxmlElement("w:bookmarkStart")
+    start.set(qn("w:id"), str(bookmark_id))
+    start.set(qn("w:name"), name)
+    end = OxmlElement("w:bookmarkEnd")
+    end.set(qn("w:id"), str(bookmark_id))
+    paragraph.insert(0, start)
+    paragraph.append(end)
+
+
+def _reference_field(paragraph: Paragraph, bookmark: str) -> None:
+    """Write " REF <bookmark> \\w \\h " as a real field, so Word reports the heading's own number.
+
+    Counting headings in Python instead would silently disagree with what Word renders. \\w rather
+    than \\r because the reference sits in a different section, where a relative number is short."""
+    _clear_paragraph(paragraph)
+    instruction = OxmlElement("w:instrText")
+    instruction.set(qn("xml:space"), "preserve")
+    instruction.text = f" REF {bookmark} \\w \\h "
+    for kind, child in (("begin", None), (None, instruction), ("separate", None), ("end", None)):
+        run = OxmlElement("w:r")
+        if kind is not None:
+            marker = OxmlElement("w:fldChar")
+            marker.set(qn("w:fldCharType"), kind)
+            if kind == "begin":
+                # docx_captions marks every begin dirty, which is what makes Word compute the value.
+                marker.set(qn("w:dirty"), "true")
+            run.append(marker)
+        else:
+            run.append(child)
+        paragraph._p.append(run)
+
+
+def _populate_cvss_table(document: DocumentType, rendered: list[tuple[Vulnerability, str]]) -> None:
+    """Fill the Asia-only findings table. Absent from the other two templates, and from any report
+    the scripts render against MAIN.docx, so the table's presence is what selects this."""
+    table = _optional_table(document, "Section")
+    if table is None:
+        return
+    prototype = _strip_data_rows(table)
+    for finding, bookmark in rendered or []:
+        row = _append_prototype_row(table, prototype)
+        severity = finding.severity or "informational"
+        _reference_field(row.cells[0].paragraphs[0], bookmark)
+        _replace_cell_placeholder(row.cells[1], finding.title)
+        _replace_cell_placeholder(row.cells[2], severity.title(), font_color=RATING_FONT_COLORS[severity])
+        # CVSS score and vector are tester inputs the app does not collect yet. Blank rather than
+        # "N/A" so only the value changes when it does.
+        _replace_cell_placeholder(row.cells[3], "")
+        _replace_cell_placeholder(row.cells[4], "")
+    if not rendered:
+        _append_prototype_row(table, prototype)
+        for index in range(5):
+            _replace_cell_placeholder(table.rows[1].cells[index], "")
+
+
 def _populate_component_findings(
     document: DocumentType,
     report: Report,
     report_folder: Path,
     component_root: Path,
     allow_incomplete: bool,
-) -> None:
+) -> list[tuple[Vulnerability, str]]:
     body_elements = list(document.element.body.iterchildren())
     anchor_index = _component_anchor_index(body_elements, "findings")
     anchor = body_elements[anchor_index]
+    rendered_order: list[tuple[Vulnerability, str]] = []
     for severity in SEVERITY_ORDER:
         findings = sorted(
             (item for item in report.vulnerabilities if item.severity == severity),
@@ -534,6 +660,14 @@ def _populate_component_findings(
                 component_root,
                 allow_incomplete,
             )
+            title_paragraph = next(
+                (element for element in finding_elements if element.tag == qn("w:p") and _paragraph_style_id(element) == FINDING_HEADING_STYLE),
+                None,
+            )
+            if title_paragraph is not None:
+                bookmark = f"vuln_{finding.uid}"
+                _bookmark_paragraph(title_paragraph, bookmark, len(rendered_order) + 1)
+                rendered_order.append((finding, bookmark))
             if index:
                 first_paragraph = next(
                     (element for element in finding_elements if element.tag == qn("w:p")),
@@ -556,6 +690,7 @@ def _populate_component_findings(
         for element in severity_elements:
             anchor.addprevious(element)
     anchor.getparent().remove(anchor)
+    return rendered_order
 
 
 def _replace_token_with_bullets(

@@ -457,12 +457,515 @@ And one argument must be reconciled rather than patched: the plan rejects `resol
 
 ## Round 2 - Planner: revised plan
 
-_pending_
+> Verbatim from `change-planner`, after the oracle's corrections. This supersedes Round 1.
+
+### Blast radius (revised)
+
+**Python - model** ([app/models.py](app/models.py))
+
+| Site | Change | Why |
+|---|---|---|
+| `Channel` [#L12](app/models.py#L12) | add `"thick_client"` | until this lands every thick-client save 422s |
+| `CHANNELS` [#L15](app/models.py#L15) | append `"thick_client"` | canonical order; feeds `CHANNEL_ORDER`, `applicable_poc_variants`, the `normalise_scope_modes` sort key |
+| new `COMPONENT_CHANNELS` | `("mobile", "thick_client")` | one constant, four uses: exclusion rule, two-box input, character rule, template selection |
+| new `CHANNEL_LABELS` | `{"web": "Web", "api": "API", "mobile": "Mobile", "thick_client": "Thick Client"}` | Python has **no** channel label table today. Fourth channel-keyed table; JS twin is `channelLabels` [app.js#L1131](app/web/static/app.js#L1131) |
+| `ScopeTarget` [#L159](app/models.py#L159) | `description: str = ""` | the durable home; `scope_text` never reaches disk |
+| `validate_coverage` [#L238](app/models.py#L238) | **no change** | see Decision 1 |
+| `resolve_tested_channels` [#L44](app/models.py#L44) | **no change** | same reason |
+| `template_set` [#L236](app/models.py#L236) | **no change** | stays dead; the determinant is `tested_channels` |
+
+**Python - service and routes**
+
+| Site | Change | Why |
+|---|---|---|
+| `reconcile_targets` [#L538](app/report_service.py#L538) | accept `str` **or** `{component, description}`; `zip_longest` pairing before cleaning; `channel in COMPONENT_CHANNELS` replaces `== "mobile"`; refuse a repeated component; emit `description` on each target dict | runs on the raw dict at [main.py#L667](app/main.py#L667), before validation at [main.py#L684](app/main.py#L684); no model change can reach it |
+| message text [#L579](app/report_service.py#L579) | `f"{environment_label} {CHANNEL_LABELS[channel]} scope"` for Component; `"... scope description"` for Description | keeps the existing mobile string byte-identical |
+| `setup_issues` [#L626](app/report_service.py#L626) | **one new issue line** for the illegal pair. The `target.value.strip()` test at [#L644](app/report_service.py#L644) is untouched | this is where the exclusion rule lives |
+| `affected_channels`, `applicable_poc_variants`, `scope_has_location`, `location_lines`, `setup_input_issues` | **no change** | data-driven off targets |
+| [main.py#L520](app/main.py#L520) | `ROOT / "resources" / "MAIN.docx"` → `main_template_path(report)` | the only production generation path |
+| `provision_report` [main.py#L261](app/main.py#L261) | **no change** | verified: touches neither `scope_targets` nor `tested_channels` |
+| `save_report` [main.py#L649](app/main.py#L649) | **no change** | the exclusion rule is deliberately not a save refusal |
+
+**Python - generation** ([app/docx_report.py](app/docx_report.py))
+
+| Site | Change | Why |
+|---|---|---|
+| `_populate_scope_tables` [#L387](app/docx_report.py#L387) | new block filling `_find_table(document, "Component")`, appended **after** the `User Roles` block that currently ends the function at [#L401-L415](app/docx_report.py#L401-L415) | 13th table in `MAIN_THICK_MOBILE.docx`, header cell `Component`, unique across all tables |
+| new `_append_prototype_row` | extract the `deepcopy(rows[1]._tr)` → strip → append → `_Row(...)` idiom | it exists twice today, at [#L401](app/docx_report.py#L401) and [#L423](app/docx_report.py#L423). `_set_cell_lines` writes into one cell; there is **no row helper anywhere**, including `docx_components.py`. Without extraction the binaries table is a third hand-rolled copy |
+| new `_component_rows(report)` | returns `(component, description)` pairs, production first | the binaries table has no environment column |
+| `_metadata` [#L225](app/docx_report.py#L225) | add **both** `mobile-thick` and `thick-mobile` with the same value | the two templates disagree on the spelling; `_replace_metadata` no-ops on an absent token |
+| new `main_template_path(report)` | pure function, one owner | `template_path.parent` doubles as the component root at [#L178](app/docx_report.py#L178) |
+| `CHANNEL_ORDER`, `_target_values`, `_finding_locations`, `generation_issues` | **no change** | `CHANNEL_ORDER` is `list(CHANNELS)`; `generation_issues` inherits the exclusion rule through `setup_issues` |
+
+**Client** ([app/web/static/app.js](app/web/static/app.js))
+
+| Site | Change |
+|---|---|
+| `CHANNELS` [#L1130](app/web/static/app.js#L1130), `channelLabels` [#L1131](app/web/static/app.js#L1131) | add `thick_client` / `"Thick Client"` |
+| new `COMPONENT_CHANNELS`, `componentText()`, `descriptionText()`, `emptyScopeText()`, `setScopeText()` | five call sites read `scope_text` as a bare string |
+| seed [#L1429-L1438](app/web/static/app.js#L1429) | **normalise every shape, do not fill `undefined`** - the load-bearing fix |
+| `updateSetupValidationNotice` [#L619](app/web/static/app.js#L619) | narrow the counter to `[data-scope-field="component"]`; add the exclusion message |
+| `setupSectionSummary` [#L649](app/web/static/app.js#L649) | narrow the counter |
+| `textarea.oninput` [#L1852](app/web/static/app.js#L1852) | narrow the **counter** selector; leave the `.validation-error` clear broad, since only Component boxes are ever marked |
+| **`validateSetupPage` [#L2373](app/web/static/app.js#L2373)** | narrow `missingScopePanels`; narrow the **reveal branch** to mark and focus the Component; add the exclusion check |
+| `mobileScopeRule` [#L1351-L1359](app/web/static/app.js#L1351) | becomes `componentScopeRule(channel, field)`; wired at [#L1868](app/web/static/app.js#L1868) |
+| `dropChannelEverywhere` [#L1645](app/web/static/app.js#L1645) | assign `emptyScopeText(channel)`, not `""` |
+| `confirmChannelRemoval` [#L1658-L1671](app/web/static/app.js#L1658) | **swap variant** of title, message, and cancel label |
+| `survivingAfterScopeText` [#L1674-L1679](app/web/static/app.js#L1674) | read the component half |
+| checkbox `onchange` [#L1735-L1741](app/web/static/app.js#L1735) | the mutual-exclusion swap |
+| scope grid [#L1842-L1880](app/web/static/app.js#L1842) | two labelled textareas for component channels, `data-scope-field` on **all** scope textareas, per-textarea `scopeTextBefore`, and **delete the stale note** at [#L1872-L1878](app/web/static/app.js#L1872) whose own comment says to |
+| Findings endpoint boxes [#L2143-L2190](app/web/static/app.js#L2143) | **no change** - pending Question 3 |
+| [#L86](app/web/static/app.js#L86), [#L305-L312](app/web/static/app.js#L305) | **no change**, but they are the source of the `localStorage` risk |
+
+Web and API boxes also get `data-scope-field="component"`. The attribute names the **role**, not the channel, so narrowing a selector excludes only Description boxes and never a whole app type's count.
+
+**Elsewhere**
+
+| File | Change |
+|---|---|
+| [library_editor.html#L79](app/web/templates/library_editor.html#L79) `variants`, [#L64-L66](app/web/templates/library_editor.html#L64) | **mandatory.** Third hard-coded channel list, in a page that does not load `app.js`. Missed → thick-client PoC lists silently dropped on save |
+| [docx_import.py#L539](app/docx_import.py#L539) | **optional, last.** Tables resolve **by header** at [#L311-L316](app/docx_import.py#L311), so inserting "Component" at index 9 breaks nothing |
+| `scripts/generate_showcase_reports.py`, `scripts/generate_report.py`, `scripts/compose_component_test.py` | **no change.** Fixture-only, but they are the fourth and fifth places `MAIN.docx` is named; listed so they are not later mistaken for gaps |
+| `tests/`, `docs/DATA_MAP.md`, `docs/DOCX_TEMPLATE.md`, this file | per step |
+
+### Decision 1 - where the exclusion rule lives, resolved
+
+**Position: the illegal pair is a Setup *completeness issue*, not a validation error. It lives in `setup_issues` on the Python side and in `validateSetupPage` plus the Setup notice on the JavaScript side, and nowhere else. `validate_coverage` and `resolve_tested_channels` are both left alone.**
+
+The oracle is right that Round 1 used one argument to reject `resolve_tested_channels` and then violated it in `validate_coverage`. I verified the mechanism: [workspace.py#L298](app/workspace.py#L298) ends `load_path` in `Report.model_validate`, and [workspace.py#L140-L147](app/workspace.py#L140) catches `ValidationError` into `list_legacy_reports`, marking a draft `repairable` **only** when the reason contains `"duplicate fragment id:"`. A raise in `validate_coverage` therefore makes a draft permanently unopenable with no repair path.
+
+Applying that consistently means **no load path may raise on this rule at all**. That rules out both candidates and leaves the completeness channel, which already reaches everything that matters:
+
+- `setup_issues` feeds `setup_is_complete`, which gates the Findings and Editor routes - a report with the illegal pair is bounced back to Setup, the one page where both checkboxes live.
+- `setup_issues` is the first line of `generation_issues` at [docx_report.py#L96](app/docx_report.py#L96), so generation is refused too. That is the real floor: with both channels present the caption token has two possible values and the binaries table would mix two app types.
+- `validateSetupPage` is already the declared JS twin of `setup_issues`, so the client rule has an obvious home rather than a new one.
+
+**Deliberately not a save refusal.** A `coverage_issues` check in `save_report` would give a tester opening an imported draft a "Save failed" banner on every autosave *before* they had a chance to untick a box. The pair can reach disk; nothing downstream consumes it, because everything downstream is gated.
+
+**The union branch becomes benign, with no special-casing.** A file carrying both `tested_channels: ["thick_client"]` and legacy `test_type: "mobile"` unions at [models.py#L57-L61](app/models.py#L57) to the illegal pair. Under this position it **loads**, opens on Setup with both boxes ticked, saves, and displays `select only one of Mobile and Thick Client`. Unticking either fixes it. No draft is stranded, and no "submitted versus derived" distinction is needed.
+
+**One residual.** `render_report_docx` is reachable from the scripts without the gate, so `main_template_path` and the caption label need a deterministic tie-break - `CHANNELS` order, so `mobile` wins - carried as a one-line note.
+
+### Decision 2 - duplicate components
+
+**A repeated component within one environment x component-channel box is refused with a named `invalid_scope` error. Web and API keep collapsing duplicates silently, exactly as today.**
+
+The loop at [report_service.py#L573](app/report_service.py#L573) drops a repeat because target IDs are reused by value and a repeated line would claim the same ID twice. That reasoning is unchanged and the reuse key stays `(environment, channel, value)`.
+
+The consequence changes. For a URL, a repeat is the same place typed twice. For a Component, two rows with the same name and **different descriptions** are plausibly two builds, and silently dropping the second loses the description too. The three alternatives all fail:
+
+- Silent first-wins: loses tester-authored text with no signal.
+- Key the dedup on `(component, description)`: two survivors claim the same `target_id` and `validate_references` raises `duplicate scope target id` on save.
+- Append a disambiguator server-side: invents text that lands in the delivered document.
+
+Refusing costs the tester one rename - `Acme.exe (x64)` versus `Acme.exe (x86)` - which is the rename the binaries table needed anyway. Message follows the existing idiom: `Production Thick Client scope lists the same component twice: "Acme.exe"`.
+
+### Data risks (revised)
+
+| # | Area | What could go wrong | Verdict | Mitigation |
+|---|---|---|---|---|
+| 1 | Raw payload before Pydantic | `reconcile_targets` runs on the raw dict at [main.py#L667](app/main.py#L667) and raises on a non-string at [#L565-L566](app/report_service.py#L565). A model-only change is invisible to it → 422 on every Setup save | **RISK** | Python accepts the paired shape in a commit strictly preceding any JS that sends it; `str` stays valid for every channel |
+| 2 | **`localStorage` string swallows keystrokes** | The seed only fills `=== undefined` [#L1433](app/web/static/app.js#L1433), so a pre-deploy **string** survives. `scope_text[env][channel].component = value` then assigns a property to a string primitive, and [app.js#L1](app/web/static/app.js#L1) is a non-strict IIFE - the assignment **silently no-ops**. Typed scope is never stored, the stale string is PUT | **RISK - load-bearing** | The seed becomes a **total normalisation**, not a fill. Named browser test seeds a string-shaped draft into `localStorage` and asserts a keystroke survives a reload |
+| 3 | **`validateSetupPage` is the gate, not a display** | [#L2373](app/web/static/app.js#L2373) counts *every* textarea in a `.scope-panel`. Unnarrowed, a Description-only entry passes the client gate and 422s server-side - the exact failure row 4 claims to mitigate | **RISK** | Narrow `missingScopePanels` to `[data-scope-field="component"]`, **and** narrow the reveal branch so it marks and focuses the Component |
+| 4 | `setup_issues` vs the DOM counters | Server counts `target.value.strip()`; the client counts textareas at **four** sites: [#L619](app/web/static/app.js#L619), [#L649](app/web/static/app.js#L649), [#L1852](app/web/static/app.js#L1852), [#L2373](app/web/static/app.js#L2373) | **RISK** | `data-scope-field` on every scope textarea, with web and API tagged `component` so narrowing never drops an app type from the count |
+| 5 | **`description` unvalidated on every non-Setup path** | The allowlist lives inside `reconcile_targets`, which early-returns without `scope_text` [#L540-L541](app/report_service.py#L540). A Findings or Content PUT carries `scope_targets` with descriptions and nothing checks them | **RISK - pre-existing, now doubled** | Not fixed here; the same hole already exists for `value`. Named in `docs/DATA_MAP.md` |
+| 6 | **Duplicate components collapse** | [#L573](app/report_service.py#L573) drops a repeated line. Two binaries with the same name and different descriptions lose the second row *and* its description, silently | **RISK** | Refused for component channels with a named message; unchanged for web and API (Decision 2) |
+| 7 | **New export → old build drops `description`** | Pydantic's default `extra="ignore"` deletes any undeclared key. A bundle exported after this ships, imported into an older build, loses every description with no error | **RISK - accepted, one-way** | Named in the release note; the reverse direction is safe |
+| 8 | **`CHANNEL_LABELS` twin** | A fourth channel-keyed table with a JS counterpart. Add a channel to one and the other prints `undefined` in a checkbox label, a dialog, and a 422 message | **RISK** | Both tables edited in the same commit as the literal. [tests/test_app.py#L713](tests/test_app.py#L713) becomes the contract test for one entry |
+| 9 | ID reuse key | `description` in the identity triple means a typo remints the ID, drops it from `target_ids`, and can strand a finding | **RISK** | Key stays `(environment, channel, value)`. Named test: edit only a description, assert `target_id` unchanged |
+| 10 | Mutual exclusion destroying typed scope | A literal auto-deselect purges targets and endpoints and strands findings with no prompt and no undo | **RISK** | Route through `confirmChannelRemoval` + `dropChannelEverywhere`, silent when the count is zero (Question 1) |
+| 11 | **Swap dialog names the wrong channel** | `confirmChannelRemoval` hard-codes *"Remove Mobile from the scope?"* / *"Keep this app type"*. During a swap the tester ticked **Thick Client** and is shown a dialog about removing Mobile | **RISK** | Swap variant of title, message, and cancel label. The impact counts are correct and unchanged |
+| 12 | `dropChannelEverywhere` empty shape | It assigns `""` at [#L1645](app/web/static/app.js#L1645); the next render would read `.component` of a string and show `undefined` | **RISK** | One `emptyScopeText(channel)` helper, shared by the seed and the drop |
+| 13 | Rule drift - library editor | `variants` at [library_editor.html#L79](app/web/templates/library_editor.html#L79) is a third hard-coded channel list, in a page that cannot import `app.js` | **RISK** | Updated in the same commit as the literal |
+| 14 | Rule drift - character allowlist | `channel == "mobile"` at [#L578](app/report_service.py#L578) gives thick client *no* validation while mobile gets a restrictive one | **RISK** | `in COMPONENT_CHANNELS` on both sides, per Question 2 |
+| 15 | Prototype row on empty scope | An empty component list leaves the `{{binaries}}` prototype row intact → `_unresolved_placeholders` raises at generation | **RISK** | Mirror the `User Roles` empty state at [#L410-L415](app/docx_report.py#L410): one `N/A` row. Named test |
+| 16 | Token spelling mismatch | `MAIN_THICK_MOBILE.docx` says `{{mobile-thick}}`, `MAIN_THICK_MOBILE_ASIA.docx` says `{{thick-mobile}}` | **RISK - contained** | Both keys in `_metadata`. Fails loudly, never silently |
+| 17 | Two-dimensional template selection | The Asia pair carries three tokens with no model data; selecting either fails generation | **RISK** | Select on the component axis only (Question 4) |
+| 18 | Multi-paragraph cells | N components in cell (1,0) and N descriptions in (1,1): the first description that wraps misaligns every row beneath it, silently, in the delivered report | **RISK** | Cloned rows via the extracted `_append_prototype_row` |
+| 19 | `docx_import` losing the binaries table | A generated thick-client report re-imported drops every component | **RISK - contained** | Already true for mobile. Tables resolve **by header**, so the index-9 insert corrupts nothing. Optional step 9 |
+| 20 | One-way door | Once a draft stores `"thick_client"`, reverting the literal makes it unloadable | **RISK - accepted** | Inherent to widening. Named because the exclusion rule must be right first time |
+| 21 | **Load-path demotion** | A raise in `validate_coverage` is a `ValidationError` on `load_path` and demotes the draft to `list_legacy_reports`, which marks only `"duplicate fragment id:"` as repairable | **clear** | No load path raises. The rule is a `setup_issues` line (Decision 1) |
+| 22 | **Union branch strands a file** | `tested_channels: ["thick_client"]` + `test_type: "mobile"` unions to the illegal pair | **clear** | Under Decision 1 that file loads, saves, and is fixable on Setup |
+| 23 | Navigation trap | The exclusion rule sits in `setup_issues`, which gates the Findings and Editor routes | **clear** | The gate redirects **to Setup**, the one page holding both checkboxes. Reachable, fixable, no loop |
+| 24 | Findings-page mirror | One endpoint box for a component channel, nowhere for a Description | **clear - corrected justification** | Typed component lines **do** reach the document: `affected_channels` makes the finding a thick-client finding, `scope_has_location` lets it pass the Content gate, and `_finding_locations` prints it. The rule is: **typed component lines print as affected locations and never as binaries rows; that asymmetry is deliberate** (Question 3) |
+| 25 | `min_length=1` floor | Untick-then-tick momentarily empties `tested_channels` | **clear - demoted** | Structurally unreachable: the handler at [#L1737-L1739](app/web/static/app.js#L1737) is already a single assignment. Coding-style note, not a risk |
+| 26 | Schema break / legacy repair | Would an existing draft fail `Report.validate_references`? | **clear** | Widening a `Literal` is permissive; a defaulted field validates against all nine drafts. **No `load_path` repair** - it would rewrite nine files and burn the single backup level for a no-op |
+| 27 | Stale write | New mutation path needing `saved_at`? | **clear** | Setup already PUTs the whole report with `saved_at` |
+| 28 | Lost update | Read-then-write outside `Workspace._locked`? | **clear** | Generation runs inside `workspace.locked_report`; `main_template_path` is a pure read |
+| 29 | Backup exhaustion | A second textarea is a second `scheduleSave` source | **clear** | Same debounced save; a tester types one box at a time |
+| 30 | Derived-state fight | Anything overwriting what the browser set? | **clear, with a note** | `provision_report` touches neither. But `reconcile_targets` **does** write the resolved `tested_channels` back at [#L555-L556](app/report_service.py#L555) - anything reading the channel list in that function must read the resolved one |
+| 31 | Orphan reference | Can a `target_id` outlive its target? | **clear** | Creation and the survivor filter are unchanged |
+| 32 | Silent stranding | Can a swap leave a finding with zero locations and no warning? | **clear** | `confirmChannelRemoval` calls `findingsStrandedBy` and names the affected findings; the server's own refusal is the backstop |
+
+**On [tests/test_app.py#L713](tests/test_app.py#L713).** I checked this rather than taking the oracle's word. The assertion is the literal `'Production Mobile scope contains invalid character: "!" (exclamation mark)'`, built at [#L579-L580](app/report_service.py#L579) as `f"{environment_label} Mobile scope"`. Replacing the hard-coded word with `CHANNEL_LABELS[channel]` produces a **byte-identical** string, provided that table maps `mobile → "Mobile"`. **The test does not break** - it becomes the lock that prevents that entry ever being written as anything else, and the reason the Component box keeps the suffix `scope` rather than the more precise `component`. Keep it green, add a thick-client sibling beside it. The Description box uses a distinct suffix, `scope description`, so a character error still names which box it came from.
+
+### Plan (revised)
+
+Python precedes JavaScript throughout. Reversing any of steps 1 through 4 leaves a tree in which the client sends a shape the server rejects.
+
+**Step 1 - widen the model.** [app/models.py](app/models.py).
+Add `"thick_client"` to `Channel` and `CHANNELS`; add `COMPONENT_CHANNELS` and `CHANNEL_LABELS`; add `ScopeTarget.description: str = ""`.
+*Test:* `tests/test_app.py` - a thick-client target orders last through `normalise_scope_modes`; each of the two drafts still carrying `test_type` loads unchanged; a `ScopeTarget` built without `description` validates.
+*Invariant:* widening is permissive. No `load_path` repair is added.
+*Interim state:* `thick_client` is a legal channel with no checkbox and no template. Unreachable through the UI until step 6.
+
+**Step 2 - the exclusion rule, as a completeness issue.** [app/report_service.py#L626](app/report_service.py#L626).
+One new line in `setup_issues` naming both labels when `tested_channels` contains more than one member of `COMPONENT_CHANNELS`. The `target.value.strip()` test is not touched.
+*Test:* `tests/test_app.py` - a report with both is **loadable and savable**; `setup_is_complete` is `False`; the Findings route redirects to Setup; `generation_issues` contains the issue; a draft with `tested_channels: ["thick_client"]` plus `test_type: "mobile"` loads without raising.
+*Invariant:* no load path raises on this rule. No draft ever reaches `list_legacy_reports` because of it.
+
+**Step 3 - the paired shape, the allowlist, and duplicates.** [app/report_service.py#L538](app/report_service.py#L538).
+`reconcile_targets` accepts `str` or `{component, description}` for any channel; pairs with `zip_longest` on raw index **before** cleaning, so a blank or `#` component line still consumes its index; carries `description` onto the target dict; swaps `== "mobile"` for `in COMPONENT_CHANNELS` with `CHANNEL_LABELS` in the message; refuses a repeated component in a component channel.
+*Test:* `tests/test_app.py` - paired input carries descriptions to `scope_targets`; **editing only a description leaves `target_id` unchanged**; a description with no component at its index creates no target; a `#` line in the Component box does not shift the descriptions below it; the plain-string form still works for every channel; a repeated component is refused; **[tests/test_app.py#L713](tests/test_app.py#L713) passes unchanged**, with a thick-client sibling added.
+*Invariant:* identity is `(environment, channel, value)`. A Description never creates, renames, or remints a target.
+
+**Step 4 - generation.** [app/docx_report.py](app/docx_report.py), [app/main.py#L520](app/main.py#L520).
+Extract `_append_prototype_row` from the two existing copies at [#L401](app/docx_report.py#L401) and [#L423](app/docx_report.py#L423); add `_component_rows`; fill `_find_table(document, "Component")` with cloned rows, production first; add both `mobile-thick` and `thick-mobile` to `_metadata`; add `main_template_path(report)` with the documented `CHANNELS`-order tie-break; point [main.py#L520](app/main.py#L520) at it.
+*Test:* `tests/test_docx.py` - a thick-client report renders against `MAIN_THICK_MOBILE.docx` with **no unresolved placeholders**; production rows precede non-production; an empty component list yields exactly one `N/A` row; the caption reads "Thick Client" and, for a mobile report, "Mobile"; a web-only report still selects `MAIN.docx` and is unaffected by the two extra metadata keys. Plus a regression assertion that the extracted helper leaves the `User Roles` and `Findings` tables identical.
+*Invariant:* every unresolved `{{token}}` fails generation loudly. No table is filled with multi-paragraph cells.
+
+**Step 5 - client constants and the seed normalisation, alone.** [app.js#L1130](app/web/static/app.js#L1130), [#L1429](app/web/static/app.js#L1429), [#L1645](app/web/static/app.js#L1645), [#L1674](app/web/static/app.js#L1674).
+`CHANNELS`, `channelLabels`, `COMPONENT_CHANNELS`, and the `componentText` / `descriptionText` / `emptyScopeText` / `setScopeText` helpers. Replace the `=== undefined` fill with a **total normalisation** over every environment x channel. Point `dropChannelEverywhere` and `survivingAfterScopeText` at the helpers.
+*Test:* `tests/test_browser.py` - seed `localStorage` with a draft whose `scope_text.production.mobile` is a **string**, reload, type into the Component box, and assert the keystroke survives a second reload and reaches the PUT body. **This test must land before step 6**, or nothing proves the upgrade; once the two-box render exists, the failure it guards against is silent.
+*Invariant:* the seed is total. No cached shape can reach a property assignment on a primitive.
+
+**Step 6 - the two-box render and all four gates.** [app.js#L1842](app/web/static/app.js#L1842), [#L619](app/web/static/app.js#L619), [#L649](app/web/static/app.js#L649), [#L1852](app/web/static/app.js#L1852), [#L2373](app/web/static/app.js#L2373), [#L1351](app/web/static/app.js#L1351).
+Two labelled textareas for component channels with `data-scope-field` on every scope textarea; per-textarea `scopeTextBefore`; narrow all four counters; narrow `validateSetupPage`'s reveal branch to mark and focus the Component; add the exclusion message to `validateSetupPage` and `updateSetupValidationNotice`; `componentScopeRule(channel, field)`; **delete the stale note** at [#L1872-L1878](app/web/static/app.js#L1872).
+*Test:* `tests/test_browser.py` - a Description-only entry fails the client gate with the Component box marked and focused; a Component-only entry passes; paired values survive save and reload; an invalid character in the Description names the Description. **No browser test covers the Setup scope gate today**, so these are net-new coverage, not a regression suite - nothing existing will catch a mistake here.
+*Invariant:* the client gate and `setup_issues` agree on what counts as a scope target.
+
+**Step 7 - the swap.** [app.js#L1658](app/web/static/app.js#L1658), [#L1735](app/web/static/app.js#L1735).
+The mutual-exclusion arm in the checkbox `onchange`, and a swap variant of the dialog title, message, and cancel label.
+*Test:* `tests/test_browser.py` - ticking Thick Client on an empty Mobile panel unticks Mobile with no dialog; with Mobile scope typed, the dialog appears, names **Mobile** as what is lost and **Thick Client** as what is being added, and cancelling restores both checkboxes and the typed text.
+*Invariant:* no typed scope is deleted without a prompt, and `tested_channels` is never momentarily empty.
+
+**Step 8 - the library editor.** [library_editor.html#L79](app/web/templates/library_editor.html#L79).
+*Test:* save a library entry holding a thick-client PoC list and assert it round-trips.
+*Invariant:* no third copy of the channel list drifts.
+
+**Step 9 - (optional, last) import recovery.** [app/docx_import.py#L539](app/docx_import.py#L539).
+*Test:* `tests/test_docx_import.py` - a generated thick-client report re-imports with its components present. Environment is unrecoverable by design.
+*Invariant:* import never silently discards a whole table.
+
+**Step 10 - docs.** `docs/DATA_MAP.md`, `docs/DOCX_TEMPLATE.md`, this file.
+Record the exclusion rule's single home, the Findings-page asymmetry, the duplicate refusal, the `description` validation hole, the Asia limitation, and the export/import one-way door.
+
+### What I would not do
+
+- **Would not raise in `validate_coverage`, and would not raise in `resolve_tested_channels` either.** Both are reached from `load_path`; a raise in either demotes a draft with no repair path. Round 1 used that argument against one and violated it in the other.
+- **Would not refuse the illegal pair on the save path.** It would give a tester fixing an imported draft a "Save failed" banner on every autosave, for a condition already blocked at the two gates that matter.
+- **Would not let the seed keep its `=== undefined` guard.** A cached string reaching `.component = value` in a non-strict script is a silent no-op. It is the only failure in this change with no error anywhere.
+- **Would not put the description into `scope_text` only.** It would vanish on the first reload.
+- **Would not collapse duplicate components silently.** Correct for a URL, data loss for a Component/Description pair.
+- **Would not fill the binaries table with multi-paragraph cells,** and would not hand-roll the clone idiom a third time.
+- **Would not select either Asia template.** The "complete" two-axis version breaks generation for Asia engagements that work today.
+- **Would not add a `load_path` repair.** A defaulted field already validates against all nine drafts; a repair would rewrite every one of them and burn the single `draft.bak.json` level for a no-op.
 
 ## Answers
 
-_pending_
+### 1. Swap prompt — **B: silent when empty, dialog when scope would be lost**
+
+Ticking Thick Client routes through the existing `confirmChannelRemoval` + `dropChannelEverywhere` path. On an empty Mobile panel this is indistinguishable from a literal auto-deselect: instant, silent. When Mobile scope has been typed, the existing dialog appears, and cancelling restores **both** checkboxes.
+
+### 2. Allowed characters — **the Limitations set plus `_ \ [ ]`, for both boxes on every channel**
+
+The set becomes `[\p{L}\p{Nd} /,.;:()&'"\-_\\\[\]\r\n]`.
+
+Asked first as A/B/C; the answer was "both use the looser Limitations set", then refined once it emerged that the Limitations set as it stands would **narrow** Mobile — it has no underscore, and `com.acme.app_beta` is legal today. Widening by `_ \ [ ]` means:
+
+- Nothing legal today becomes illegal. Mobile's current set is a strict subset.
+- Windows install paths (`C:\Program Files\Acme\acme.exe`) become typable.
+- [tests/test_app.py#L713](tests/test_app.py#L713) still passes: `!` is outside the new set too, and the message text is unchanged.
+
+One rule, one set, both boxes, all four channels. `mobileScopeRule` and the Python allowlist both widen.
+
+### 3. Findings-page boxes — **A: one box, asymmetry documented as deliberate**
+
+The Findings page keeps its single endpoint box. A component typed there prints as an affected location under the finding and never as a binaries row. Recorded in [docs/DATA_MAP.md](docs/DATA_MAP.md) so it is not later "fixed".
+
+### 4. Asia templates — **B: both axes, now, in this change**
+
+Selection becomes genuinely two-dimensional:
+
+| | not Asia | Asia |
+|---|---|---|
+| no component channel | `MAIN.docx` | `MAIN_ASIA.docx` |
+| Mobile or Thick Client | `MAIN_THICK_MOBILE.docx` | `MAIN_THICK_MOBILE_ASIA.docx` |
+
+**Measured fact that made this affordable:** each Asia template is its non-Asia twin **plus exactly one table** — a second findings summary headed `Section | Vulnerability Name | Severity | CVSS Score | CVSS Vector`. `MAIN_ASIA` is 13 tables to `MAIN`'s 12; `MAIN_THICK_MOBILE_ASIA` is 14 to `MAIN_THICK_MOBILE`'s 13. Nothing else differs. Round 1's "three tokens with no model data" framing was right about the tokens and wrong about the scale.
+
+Column fill, as specified by the owner:
+
+| Column | Token | Source |
+|---|---|---|
+| Section | `{{section-number}}` | where that finding sits in the document |
+| Vulnerability Name | `{{finding}}` | `finding.title` |
+| Severity | `{{rating}}` | `finding.severity` |
+| CVSS Score | `{{cvss-score}}` | **blank** — a user input not yet in the project |
+| CVSS Vector | `{{cvss-vector}}` | **blank** — same |
+
+Blank, not `N/A`: the token resolves to an empty string, so `_unresolved_placeholders` is satisfied and generation succeeds. When the CVSS fields are added later, only the value changes.
+
+**Ordering is already settled.** `_populate_component_findings` ([docx_report.py#L516-L519](app/docx_report.py#L516)) walks `SEVERITY_ORDER` and sorts each group by `title.casefold()`; `_populate_summary_table` ([#L432](app/docx_report.py#L432)) sorts by `(SEVERITY_ORDER.index(severity), title.casefold())`. **Identical order.** A row in the new table maps 1:1 to a finding in the body, with no new ordering rule to invent.
+
+**The open piece is the section number.** The app has none. Headings use numbered custom styles (`Report Heading 1`, `Report Heading 2`) whose numbering lives in the style definition, so Word computes `6.2.1` at open time and Python never sees it. Deriving it means reproducing Word's scheme by counting heading levels. Flagged to the owner as the one thing here that can be wrong with nothing to catch it; the owner chose to keep it in this change rather than pair it with the CVSS fields.
+
+### 5. Blank Description — **B: required whenever its Component is filled**
+
+This **overturns the oracle's A1 and the planner's "`setup_issues` needs no change"**. The rule now needs a home on both sides:
+
+- Python: a new `setup_issues` line, per environment × component channel, naming the component whose description is missing.
+- JavaScript: a per-row check in `validateSetupPage` and `updateSetupValidationNotice`, marking and focusing the **Description** box in that case (versus the Component box when the component itself is missing).
+
+The existing "at least one scope target" check still counts `value` only and is still untouched. This is an additional issue line, not a change to that one.
+
+## Round 3 - Planner: the two deltas the answers created
+
+> Verbatim from `change-planner`. Deltas only; Round 2 stands for everything else.
+
+### Q2 confirmations
+
+**Single rule - confirmed.** `componentScopeRule` collapses to one `characterRule` with no branch: `/^[\p{L}\p{Nd} \/,.;:()&'"\-_\\\[\]]$/u`. `\r\n` never reaches the test on either side - [app.js#L1355-L1357](app/web/static/app.js#L1355) splits and drops blank/`#` lines first, and [report_service.py#L572-L578](app/report_service.py#L572) validates one cleaned line at a time - so `allow_line_breaks` stays `False` and the `\r\n` members are inert. The set is a strict superset of the Limitations set; the deliberate `non_production_label ⊆ limitations` relation at [app.js#L1374](app/web/static/app.js#L1374) is untouched.
+
+**`CHANNEL_LABELS` still needed - confirmed, now with three consumers.** The *set* no longer varies but the *label* does, and it is a constructor argument on both sides already. Third consumer is Delta 2's new issue line.
+
+**`_find_table("Section")` does not disturb `Findings` - confirmed.** `_find_table` matches `rows[0].cells[0]`; `Section` appears in no other table's first header cell.
+
+**All four templates share `resources/` - confirmed.** `template_path.parent` stays the component root in every branch.
+
+### Delta 1 - Asia axis: blast radius
+
+| Site | Change | Why |
+|---|---|---|
+| `main_template_path(report)` (new) | **changed from Round 2**: two axes - `segment == "Asia"` x `set(tested_channels) & COMPONENT_CHANNELS` → one of four names | one owner for both axes and the component root |
+| `_populate_component_findings` [#L508-L558](app/docx_report.py#L508) | **changed from Round 2 ("no change")**: bookmark each finding-title paragraph; return the ordered `(finding, bookmark_name)` list | the section number needs an anchor Word can resolve, and the caller must not re-derive order or match by title, which can repeat |
+| `_populate_cvss_table` (new) | fills `_find_table(document, "Section")` by cloning its single data row | `tables[12]` / `tables[13]` |
+| `_optional_table(document, header)` (new, ~4 lines) | returns `None` instead of raising | `MAIN.docx` has no `Section` table and the scripts pass it directly; presence-based keeps `render_report_docx` a function of the template it was handed |
+| `render_report_docx` [#L152-L186](app/docx_report.py#L152) | one new call, between `_populate_component_findings` and `add_native_image_captions` | headings must exist to bookmark; fields must exist before `mark_all_fields_for_update` |
+| `_append_prototype_row` | third consumer | same idiom as `User Roles` and `Findings` |
+| `resources/*.docx` | **no change** | the extra table is already authored |
+| `scripts/*` | **no change - now worth restating** | they hard-code `MAIN.docx` and bypass `main_template_path`, so an Asia fixture renders with no Section table and nobody notices |
+
+### Delta 2 - required Description: blast radius
+
+| Site | Change | Why |
+|---|---|---|
+| `setup_issues` [#L626-L647](app/report_service.py#L626) | **changed from Round 2**: now **two** additions - the exclusion line *and* one line per component target with blank `description`. [#L644](app/report_service.py#L644) untouched | needs `report.scope_targets`, so it cannot live in `setup_input_issues(engagement)` |
+| scope grid [#L1842-L1880](app/web/static/app.js#L1842) | **changed from Round 2**: a component channel's two textareas go inside one `div.scope-channel[data-channel][data-component-channel]`; every scope textarea gets `data-scope-field` and `data-channel` | the counter reads `[data-scope-field="component"]`; the pair rule reads the `div` and takes its two children. Web and API get the same `div` with one child |
+| `validateSetupPage` [#L2362-L2387](app/web/static/app.js#L2362) | **changed from Round 2**: the per-pair check, plus a **third** reveal case - mark and focus the **Description** | Round 2's reveal branch only had "mark the Component" |
+| `updateSetupValidationNotice` [#L607-L632](app/web/static/app.js#L607) | the same per-pair check, producing strings identical to `setup_issues` | it is what the tester reads |
+| `tests/test_browser.py` | new contract test: notice text == `setup_issues(report)` computed in-process | the sixth twin's only drift guard |
+
+### New data-risk rows
+
+| # | Area | What could go wrong | Verdict | Mitigation |
+|---|---|---|---|---|
+| **A1 (corrected)** | "`setup_issues` needs no change" | **Overturned.** A filled Component with a blank Description must block Setup completion | **RISK → planned** | New per-target line. [#L644](app/report_service.py#L644) stays byte-identical, so no existing assertion moves |
+| 33 | Asia templates never rendered | Neither has been through `render_report_docx`. `_find_body_element("DOCUMENT REVISION HISTORY")`, `_has_exact_body_token("findings")`, seven `_find_table` lookups and `_unresolved_placeholders` are all hard preconditions | **RISK** | Smoke-render all four in step 4a. Every failure is loud; the risk is meeting them in front of a tester |
+| 34 | Section number disagrees with the heading | A counted number is off by one silently, in a delivered document | **RISK → removed by design** | Word computes it, not Python. See below |
+| 35 | `6.2.1` is the wrong shape | Severity heading is `Report Heading 1`, finding title `Report Heading 2`, and the severity heading is the **7th** level-1 section. The number is `7.1` | **RISK - owner decision** | No prefix is hard-coded. If `6.2.1` is required it is a template re-levelling, not code |
+| 36 | Row order drifts from the body | The 1:1 claim rests on two independent sorts | **clear** | `_populate_component_findings` returns the order and `_populate_cvss_table` consumes it, so the order is shared rather than re-derived |
+| 37 | Bookmark name collision | Two bookmarks of one name and Word resolves the wrong one | **RISK** | Name from `finding.uid` with a `vuln_` prefix; T1 asserts document-wide uniqueness |
+| 38 | Blank CVSS tokens | An unreplaced `{{cvss-score}}` fails generation | **clear** | Replaced with `""`; `_unresolved_placeholders` scans text, and an empty replacement removes the token |
+| 39 | Scripts bypass `main_template_path` | An Asia fixture renders without the Section table | **clear - accepted** | Fixture-only; named in step 10 |
+| 40 | Required Description x an old bundle | Every component target from a pre-change bundle has `description: ""`, so Findings is gated until all are typed | **RISK - accepted** | Zero such targets on disk. The gate sends the tester **to Setup**, the only page that can fix it |
+| 41 | Required Description x a Findings PUT with no `scope_text` | Does a blank-description report get stranded? | **clear** | `setup_is_complete` gates Findings and Editor and redirects to Setup; `save_report` still does not refuse, so the state is reachable, savable and fixable |
+| 42 | Component channel with zero components | The new rule never fires and the binaries table falls back to one `N/A` row | **clear** | Deliberate. The per-environment scope-target check is satisfied by web or API |
+| 43 | Sixth twin drift | The pair rule now lives in `setup_issues` and two JS functions | **RISK** | One browser contract test compares the notice against `setup_issues(report)` for the same report |
+
+### The section number: a Word `REF` field, not a Python count
+
+**Levels, established.** Severity heading ("Critical Findings") is `Report Heading 1` / id `ReportHeading1` ([test_docx_components.py#L51](tests/test_docx_components.py#L51), [docx_import.py#L33](app/docx_import.py#L33)). Finding title is `Report Heading 2` / id `ReportHeading2` ([docx_import.py#L32](app/docx_import.py#L32)). A finding is at outline **level 2** directly under a level-1 severity heading, so the number is `N.M` - **not** `6.N.M`.
+
+**The top-level number, and why 6 is wrong.** The template's static level-1 sections are DOCUMENT REVISION HISTORY, EXECUTIVE SUMMARY, PENETRATION TEST METHODOLOGY, RISK ASSESSMENT METHODOLOGY, REMEDIATION TIMELINES, `{{app-name}}` PENTEST - six. `Targets and Test Dependencies` and `Findings Summary` are the two level-2 children of the sixth, corroborated by the owner's own measurement that `{{mobile-thick}}` sits in "6.1 table 10". `{{findings}}` is the last element inside `Findings Summary` (6.2). So the **first severity heading is section 7** and the first Critical finding is **7.1**. The sentence at paragraph 23 refers to the *summary table* at 6.2, not to finding detail. Do not hard-code 6.
+
+**Mechanism.**
+1. In `_populate_component_findings`, wrap each finding-title paragraph in `w:bookmarkStart`/`w:bookmarkEnd`, name `vuln_<finding.uid>`, unique `w:id`.
+2. Return the ordered `(finding, bookmark_name)` list, so the table is built from insertion order rather than re-sorted.
+3. In `_populate_cvss_table`, replace `{{section-number}}` with a field: `w:fldChar begin` → `w:instrText` ` REF vuln_<uid> \w \h ` → `separate` → empty result run → `end`. **`\w` (full context)**, not `\r` - the reference sits in a different section and `\r` can shorten the number.
+4. It resolves itself. `mark_all_fields_for_update` ([docx_captions.py#L184-L191](app/docx_captions.py#L184)) already marks every `w:fldChar begin` dirty and sets `w:updateFields="true"`, and the production path already runs `update_docx_bytes_with_word` → `document.Fields.Update()` on every story. The delivered file carries the baked value; a file that skipped the Word pass computes it on open.
+
+**Why not count in Python.** Counting requires four assumptions unverifiable without opening the DOCX - that `ReportHeading1` is the only style at level 0 of that numbering, that `w:start` is 1, that no `w:startOverride` exists, and that the static headings share the sequence. Each is silently wrong if violated. Word's own computation cannot disagree with the heading it renders, and survives a later re-levelling.
+
+**Ordering constraint.** `_populate_cvss_table` runs **after** `_populate_component_findings` (headings must exist to bookmark) and **before** `add_native_image_captions` (fields must exist to be marked dirty). One exact insertion point.
+
+**Tests, none needing Word** (`tests/test_docx.py`):
+- **T1 structure.** Each Section cell holds exactly one field whose `w:instrText` is ` REF <name> \w \h `; every name resolves to exactly one `w:bookmarkStart`; every bookmarked paragraph carries `w:pStyle` `ReportHeading2`; names unique document-wide; no `{{section-number}}` survives.
+- **T2 1:1.** The sequence of `{{finding}}`-column values equals the sequence of `ReportHeading2` paragraph texts in body order. The only thing guarding the claimed 1:1.
+- **T3 plumbing.** Every `w:fldChar begin` in the Section cells carries `w:dirty="true"`, and `settings.xml` has `w:updateFields` true after render.
+
+**What no test catches:** whether Word's `\w` renders `7.1`. That is a **one-time manual acceptance check** on a Windows box. Named as an acceptance step, not a test.
+
+**Honest fallback**, if that check shows the field does not resolve: leave the Section cell **empty**, exactly as CVSS Score and Vector, and record Section as the third not-yet-in-the-project column. A blank cell is honest; a counted guess is a wrong number in a delivered document with nothing to catch it.
+
+### Inserted steps
+
+**Step 2a - required Description, Python.** [app/report_service.py#L626-L647](app/report_service.py#L626).
+In the environment loop, after the existing scope-target check, one line per target where `target.channel in COMPONENT_CHANNELS and target.value.strip() and not target.description.strip()`:
+`f'{environment.replace("_", "-")} {CHANNEL_LABELS[target.channel]} description for "{target.value}"'`
+Sentence-shaped lines already coexist with terse ones here, and this shape reads correctly inside the client's `Missing: ...`. One line per component, uncapped: a cap would hide which row, which is the whole point of naming it.
+*Test:* `tests/test_app.py` - a component with a description completes Setup; the same with a blank description does not, `setup_is_complete` is `False`, the Findings route redirects to Setup, and `generation_issues` carries the line naming that component; a **web** target with a blank description is unaffected; the existing "production scope target" assertion is unchanged.
+*Invariant:* [#L644](app/report_service.py#L644) is byte-identical. The rule only ever *adds* lines, and only for `COMPONENT_CHANNELS`.
+
+**Step 4a - two-axis selection, and a smoke render of all four.** `app/docx_report.py`, [main.py#L520](app/main.py#L520).
+`main_template_path(report)` from `segment == "Asia"` and `set(tested_channels) & COMPONENT_CHANNELS`, all under `ROOT / "resources"`. The `CHANNELS`-order tie-break for the caption label is unchanged.
+*Test:* `tests/test_docx.py` - the four selection cases; a parameterised smoke render of all four templates, each asserting no unresolved placeholders; and `main_template_path(report).parent == ROOT / "resources"` in every branch.
+*Invariant:* one function owns both axes and the component root; no script path changes.
+*Sequencing:* **before 4b**, so an Asia template defect surfaces as "cannot render at all" rather than "the Section table is wrong".
+
+**Step 4b - the Section table.** `app/docx_report.py`.
+Bookmark + return the ordered list from `_populate_component_findings`; add `_optional_table` and `_populate_cvss_table`; fill via `_append_prototype_row` with `REF` field / `finding.title` / severity through the existing `RATING_FONT_COLORS` path / `""` / `""`; call it at the one insertion point.
+*Test:* T1, T2, T3; plus a non-Asia render asserting `_populate_cvss_table` no-ops rather than raising (this is why lookup is presence-based, not `segment`-based - the scripts hand `MAIN.docx` to Asia reports).
+*Invariant:* Section rows are the body heading sequence by construction; every unresolved token still fails loudly.
+
+**Step 6a - required Description, client.** [app.js#L1842](app/web/static/app.js#L1842), [#L619](app/web/static/app.js#L619), [#L2373](app/web/static/app.js#L2373).
+The grid wraps a component channel's two textareas in `div.scope-channel[data-channel][data-component-channel]`. Both `validateSetupPage` and `updateSetupValidationNotice` walk those divs, pair the two boxes' lines by raw index with the **same clean rules as `reconcile_targets`**, and emit the identical string per offending component. The reveal branch gains its third case: mark and focus the **Description**.
+*Test:* `tests/test_browser.py` - the contract test (notice text == `setup_issues(report)` in-process); a filled Component with a blank Description blocks with the Description marked and focused; filling it unblocks; a `#` line in the Component box does not shift which description is reported missing.
+*Invariant:* client and `setup_issues` produce the same strings for the same report; the reveal always focuses the box the tester must type into.
+
+**Step 10 gains:** the two-axis table, the `REF`-field mechanism and its one manual acceptance check, the `7.1` fact, the required-Description rule and its contract test, and the scripts' bypass of `main_template_path`.
+
+### What the planner now considers unsafe
+
+**The `6.2.1` assumption.** The evidence says a finding is `Report Heading 2` under a `Report Heading 1` severity heading, and that severity heading is the 7th level-1 section - so the number is `7.1`, not `6.2.1`. If `6.2.1` is genuinely needed, that is a **template re-levelling** (severity → `Report Heading 2`, finding title → `Report Heading 3`), which also moves `FINDING_HEADING_STYLE` and `GROUP_HEADING_STYLE` at [docx_import.py#L32-L33](app/docx_import.py#L32), breaks re-import of every previously generated report, and renumbers every delivered report. Do not fold that into this change. **The `REF`-field design makes this non-blocking**: the field returns whatever Word renders on the heading, so the code is correct under either levelling. What is blocking is only the owner's expectation.
+
+**Shipping the Asia templates without step 4a.** Two files that have never been through this renderer, with nine hard preconditions each. All fail loudly, which is right - but discovering them during a real generation is not.
+
+**Accepted, not fixed:** an old bundle's component targets all gate Findings until every description is typed (row 40); the description issue line can be ten strings long when the tester has left ten blank; and descriptions remain uncharacter-checked on non-Setup paths.
 
 ## Agreed plan
 
-_pending_
+Read this section alone. Everything above is the working-out.
+
+### What is being built
+
+**Thick Client becomes a fourth app type**, alongside Web, API, and Mobile. Mobile and Thick Client are mutually exclusive with each other; either may be combined freely with Web and API.
+
+**Mobile and Thick Client get a two-box scope input** on the Setup page - **Component** and **Description**, both labelled - where Web and API keep one box. Both boxes are required: a Component with no Description blocks Setup.
+
+**Generation selects one of four templates** on two independent axes:
+
+| | not Asia | Asia |
+|---|---|---|
+| no component channel | `MAIN.docx` | `MAIN_ASIA.docx` |
+| Mobile or Thick Client | `MAIN_THICK_MOBILE.docx` | `MAIN_THICK_MOBILE_ASIA.docx` |
+
+**The component templates** fill `{{mobile-thick}}` / `{{thick-mobile}}` with `Mobile` or `Thick Client`, and fill a Component/Description table from `{{binaries}}` / `{{binaries-description}}` - one row per component, **production rows first**, with no production/non-production split shown.
+
+**The Asia templates** additionally fill a `Section | Vulnerability Name | Severity | CVSS Score | CVSS Vector` table. Section is a Word cross-reference to the finding's own heading (it will read `7.1` for the first Critical finding). Vulnerability Name and Severity come from the finding. CVSS Score and Vector are **left blank** until those fields are added to the app.
+
+### Settled decisions
+
+| # | Decision |
+|---|---|
+| 1 | **Mutual exclusion is a Setup completeness issue, not a validation error.** It lives in `setup_issues` and its JavaScript twin, and **nowhere else**. Neither `validate_coverage` nor `resolve_tested_channels` raises, because both are on the load path and a raise there demotes a draft to the legacy list with no repair route. A draft carrying the illegal pair loads, saves, and is fixable on Setup. |
+| 2 | **The swap uses the existing confirm-and-purge.** Silent and instant when the outgoing panel is empty; the existing dialog when typed scope would be destroyed, with cancel restoring **both** checkboxes. |
+| 3 | **One character set, all four channels, both boxes:** `[\p{L}\p{Nd} /,.;:()&'"\-_\\\[\]]`. A strict widening of Mobile's current set, so nothing legal today becomes illegal. `!` stays illegal, so [tests/test_app.py#L713](tests/test_app.py#L713) passes byte-identically. |
+| 4 | **Target identity stays `(environment, channel, value)`.** Editing only a Description never remints a `target_id`. |
+| 5 | **A repeated Component is refused** with a named error, on component channels only. Web and API keep collapsing duplicates silently. |
+| 6 | **A Description is required whenever its Component is filled.** New `setup_issues` line naming the offending component. The existing "at least one scope target" check is untouched. |
+| 7 | **The Findings page keeps one endpoint box.** A component typed there prints as an affected location and never as a binaries row. Deliberate, documented. |
+| 8 | **The section number is a Word `REF` field, never a Python count.** Word cannot disagree with the heading it rendered, and the field survives a later re-levelling. |
+| 9 | **Blank, not `N/A`, for CVSS.** An empty replacement satisfies `_unresolved_placeholders`; only the value changes when the fields land. |
+| 10 | **No `load_path` repair.** A widened `Literal` and a defaulted field validate against all nine drafts on disk; a repair would rewrite every one and burn the single backup level for a no-op. |
+
+### Ordered steps
+
+Python precedes JavaScript throughout. Reversing steps 1-4 leaves a tree where the browser sends a shape the server rejects.
+
+---
+
+**Step 1 - widen the model.**
+*Files:* [app/models.py](app/models.py)
+Add `"thick_client"` to `Channel` and `CHANNELS`. Add `COMPONENT_CHANNELS = ("mobile", "thick_client")` and `CHANNEL_LABELS`. Add `ScopeTarget.description: str = ""`.
+*Test:* `tests/test_app.py` - a thick-client target orders last through `normalise_scope_modes`; both drafts still carrying `test_type` load unchanged; a `ScopeTarget` built without `description` validates.
+*Invariant:* widening is permissive; no existing draft changes shape and no repair is added.
+
+**Step 2 - mutual exclusion as a completeness issue.**
+*Files:* [app/report_service.py#L626](app/report_service.py#L626)
+One `setup_issues` line when `tested_channels` holds more than one member of `COMPONENT_CHANNELS`.
+*Test:* `tests/test_app.py` - a report with both is loadable **and savable**; `setup_is_complete` is `False`; `/findings` redirects to Setup; `generation_issues` carries the line; a draft with `tested_channels: ["thick_client"]` plus legacy `test_type: "mobile"` loads without raising.
+*Invariant:* **no load path raises on this rule.** No draft ever reaches the legacy list because of it.
+
+**Step 2a - a Description is required.**
+*Files:* [app/report_service.py#L626](app/report_service.py#L626)
+One line per target where the channel is a component channel, `value` is non-blank, and `description` is blank - naming the component so the tester can find it among ten rows. Uncapped.
+*Test:* `tests/test_app.py` - a component with a description completes Setup, the same with a blank one does not; a **web** target with a blank description is unaffected; the existing "production scope target" assertion is unchanged.
+*Invariant:* [report_service.py#L644](app/report_service.py#L644) stays byte-identical. The rule only ever *adds* lines, only for component channels.
+
+**Step 3 - the paired shape, the character set, and duplicates.**
+*Files:* [app/report_service.py#L538](app/report_service.py#L538)
+`reconcile_targets` accepts a plain string **or** `{component, description}` for any channel; pairs the two line lists by raw index with `zip_longest` **before** cleaning, so a blank or `#` line still consumes its index; carries `description` onto each target; replaces `channel == "mobile"` with `channel in COMPONENT_CHANNELS` and the hardcoded `"Mobile"` with `CHANNEL_LABELS[channel]`; refuses a repeated component.
+*Test:* `tests/test_app.py` - paired input carries descriptions through; **editing only a description leaves `target_id` unchanged**; a description with no component at its index creates no target; a `#` line in the Component box does not shift the descriptions below it; the plain-string form still works for every channel; a repeated component is refused; [tests/test_app.py#L713](tests/test_app.py#L713) passes unchanged, with a thick-client sibling added.
+*Invariant:* identity is `(environment, channel, value)`. A Description never creates, renames, or remints a target.
+
+**Step 4 - the binaries table and template selection.**
+*Files:* [app/docx_report.py](app/docx_report.py), [app/main.py#L520](app/main.py#L520)
+Extract `_append_prototype_row` from the two existing hand-rolled copies. Add `_component_rows(report)` returning `(component, description)` pairs, production first. Fill `_find_table(document, "Component")` with cloned rows, mirroring the `User Roles` empty case with a single `N/A` row. Add **both** `mobile-thick` and `thick-mobile` to `_metadata`, since the two templates spell it differently.
+*Test:* `tests/test_docx.py` - a thick-client report renders with no unresolved placeholders; production rows precede non-production; an empty list yields exactly one `N/A` row; the caption reads `Thick Client`, and `Mobile` for a mobile report; a web-only report still selects `MAIN.docx`; the extracted helper leaves the `User Roles` and `Findings` tables byte-identical.
+*Invariant:* every unresolved `{{token}}` fails generation loudly. No table is filled with multi-paragraph cells.
+
+**Step 4a - two-axis selection, and a smoke render of all four templates.**
+*Files:* [app/docx_report.py](app/docx_report.py), [app/main.py#L520](app/main.py#L520)
+`main_template_path(report)` switching on `segment == "Asia"` and `set(tested_channels) & COMPONENT_CHANNELS`, with a `CHANNELS`-order tie-break for the caption label.
+*Test:* `tests/test_docx.py` - all four selection cases; a parameterised smoke render of **all four templates** asserting no unresolved placeholders; `main_template_path(report).parent == ROOT / "resources"` in every branch.
+*Invariant:* one function owns both axes **and** the component root. Neither Asia template has ever been through this renderer; this step is where that is discovered, not during a real generation.
+
+**Step 4b - the Asia Section table.**
+*Files:* [app/docx_report.py](app/docx_report.py)
+Bookmark each finding-title paragraph in `_populate_component_findings` as `vuln_<uid>` and return the ordered list. Add `_optional_table` (returns `None` rather than raising, because `MAIN.docx` has no such table and the scripts pass it directly). Add `_populate_cvss_table` filling Section with a ` REF vuln_<uid> \w \h ` field, name and severity from the finding, and empty strings for both CVSS columns. Call it between `_populate_component_findings` and `add_native_image_captions`.
+*Test:* `tests/test_docx.py` - **T1** each Section cell holds exactly one field, every name resolves to exactly one bookmark, every bookmarked paragraph is `ReportHeading2`, names unique document-wide, no `{{section-number}}` survives; **T2** the Vulnerability Name column sequence equals the `ReportHeading2` body sequence; **T3** every field is marked dirty and `settings.xml` sets `updateFields`; plus a non-Asia render asserting the table lookup no-ops rather than raising.
+*Invariant:* the table's order is the body's order **by construction**, shared rather than re-derived.
+*Acceptance (manual, Windows, once):* open a generated Asia report and confirm the Section cell matches its heading. Expected `7.1` for the first Critical finding. If the field does not resolve, fall back to a blank cell - never a counted guess.
+
+**Step 5 - client constants and the cached-draft fix, alone.**
+*Files:* [app/web/static/app.js](app/web/static/app.js)
+`CHANNELS`, `channelLabels`, `COMPONENT_CHANNELS`, and the `componentText` / `descriptionText` / `emptyScopeText` / `setScopeText` helpers. Replace the `=== undefined` seed at [#L1433](app/web/static/app.js#L1433) with a **total normalisation** over every environment x channel. Point `dropChannelEverywhere` and `survivingAfterScopeText` at the helpers.
+*Test:* `tests/test_browser.py` - seed `localStorage` with a draft whose `scope_text.production.mobile` is a **string**, reload, type into the Component box, and assert the keystroke survives a second reload and reaches the PUT body.
+*Invariant:* the seed is total. No cached shape can reach a property assignment on a string primitive.
+*Sequencing:* **must land before step 6.** Once the two-box render exists, this failure is silent - the tester types and nothing is stored.
+
+**Step 6 - the two-box render and all four counters.**
+*Files:* [app/web/static/app.js](app/web/static/app.js)
+Two labelled textareas for component channels, wrapped per channel in a `div.scope-channel` so a pair can be read as a pair. `data-scope-field` on **every** scope textarea, with Web and API tagged `component` so narrowing never drops an app type from a count. Per-textarea `scopeTextBefore`. Narrow all four counters - [#L619](app/web/static/app.js#L619), [#L649](app/web/static/app.js#L649), [#L1852](app/web/static/app.js#L1852), and **[#L2373](app/web/static/app.js#L2373) `validateSetupPage`**, which is the save-blocking gate. Single `componentScopeRule`. Delete the stale note at [#L1872-L1878](app/web/static/app.js#L1872) whose own comment says to.
+*Test:* `tests/test_browser.py` - a Description-only entry fails the client gate with the Component box marked and focused; a Component-only entry passes; paired values survive save and reload; an invalid character in the Description names the Description.
+*Invariant:* the client gate and `setup_issues` agree on what counts as a scope target.
+*Note:* **no browser test covers the Setup scope gate today.** These are net-new coverage - nothing existing will catch a mistake here.
+
+**Step 6a - the required-Description rule, client side.**
+*Files:* [app/web/static/app.js](app/web/static/app.js)
+`validateSetupPage` and `updateSetupValidationNotice` walk the per-channel divs, pair the two boxes' lines by raw index using the **same clean rules as `reconcile_targets`**, and emit strings identical to `setup_issues`. The reveal branch gains a third case: mark and focus the **Description** when the Component is filled and the Description is not.
+*Test:* `tests/test_browser.py` - a contract test comparing the notice text against `setup_issues(report)` computed in-process; a filled Component with a blank Description blocks with the Description marked and focused; filling it unblocks; a `#` line in the Component box does not shift which description is reported missing.
+*Invariant:* the sixth twinned rule cannot drift - one test compares both sides for the same report.
+
+**Step 7 - the swap.**
+*Files:* [app/web/static/app.js#L1658](app/web/static/app.js#L1658), [#L1735](app/web/static/app.js#L1735)
+The mutual-exclusion arm in the checkbox handler, and a swap variant of the dialog title, message, and cancel label - the existing copy hardcodes "Remove Mobile from the scope?", which is wrong when the tester just ticked Thick Client.
+*Test:* `tests/test_browser.py` - ticking Thick Client on an empty Mobile panel unticks Mobile with no dialog; with Mobile scope typed, the dialog names **Mobile** as what is lost and **Thick Client** as what is arriving, and cancelling restores both checkboxes and the typed text.
+*Invariant:* no typed scope is deleted without a prompt, and `tested_channels` is never momentarily empty.
+
+**Step 8 - the library editor.**
+*Files:* [app/web/templates/library_editor.html#L79](app/web/templates/library_editor.html#L79)
+A third hardcoded channel list, in a page that cannot import `app.js`.
+*Test:* save a library entry holding a thick-client PoC list and assert it round-trips.
+*Invariant:* no copy of the channel list drifts.
+
+**Step 9 - (optional, last) import recovery.**
+*Files:* [app/docx_import.py#L539](app/docx_import.py#L539)
+Safe to defer: `docx_import` resolves tables **by header**, not index, so inserting the Component table breaks nothing today. Without this step a re-imported thick-client report lands visibly incomplete rather than corrupt.
+*Test:* `tests/test_docx_import.py` - a generated thick-client report re-imports with its components present. Environment is unrecoverable by design, since the table has no production split.
+*Invariant:* import never silently discards a whole table.
+
+**Step 10 - docs.**
+*Files:* [docs/DATA_MAP.md](docs/DATA_MAP.md), [docs/DOCX_TEMPLATE.md](docs/DOCX_TEMPLATE.md), this file
+Record: the exclusion rule's single home; the Findings-page asymmetry as deliberate; the duplicate refusal; that `description` is unvalidated on non-Setup paths; the two-axis selection table; the `REF`-field mechanism and its one manual acceptance check; the `7.1` fact; the required-Description contract test; that the scripts bypass `main_template_path`; and the export/import one-way door.
+
+### Known, accepted, and written down
+
+- **A bundle exported after this change, imported into an older build, silently loses every description.** Pydantic's `extra="ignore"`. The reverse direction is safe.
+- **`description` gets no character validation on Findings or Content saves**, because the allowlist lives inside `reconcile_targets`, which early-returns without `scope_text`. The same hole already exists for `value`; this doubles its surface.
+- **An old bundle's component targets gate Findings until every description is typed.** Zero such targets exist on disk today. The gate redirects to Setup, the only page that can fix it.
+- **Once a draft stores `"thick_client"`, reverting the literal makes it unloadable.** Inherent to widening. Named because the exclusion rule must be right the first time.
+- **`{{cvss-score}}` and `{{cvss-vector}}` ship blank.** When those fields are added, only the value changes.
+- **The scripts hard-code `MAIN.docx`** and bypass `main_template_path`, so an Asia fixture renders without its Section table. Fixture-only.
+

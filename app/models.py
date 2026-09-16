@@ -9,10 +9,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 Severity = Literal["critical", "high", "medium", "low", "informational"]
 Status = Literal["open_new", "open_previously_discovered", "resolved"]
 Environment = Literal["production", "non_production"]
-Channel = Literal["web", "api", "mobile"]
+Channel = Literal["web", "api", "mobile", "thick_client"]
 # The one canonical app-type order. Lives here because docx_report and report_service both import
 # from this module, so putting it anywhere else would invert the dependency direction.
-CHANNELS: tuple[Channel, ...] = ("web", "api", "mobile")
+CHANNELS: tuple[Channel, ...] = ("web", "api", "mobile", "thick_client")
+# App types scoped as a named component plus a description rather than as a list of locations.
+# Mutually exclusive with each other: one report describes one kind of binary.
+COMPONENT_CHANNELS: tuple[Channel, ...] = ("mobile", "thick_client")
+# Twin of channelLabels in app.js. Both sides name a channel in prose the tester reads, so a
+# channel added to one table and not the other prints "undefined" in a message or a checkbox.
+CHANNEL_LABELS: dict[Channel, str] = {"web": "Web", "api": "API", "mobile": "Mobile", "thick_client": "Thick Client"}
 RETIRED_SCOPE_MODES = ("all", "all_production", "all_non_production")
 # The retired compound token set, kept only to read drafts written before app types became a list.
 LEGACY_TEST_TYPE_CHANNELS: dict[str, list[str]] = {"web": ["web"], "api": ["api"], "mobile": ["mobile"], "web_api": ["web", "api"]}
@@ -161,6 +167,9 @@ class ScopeTarget(BaseModel):
     environment: Environment
     channel: Channel
     value: str
+    # Only component channels collect one; defaulted so every draft written before this existed
+    # still validates, and so identity stays the (environment, channel, value) triple.
+    description: str = ""
     order: int = 0
 
 

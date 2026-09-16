@@ -5,9 +5,10 @@ import re
 import unicodedata
 import uuid
 from datetime import datetime
+from itertools import zip_longest
 from typing import Literal
 
-from app.models import CHANNELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TableFragment, Vulnerability, resolve_tested_channels
+from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TableFragment, Vulnerability, resolve_tested_channels
 
 REPORT_TYPE_LABELS = {
     "annual_pentest": "Annual Pentest",
@@ -99,6 +100,9 @@ def _has_allowed_characters(
 
 
 APP_NAME_SYMBOLS = "-:;.()"
+# Twin of componentScopeRule in app.js. A strict superset of the retired mobile set, so every value
+# that validated before still does; the backslash and brackets are what make an install path typable.
+COMPONENT_SCOPE_SYMBOLS = "/,.;:()&'\"-_\\[]"
 
 
 def valid_application_name(value: str) -> bool:
@@ -562,25 +566,42 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             raise ValueError("scope environment values must be objects")
         for channel in channels:
             raw_values = environment_values.get(channel, "")
-            if not isinstance(raw_values, str):
+            # A component channel submits {component, description}; every channel still accepts the
+            # plain string, so a browser cached from before this shape existed degrades rather than 422s.
+            if isinstance(raw_values, str):
+                component_text, description_text = raw_values, ""
+            elif isinstance(raw_values, dict):
+                component_text = raw_values.get("component", "")
+                description_text = raw_values.get("description", "")
+            else:
                 raise ValueError("scope target values must be text")
-            values = raw_values.splitlines()
-            # Target IDs are reused by value, so a repeated line would claim the same ID twice and
-            # make every later save fail validation. One target per distinct value.
-            cleaned: list[str] = []
+            if not isinstance(component_text, str) or not isinstance(description_text, str):
+                raise ValueError("scope target values must be text")
+            environment_label = "Production" if environment == "production" else "Non-Production"
+            scope_label = f"{environment_label} {CHANNEL_LABELS[channel]} scope"
+            # Paired by raw index before cleaning, so a blank or commented component line still
+            # consumes its index and cannot shift every description below it onto the wrong row.
+            cleaned: list[tuple[str, str]] = []
             seen: set[str] = set()
-            for value in (line.strip() for line in values):
-                if not value or value.startswith("#") or value in seen:
+            for value, description in zip_longest(component_text.splitlines(), description_text.splitlines(), fillvalue=""):
+                value, description = value.strip(), description.strip()
+                if not value or value.startswith("#"):
+                    continue
+                # Target IDs are reused by value, so a repeated line would claim the same ID twice.
+                # For a URL that is the same place typed twice; for a component it is a second build
+                # whose description would vanish with it, so say so rather than dropping it.
+                if value in seen:
+                    if channel in COMPONENT_CHANNELS:
+                        raise ValueError(f"{scope_label} lists the same component twice: {json.dumps(value, ensure_ascii=False)}")
                     continue
                 seen.add(value)
-                cleaned.append(value)
-            for order, value in enumerate(cleaned):
-                if channel == "mobile":
-                    environment_label = "Production" if environment == "production" else "Non-Production"
-                    issue = invalid_character_issue(f"{environment_label} Mobile scope", value, ":'\"/.,-_&")
-                    if issue:
-                        raise ValueError(issue)
-                targets.append({"target_id": old.get((environment, channel, value), f"tgt_{uuid.uuid4().hex[:8]}"), "environment": environment, "channel": channel, "value": value, "order": order})
+                cleaned.append((value, description))
+            for order, (value, description) in enumerate(cleaned):
+                if channel in COMPONENT_CHANNELS:
+                    for label, text in ((scope_label, value), (f"{scope_label} description", description)):
+                        if issue := invalid_character_issue(label, text, COMPONENT_SCOPE_SYMBOLS):
+                            raise ValueError(issue)
+                targets.append({"target_id": old.get((environment, channel, value), f"tgt_{uuid.uuid4().hex[:8]}"), "environment": environment, "channel": channel, "value": value, "description": description, "order": order})
     payload["scope_targets"] = targets
     target_ids = {target["target_id"] for target in targets}
     prior_targets = [target.model_dump(mode="json") for target in prior.scope_targets]
@@ -637,12 +658,22 @@ def setup_issues(report: Report) -> list[str]:
         issues.append("tester")
     if not engagement.tested_environments:
         issues.append("selected environment")
+    # The only home for the mutual-exclusion rule. Raising in validate_coverage or
+    # resolve_tested_channels would demote the draft on load, where nothing can repair it; an issue
+    # line bounces the tester to Setup, the one page holding both checkboxes.
+    covered_components = [channel for channel in COMPONENT_CHANNELS if channel in engagement.tested_channels]
+    if len(covered_components) > 1:
+        issues.append(f"only one of {' and '.join(CHANNEL_LABELS[channel] for channel in covered_components)} -- deselect the other")
     for environment in engagement.tested_environments:
         test_window = engagement.test_windows.get(environment)
         if not test_window or not test_window.start_date or not test_window.end_date:
             issues.append(f"{environment.replace('_', '-')} testing dates")
         if not any(target.environment == environment and target.value.strip() for target in report.scope_targets):
             issues.append(f"{environment.replace('_', '-')} scope target")
+        # Named per component rather than counted: among ten rows a tally cannot say which one.
+        for target in report.scope_targets:
+            if target.environment == environment and target.channel in COMPONENT_CHANNELS and target.value.strip() and not target.description.strip():
+                issues.append(f"{environment.replace('_', '-')} {CHANNEL_LABELS[target.channel]} description for \"{target.value.strip()}\"")
     return [*issues, *setup_input_issues(engagement)]
 
 

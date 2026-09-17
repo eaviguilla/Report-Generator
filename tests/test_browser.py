@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import socket
 import hashlib
 import tempfile
@@ -447,10 +448,16 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/new")
         page.get_by_label("Test Mobile").check()
         page.get_by_label("Test Web").uncheck()
-        mobile = page.get_by_role("textbox", name="Mobile Component", exact=True).first
+        production = page.locator("#scope-grid .scope-panel.production")
+        # A "#" row is a note to the tester, and is held to no character set at all.
+        note = production.get_by_role("textbox", name="Mobile Component", exact=True).first
+        note.fill("# ignored ! []")
+        production.get_by_role("button", name="Add component").click()
+        mobile = production.get_by_role("textbox", name="Mobile Component", exact=True).nth(1)
 
-        mobile.fill("# ignored ! []\nClient's \"Mobile\" App: iOS/Android_v2.1, QA-&")
+        mobile.fill("Client's \"Mobile\" App: iOS/Android_v2.1, QA-&")
         self.assertEqual(mobile.evaluate("input => input.validationMessage"), "")
+        self.assertEqual(note.evaluate("input => input.validationMessage"), "")
 
         mobile.fill("Mobile App!")
         self.assertEqual(
@@ -458,6 +465,26 @@ class BrowserWorkflowTests(unittest.TestCase):
             'Production Mobile scope contains invalid character: "!" (exclamation mark)',
         )
         self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
+
+    def test_an_ignored_component_row_does_not_validate_its_description(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["mobile"]
+        report.scope_targets = []
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        component = page.get_by_role("textbox", name="Mobile Component", exact=True).first
+        description = page.get_by_role("textbox", name="Mobile Description", exact=True).first
+        component.fill("# ignored row!")
+        description.fill("ignored description!")
+
+        self.assertEqual(component.evaluate("input => input.validationMessage"), "")
+        self.assertEqual(description.evaluate("input => input.validationMessage"), "")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        self.assertEqual(main.workspace.load(report_id).scope_targets, [])
 
     def test_a_cached_draft_written_before_the_two_box_scope_still_accepts_typing(self) -> None:
         """A tab open across the deploy restores scope_text holding a bare string. This script is not
@@ -495,6 +522,363 @@ class BrowserWorkflowTests(unittest.TestCase):
             [("mobile", "Wallet app")],
             "the keystroke was written onto a string primitive and silently discarded",
         )
+
+    def test_a_recovered_non_string_component_pair_is_normalized_before_save(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["tested_channels"] = ["mobile"]
+        report["engagement"]["tested_environments"] = ["production", "non_production"]
+        report["engagement"]["test_windows"]["non_production"] = {"start_date": "2026-01-03", "end_date": "2026-01-04", "test_time": "Anytime"}
+        report["scope_text"] = {
+            "production": {"mobile": {"component": "Wallet app", "description": "Production build"}},
+            "non_production": {"mobile": {"component": None, "description": ["stale cached value"]}},
+        }
+        draft_key = f"vulnreport-pending:{report_id}:nullable"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "nullable",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+        requests = []
+        page = self.page
+        page.on("request", lambda request: requests.append(json.loads(request.post_data)) if request.method == "PUT" and request.post_data else None)
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+
+        self.assertEqual(requests[-1]["scope_text"]["non_production"]["mobile"], {"component": "", "description": ""})
+
+    def test_a_recovered_non_object_scope_environment_accepts_valid_component_rows(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["tested_channels"] = ["mobile"]
+        report["scope_targets"] = []
+        report["scope_text"] = {"production": [], "non_production": "stale"}
+        draft_key = f"vulnreport-pending:{report_id}:environment-shape"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "environment-shape",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+        production = page.locator("#scope-grid .scope-panel.production")
+        production.get_by_role("textbox", name="Mobile Component", exact=True).fill("Wallet app")
+        production.get_by_role("textbox", name="Mobile Description", exact=True).fill("Production build")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual([(target.value, target.description) for target in saved.scope_targets], [("Wallet app", "Production build")])
+
+    def test_a_recovered_non_object_test_window_accepts_valid_dates(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["tested_channels"] = ["mobile"]
+        report["engagement"]["test_windows"]["production"] = []
+        report["scope_targets"] = []
+        report["scope_text"] = {"production": {"mobile": {"component": "Wallet app", "description": "Production build"}}}
+        draft_key = f"vulnreport-pending:{report_id}:window-shape"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "window-shape",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+        page.get_by_label("Production start date", exact=True).fill("2026-02-01")
+        page.get_by_label("Production end date", exact=True).fill("2026-02-02")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.test_windows["production"].start_date, date(2026, 2, 1))
+        self.assertEqual(saved.engagement.test_windows["production"].end_date, date(2026, 2, 2))
+
+    def test_a_recovered_non_array_account_list_does_not_break_setup(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["test_accounts"] = {}
+        draft_key = f"vulnreport-pending:{report_id}:account-shape"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "account-shape",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+
+        page = self.page
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+        page.wait_for_load_state()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(page.get_by_label("User role 1").input_value(), "N/A")
+        page.get_by_label("Application Owner").fill("Recovered account list")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        self.assertEqual(main.workspace.load(report_id).engagement.app_owner, "Recovered account list")
+
+    def test_recovered_scalar_coverage_values_render_component_scope(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["tested_environments"] = "production"
+        report["engagement"]["tested_channels"] = "mobile"
+        report["scope_targets"] = []
+        report["scope_text"] = {"production": {"mobile": {"component": "Wallet app", "description": "Production build"}}}
+        draft_key = f"vulnreport-pending:{report_id}:coverage-shape"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "coverage-shape",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+
+        page = self.page
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+        page.wait_for_load_state()
+
+        self.assertEqual(errors, [])
+        self.assertTrue(page.get_by_label("Test Mobile").is_checked())
+        self.assertEqual(page.get_by_role("textbox", name="Mobile Component", exact=True).input_value(), "Wallet app")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.tested_environments, ["production"])
+        self.assertEqual(saved.engagement.tested_channels, ["mobile"])
+
+    def test_recovered_non_array_scope_targets_fall_back_to_the_server_targets(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["app_owner"] = "Recovered owner"
+        report["scope_targets"] = {}
+        draft_key = f"vulnreport-pending:{report_id}:target-shape"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "target-shape",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+
+        page = self.page
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+        page.wait_for_load_state()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(page.get_by_role("textbox", name="Web", exact=True).input_value(), "https://prod.example.test")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.app_owner, "Recovered owner")
+        self.assertEqual([target.value for target in saved.scope_targets], ["https://prod.example.test"])
+
+    def test_recovered_non_array_findings_fall_back_to_the_server_findings(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["app_owner"] = "Recovered owner"
+        report["vulnerabilities"] = {}
+        draft_key = f"vulnreport-pending:{report_id}:finding-shape"
+        envelope = {
+            "schemaVersion": 1,
+            "reportId": report_id,
+            "tabId": "finding-shape",
+            "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"],
+            "editRevision": 1,
+            "report": report,
+        }
+
+        page = self.page
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
+        page.reload()
+        page.get_by_role("button", name="Restore", exact=True).click()
+        page.wait_for_load_state()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(page.locator("#findings > tr:not(.finding-location-row)").count(), 1)
+        self.assertEqual(page.get_by_role("button", name="Edit finding name").text_content(), "Browser finding")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.app_owner, "Recovered owner")
+        self.assertEqual([finding.title for finding in saved.vulnerabilities], ["Browser finding"])
+
+    def test_a_second_component_row_lands_as_its_own_target(self) -> None:
+        """The two boxes are paired by line index, so a row is that pairing made visible. A second row
+        has to reach the draft as its own target, and removing a row has to take that target with it."""
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        page.get_by_label("Test Thick Client").check()
+        page.get_by_label("Test Web").uncheck()
+        page.get_by_label("Non-Production", exact=True).uncheck()
+        page.get_by_label("Segment").select_option("JH")
+        page.get_by_label("Application Name").fill("Row Scope")
+        page.get_by_label("Report Type").select_option("annual_pentest")
+        page.get_by_label("Tester").fill("QA Tester")
+        page.locator('input[aria-label="Production start date"]').fill("2026-01-01")
+        page.locator('input[aria-label="Production end date"]').fill("2026-01-02")
+
+        production = page.locator("#scope-grid .scope-panel.production")
+        production.get_by_role("textbox", name="Thick Client Component", exact=True).first.fill("Acme.exe")
+        production.get_by_role("textbox", name="Thick Client Description", exact=True).first.fill("Main desktop client")
+        production.get_by_role("button", name="Add component").click()
+        production.get_by_role("textbox", name="Thick Client Component", exact=True).nth(1).fill("AcmeUpdater.exe")
+        production.get_by_role("textbox", name="Thick Client Description", exact=True).nth(1).fill("Background updater")
+        page.locator("#next").click()
+        page.wait_for_url("**/findings")
+
+        report_id = page.url.split("/reports/")[1].split("/")[0]
+        self.assertEqual(
+            [(target.value, target.description) for target in main.workspace.load(report_id).scope_targets],
+            [("Acme.exe", "Main desktop client"), ("AcmeUpdater.exe", "Background updater")],
+        )
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.locator("#scope-grid .scope-panel.production tbody tr").first.wait_for()
+        page.get_by_role("button", name="Remove Thick Client component 1").click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=8_000)
+        self.assertEqual(
+            [(target.value, target.description) for target in main.workspace.load(report_id).scope_targets],
+            [("AcmeUpdater.exe", "Background updater")],
+            "removing a row renumbered the descriptions instead of dropping the pair",
+        )
+
+    def test_duplicate_component_names_are_rejected_before_save(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["mobile"]
+        report.scope_targets = []
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        production = page.locator("#scope-grid .scope-panel.production")
+        production.get_by_role("textbox", name="Mobile Component", exact=True).first.fill("Wallet app")
+        production.get_by_role("textbox", name="Mobile Description", exact=True).first.fill("Android")
+        production.get_by_role("button", name="Add component").click()
+        duplicate = production.get_by_role("textbox", name="Mobile Component", exact=True).nth(1)
+        duplicate.fill("  Wallet app  ")
+        production.get_by_role("textbox", name="Mobile Description", exact=True).nth(1).fill("iOS")
+
+        self.assertEqual(
+            duplicate.evaluate("input => input.validationMessage"),
+            'Production Mobile scope lists the same component twice: "Wallet app"',
+        )
+        page.locator("#save-button").click()
+        self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
+        self.assertEqual(page.locator("#app-diagnostics").count(), 0)
+
+    def test_cancelling_component_removal_cannot_save_the_proposed_deletion(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["thick_client"]
+        report.scope_targets = [
+            ScopeTarget(target_id="tgt_main", environment="production", channel="thick_client", value="Acme.exe", description="Main client", order=0),
+            ScopeTarget(target_id="tgt_updater", environment="production", channel="thick_client", value="Updater.exe", description="Updater", order=1),
+        ]
+        report.vulnerabilities[0].scope.target_ids = ["tgt_main", "tgt_updater"]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Application Owner").fill("Pending owner edit")
+        page.get_by_role("button", name="Remove Thick Client component 2").click()
+        page.locator(".vr-dialog").wait_for()
+        page.evaluate("document.querySelector('#save-button').click()")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        page.get_by_role("button", name="Keep the current targets").click()
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(
+            [(target.target_id, target.value) for target in saved.scope_targets],
+            [("tgt_main", "Acme.exe"), ("tgt_updater", "Updater.exe")],
+        )
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_main", "tgt_updater"])
+
+    def test_cancelling_component_rename_preserves_target_identity_and_references(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["thick_client"]
+        report.scope_targets = [
+            ScopeTarget(target_id="tgt_main", environment="production", channel="thick_client", value="Acme.exe", description="Main client", order=0),
+            ScopeTarget(target_id="tgt_updater", environment="production", channel="thick_client", value="Updater.exe", description="Updater", order=1),
+        ]
+        report.vulnerabilities[0].scope.target_ids = ["tgt_main", "tgt_updater"]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        component = page.get_by_role("textbox", name="Thick Client Component", exact=True).nth(1)
+        component.fill("Updater2.exe")
+        component.press("Tab")
+        page.locator(".vr-dialog").wait_for()
+        page.evaluate("document.querySelector('#save-button').click()")
+        self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
+        during_prompt = main.workspace.load(report_id)
+        self.assertEqual(
+            [(target.target_id, target.value) for target in during_prompt.scope_targets],
+            [("tgt_main", "Acme.exe"), ("tgt_updater", "Updater.exe")],
+        )
+        page.get_by_role("button", name="Keep the current targets").click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(
+            [(target.target_id, target.value) for target in saved.scope_targets],
+            [("tgt_main", "Acme.exe"), ("tgt_updater", "Updater.exe")],
+        )
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_main", "tgt_updater"])
 
     def test_a_component_needs_a_description_before_setup_will_let_you_leave(self) -> None:
         """A description-only entry would pass an unnarrowed textarea count and 422 server-side.
@@ -584,6 +968,58 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertFalse(page.get_by_label("Test Thick Client").is_checked())
         self.assertEqual(page.get_by_role("textbox", name="Mobile Component", exact=True).first.input_value(), "")
 
+    def test_component_swap_warns_before_discarding_an_unsaved_row(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["thick_client"]
+        report.scope_targets = []
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_role("textbox", name="Thick Client Component", exact=True).first.fill("Unsaved.exe")
+        page.get_by_role("textbox", name="Thick Client Description", exact=True).first.fill("Unsaved client")
+        page.get_by_label("Test Mobile").check()
+
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=2_000)
+        self.assertIn("1 scope target", dialog.inner_text())
+        dialog.get_by_role("button", name="Keep Thick Client").click()
+        self.assertTrue(page.get_by_label("Test Thick Client").is_checked())
+        self.assertFalse(page.get_by_label("Test Mobile").is_checked())
+        self.assertEqual(page.get_by_role("textbox", name="Thick Client Component", exact=True).first.input_value(), "Unsaved.exe")
+        self.assertEqual(page.get_by_role("textbox", name="Thick Client Description", exact=True).first.input_value(), "Unsaved client")
+
+    def test_environment_removal_warns_before_discarding_saved_and_unsaved_components(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["mobile"]
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets = [
+            ScopeTarget(target_id="tgt_prod", environment="production", channel="mobile", value="Prod app", description="Production build"),
+            ScopeTarget(target_id="tgt_uat", environment="non_production", channel="mobile", value="UAT app", description="Test build"),
+        ]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        non_production = page.locator("#scope-grid .scope-panel.non_production")
+        non_production.get_by_role("button", name="Add component").click()
+        non_production.get_by_role("textbox", name="Mobile Component", exact=True).nth(1).fill("UAT helper")
+        non_production.get_by_role("textbox", name="Mobile Description", exact=True).nth(1).fill("Unsaved helper build")
+        page.get_by_label("Non-Production", exact=True).uncheck()
+
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=2_000)
+        self.assertIn("2 scope targets", dialog.inner_text())
+        dialog.get_by_role("button", name="Keep the current coverage").click()
+        self.assertTrue(page.get_by_label("Non-Production", exact=True).is_checked())
+        self.assertEqual(
+            non_production.get_by_role("textbox", name="Mobile Component", exact=True).evaluate_all("inputs => inputs.map(input => input.value)"),
+            ["UAT app", "UAT helper"],
+        )
+
     def test_unchecking_an_app_type_confirms_then_clears_it_from_every_finding(self) -> None:
         """Dropping an app type deletes its scope targets and every affected location and additional
         endpoint recorded under it, so the tester is told exactly what goes before it happens."""
@@ -618,6 +1054,80 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual([target.channel for target in saved.scope_targets], ["web"])
         self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_browser"], "the api location is gone from the finding")
         self.assertEqual(saved.vulnerabilities[0].scope.custom_locations, {}, "the typed api endpoint is gone too")
+
+    def test_cancelling_a_finding_location_removal_cannot_save_the_proposed_scope(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
+        finding = report.vulnerabilities[0]
+        finding.scope.target_ids = ["tgt_browser", "tgt_uat"]
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production").caption = "Production evidence caption"
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_role("button", name="Edit finding name").click()
+        page.locator(".finding-title-cell input").fill("Pending title edit")
+        page.get_by_label("Select https://prod.example.test").uncheck()
+        page.locator(".vr-dialog").wait_for()
+        page.evaluate("document.querySelector('#save-button').click()")
+
+        self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].scope.target_ids, ["tgt_browser", "tgt_uat"])
+        page.get_by_role("button", name="Keep the affected location").click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].scope.target_ids, ["tgt_browser", "tgt_uat"])
+
+    def test_custom_location_removal_cannot_autosave_before_its_evidence_decision(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
+        finding = report.vulnerabilities[0]
+        finding.scope = Scope(mode="custom", target_ids=["tgt_uat"], custom_locations={"production": {"web": ["POST /prod"]}})
+        main.provision_report(report)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production").caption = "Production evidence caption"
+        main.workspace.save(report)
+
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 100")
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        endpoint = page.get_by_label("Production affected endpoints", exact=True)
+        endpoint.fill("")
+        page.wait_for_function("""() => {
+            const button = document.querySelector('#save-button');
+            return button.textContent === 'Confirm the scope target change' || button.dataset.saveState === 'saved';
+        }""")
+
+        self.assertEqual(page.locator("#save-button").inner_text(), "Confirm the scope target change")
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].scope.custom_locations["production"]["web"], ["POST /prod"])
+        endpoint.blur()
+        page.locator(".vr-dialog").wait_for()
+        page.get_by_role("button", name="Keep the affected location").click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].scope.custom_locations["production"]["web"], ["POST /prod"])
+
+        endpoint = page.get_by_label("Production affected endpoints", exact=True)
+        endpoint.fill("")
+        endpoint.blur()
+        page.locator(".vr-dialog").wait_for()
+        page.get_by_role("button", name="Remove that evidence").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        saved = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(saved.scope.custom_locations, {})
+        self.assertFalse(any(
+            fragment.type == "image" and fragment.environment == "production"
+            for content in saved.contents
+            for fragment in content.fragments
+        ))
 
     def test_library_insert_preserves_pending_finding(self) -> None:
         report_id = self.ready_report()

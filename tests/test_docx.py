@@ -660,6 +660,56 @@ class DocxReportTests(unittest.TestCase):
             # The tester's own number goes too: the position in the section is the truth, not the typing.
             self.assertEqual(titles, ["Instance 1: Production", "Instance 2: Non-Production"])
 
+    def test_an_instance_label_is_normalized_regardless_of_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="proof_of_concept", fragments=[
+                    InstanceTitleFragment(frag_id="f_lower", type="instance_title", text="instance 7: Production"),
+                    InstanceTitleFragment(frag_id="f_upper", type="instance_title", text="INSTANCE 3 - Mobile"),
+                ]),
+            ])
+            titles = [paragraph.text for paragraph in document.paragraphs if paragraph.text.startswith("Instance ")]
+
+            self.assertEqual(titles, ["Instance 1: Production", "Instance 2: Mobile"])
+
+    def test_instance_label_normalization_requires_a_boundary_after_the_number(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="proof_of_concept", fragments=[
+                    InstanceTitleFragment(frag_id="f_7zip", type="instance_title", text="Instance 7zip package"),
+                ]),
+            ])
+            titles = [paragraph.text for paragraph in document.paragraphs if paragraph.text.startswith("Instance ")]
+
+            self.assertEqual(titles, ["Instance 1: Instance 7zip package"])
+
+    def test_instance_label_punctuation_requires_a_boundary_before_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="proof_of_concept", fragments=[
+                    InstanceTitleFragment(frag_id="f_hyphen", type="instance_title", text="Instance 7-Zip package"),
+                    InstanceTitleFragment(frag_id="f_decimal", type="instance_title", text="Instance 7.5 cluster"),
+                ]),
+            ])
+            titles = [paragraph.text for paragraph in document.paragraphs if paragraph.text.startswith("Instance ")]
+
+            self.assertEqual(titles, ["Instance 1: Instance 7-Zip package", "Instance 2: Instance 7.5 cluster"])
+
+    def test_repeated_instance_labels_are_normalized_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="proof_of_concept", fragments=[
+                    InstanceTitleFragment(frag_id="f_repeat", type="instance_title", text="Instance 9: Instance 3: Production"),
+                ]),
+            ])
+            titles = [paragraph.text for paragraph in document.paragraphs if paragraph.text.startswith("Instance ")]
+
+            self.assertEqual(titles, ["Instance 1: Production"])
+
     def _layout_document(self, report_folder: Path, contents: list, *, status: str = "open_new"):
         """Render one finding through the shipped template, for page-layout assertions."""
         evidence_folder = report_folder / "evidence"

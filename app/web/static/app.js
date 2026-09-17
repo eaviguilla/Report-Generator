@@ -93,6 +93,8 @@
     recoveryStorageError ||= error;
   }
   const clone = value => JSON.parse(JSON.stringify(value));
+  if (!Array.isArray(report.scope_targets)) report.scope_targets = clone(serverReport.scope_targets || []);
+  if (!Array.isArray(report.vulnerabilities)) report.vulnerabilities = clone(serverReport.vulnerabilities || []);
   const maxHistoryEntries = 20;
   let undoHistory = [];
   let redoHistory = [];
@@ -172,6 +174,7 @@
   const maxSaveRetries = 3;
   let saveInFlight = null;
   let saveConflict = null;
+  let pendingScopeDecision = false;
   let allowUnsavedUnload = false;
   let recoveryStorageWarningShown = false;
   const SAVE_STATES = Object.freeze({
@@ -617,7 +620,7 @@
     if ([...root.querySelectorAll('#test-windows input[type="date"]')].some(input => !input.value)) missing.push("testing dates");
     ["production", "non_production"].forEach(environment => {
       const panel = root.querySelector(`#scope-grid .scope-panel.${environment}`);
-      if (panel && ![...panel.querySelectorAll('textarea[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) missing.push(`${environment.replace("_", "-")} scope target`);
+      if (panel && ![...panel.querySelectorAll('[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) missing.push(`${environment.replace("_", "-")} scope target`);
     });
     const exclusion = componentExclusionIssue();
     if (exclusion) missing.push(exclusion);
@@ -649,7 +652,7 @@
       return section.querySelector("textarea")?.value.trim() ? "set" : "empty";
     }
     if (section.querySelector("#scope-grid")) {
-      const targets = [...section.querySelectorAll('#scope-grid textarea[data-scope-field="component"]')]
+      const targets = [...section.querySelectorAll('#scope-grid [data-scope-field="component"]')]
         .flatMap(input => input.value.split("\n"))
         .filter(line => line.trim() && !line.trimStart().startsWith("#")).length;
       return `${targets} target${targets === 1 ? "" : "s"}`;
@@ -747,6 +750,10 @@
       setSaveState(SAVE_STATES.CONFLICT);
       return false;
     }
+    if (pendingScopeDecision) {
+      setSaveState(SAVE_STATES.UNSAVED, "Confirm the scope target change");
+      return false;
+    }
     if (saveInFlight) return saveInFlight;
     if (!pendingSave || savedRevision >= saveRevision) return true;
     if (root.dataset.step === "setup" && !validateSetupInputs(false)) {
@@ -763,6 +770,10 @@
       try {
         setSaveState(SAVE_STATES.SAVING);
         while (savedRevision < saveRevision) {
+          if (pendingScopeDecision) {
+            setSaveState(SAVE_STATES.UNSAVED, "Confirm the scope target change");
+            return false;
+          }
           const revision = saveRevision;
           const sentReport = clone(report);
           const response = await fetch(`/reports/${reportId}`, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(sentReport)});
@@ -1140,8 +1151,8 @@
   // scope_text holds a string for a location channel and {component, description} for a component
   // one. Reading through these keeps every call site out of the business of knowing which.
   const emptyScopeText = channel => isComponentChannel(channel) ? {component:"", description:""} : "";
-  const componentText = value => typeof value === "string" ? value : (value?.component ?? "");
-  const descriptionText = value => typeof value === "string" ? "" : (value?.description ?? "");
+  const componentText = value => typeof value === "string" ? value : typeof value?.component === "string" ? value.component : "";
+  const descriptionText = value => typeof value?.description === "string" ? value.description : "";
   const scopeTextField = (environment, channel, field) => field === "description"
     ? descriptionText(report.scope_text?.[environment]?.[channel])
     : componentText(report.scope_text?.[environment]?.[channel]);
@@ -1443,6 +1454,7 @@
         input.setCustomValidity(invalid ? message : "");
         showRuleState(input, invalid, "ruleInvalid");
       };
+      input.validateSetupRule = validate;
       input.addEventListener("input", validate);
       input.addEventListener("change", validate);
       validate();
@@ -1459,27 +1471,42 @@
       }
       return !invalidInputs.length;
     };
-    report.engagement.tested_environments ||= ["production", "non_production"];
+    const recoveredEnvironments = Array.isArray(report.engagement.tested_environments)
+      ? report.engagement.tested_environments
+      : typeof report.engagement.tested_environments === "string"
+        ? [report.engagement.tested_environments]
+        : ["production", "non_production"];
+    report.engagement.tested_environments = Object.keys(environmentLabels).filter(environment => recoveredEnvironments.includes(environment));
     // Twin of the last two branches of models.resolve_tested_channels: never fall back to web while
     // the report's own targets can answer, because that would drop every API and mobile location.
+    const recoveredChannels = Array.isArray(report.engagement.tested_channels)
+      ? report.engagement.tested_channels
+      : typeof report.engagement.tested_channels === "string" ? [report.engagement.tested_channels] : [];
+    report.engagement.tested_channels = CHANNELS.filter(channel => recoveredChannels.includes(channel));
     if (!report.engagement.tested_channels?.length) {
       const present = CHANNELS.filter(channel => report.scope_targets.some(target => target.channel === channel));
       report.engagement.tested_channels = present.length ? present : ["web"];
     }
-    report.engagement.test_windows ||= {};
+    report.engagement.test_windows = isRecord(report.engagement.test_windows) ? report.engagement.test_windows : {};
     ["production", "non_production"].forEach(environment => {
-      report.engagement.test_windows[environment] ||= {
+      if (!isRecord(report.engagement.test_windows[environment])) report.engagement.test_windows[environment] = {
         start_date: environment === "production" ? report.engagement.start_date : null,
         end_date: environment === "production" ? report.engagement.end_date : null,
         test_time: "Anytime",
       };
       if (report.engagement.test_windows[environment].test_time == null) report.engagement.test_windows[environment].test_time = "Anytime";
     });
-    report.engagement.test_accounts ||= [{user_role:"N/A", username:"N/A"}];
+    const recoveredAccounts = Array.isArray(report.engagement.test_accounts) ? report.engagement.test_accounts : [];
+    report.engagement.test_accounts = recoveredAccounts.length
+      ? recoveredAccounts.map(account => ({
+          user_role:isRecord(account) && typeof account.user_role === "string" ? account.user_role : "",
+          username:isRecord(account) && typeof account.username === "string" ? account.username : "",
+        }))
+      : [{user_role:"N/A", username:"N/A"}];
     if (report.engagement.limitations == null) report.engagement.limitations = "N/A";
-    report.scope_text ||= {};
+    report.scope_text = isRecord(report.scope_text) ? report.scope_text : {};
     ["production", "non_production"].forEach(environment => {
-      report.scope_text[environment] ||= {};
+      report.scope_text[environment] = isRecord(report.scope_text[environment]) ? report.scope_text[environment] : {};
       CHANNELS.forEach(channel => {
         const current = report.scope_text[environment][channel];
         // A total normalisation, not an undefined-fill. A tab cached before component channels
@@ -1490,8 +1517,8 @@
           report.scope_text[environment][channel] = isComponentChannel(channel)
             ? {component:seeded.map(target => target.value).join("\n"), description:seeded.map(target => target.description || "").join("\n")}
             : seeded.map(target => target.value).join("\n");
-        } else if (isComponentChannel(channel) && typeof current === "string") {
-          report.scope_text[environment][channel] = {component:current, description:""};
+        } else if (isComponentChannel(channel)) {
+          report.scope_text[environment][channel] = {component:componentText(current), description:descriptionText(current)};
         } else if (!isComponentChannel(channel) && typeof current !== "string") {
           report.scope_text[environment][channel] = componentText(current);
         }
@@ -1611,6 +1638,9 @@
           .flatMap(([, values]) => locationLines(values)))
         .length > 0;
     };
+    const scopeTextTargetCount = include => Object.entries(report.scope_text || {}).reduce((total, [environment, byChannel]) => total
+      + Object.entries(byChannel || {}).filter(([channel]) => include(environment, channel)).reduce((channelTotal, [, value]) => channelTotal
+        + componentText(value).split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith("#")).length, 0), 0);
     const findingsStrandedBy = (environments, channels) => {
       const surviving = (report.scope_targets || []).filter(target => environments.includes(target.environment) && channels.includes(target.channel));
       return (report.vulnerabilities || [])
@@ -1621,10 +1651,16 @@
       const doomed = new Set((report.scope_targets || [])
         .filter(target => !environments.includes(target.environment) || !channels.includes(target.channel))
         .map(target => target.target_id));
+      const typedTargets = scopeTextTargetCount((environment, channel) =>
+        report.engagement.tested_environments.includes(environment)
+        && report.engagement.tested_channels.includes(channel)
+        && (!environments.includes(environment) || !channels.includes(channel)));
+      const targetCount = Math.max(doomed.size, typedTargets);
       const stranded = findingsStrandedBy(environments, channels);
       const impact = scopeChangeImpact(doomed);
-      if (!stranded.length && !impact.findings) return true;
+      if (!targetCount && !stranded.length && !impact.findings) return true;
       const lines = [];
+      if (targetCount) lines.push(`${count(targetCount, "scope target")} in Setup will be deleted.`);
       if (impact.findings) lines.push(`${impact.findings} finding${impact.findings === 1 ? "" : "s"} lose a selected location.`);
       if (stranded.length) lines.push(`${stranded.length} will be left with no affected location at all, and the report cannot be saved until you give ${stranded.length === 1 ? "it" : "them"} one.`);
       // Screenshots are kept, not deleted -- but an unlabelled one blocks generation until it is
@@ -1643,12 +1679,13 @@
     // Everything an app type owns goes when it is unchecked, so the dialog counts it before asking.
     const channelRemovalImpact = channel => {
       const targetIds = new Set((report.scope_targets || []).filter(target => target.channel === channel).map(target => target.target_id));
+      const typedTargets = scopeTextTargetCount((environment, value) => value === channel && report.engagement.tested_environments.includes(environment));
       const endpointsIn = finding => Object.values(finding.scope?.custom_locations || {})
         .reduce((total, byChannel) => total + (byChannel?.[channel] || []).filter(value => value.trim()).length, 0);
       const findings = (report.vulnerabilities || []).filter(finding =>
         (finding.scope?.target_ids || []).some(targetId => targetIds.has(targetId)) || endpointsIn(finding));
       return {
-        targets: targetIds.size,
+        targets: Math.max(targetIds.size, typedTargets),
         findings: findings.map(finding => finding.title || "Untitled finding"),
         endpoints: (report.vulnerabilities || []).reduce((total, finding) => total + endpointsIn(finding), 0),
       };
@@ -1908,6 +1945,144 @@
         validateDateOrder();
         windows.append(panel);
       });
+      // Any named component anywhere satisfies "define a scope target", so the marking clears across
+      // the whole grid rather than just the box being typed into.
+      const clearScopeErrors = () => {
+        if ([...root.querySelectorAll('#scope-grid [data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) {
+          root.querySelectorAll("#scope-grid .validation-error").forEach(input => input.classList.remove("validation-error"));
+        }
+      };
+      const dropRemovedTargets = () => {
+        const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
+        dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id)));
+      };
+      // A component channel stores two strings that the server pairs by line index. One row per index
+      // shows that pairing instead of asking the tester to keep two lists aligned by counting lines.
+      const buildComponentTable = (environment, channel) => {
+        const wrap = document.createElement("div");
+        wrap.className = "scope-components";
+        const table = document.createElement("table");
+        table.className = "setup-table";
+        table.innerHTML = `<thead><tr><th>Component</th><th>Description</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody></tbody>`;
+        const body = table.querySelector("tbody");
+        const fields = ["component", "description"];
+        const commit = () => {
+          const rows = [...body.querySelectorAll("tr")];
+          fields.forEach(field => setScopeTextField(environment, channel, field,
+            rows.map(row => row.querySelector(`[data-scope-field="${field}"]`).value).join("\n")));
+        };
+        const renderRows = () => {
+          const stored = fields.map(field => scopeTextField(environment, channel, field).split(/\r?\n/));
+          body.innerHTML = "";
+          for (let index = 0; index < Math.max(stored[0].length, stored[1].length, 1); index += 1) {
+            const row = document.createElement("tr");
+            fields.forEach((field, column) => {
+              const cell = document.createElement("td");
+              const input = document.createElement("input");
+              input.dataset.scopeField = field;
+              input.value = stored[column][index] || "";
+              // Named by app type rather than by row, so the name stays the box's purpose and the
+              // column header supplies the rest.
+              input.setAttribute("aria-label", `${channelLabels[channel]} ${field === "description" ? "Description" : "Component"}`);
+              input.oninput = () => {
+                commit();
+                if (field === "component") body.querySelectorAll("[data-scope-field]").forEach(control => control.validateSetupRule?.());
+                if (field === "component" && input.dataset.scopeConfirmationRequired === "true") {
+                  pendingScopeDecision = input.value !== input.dataset.scopeTextBefore;
+                }
+                clearScopeErrors();
+                scheduleSave();
+              };
+              if (field === "component") {
+                input.onfocus = () => {
+                  input.dataset.scopeTextBefore = input.value;
+                  input.dataset.scopeConfirmationRequired = String(report.scope_targets.some(target =>
+                    target.environment === environment && target.channel === channel && target.value === input.value
+                  ));
+                };
+                // Confirmed on commit rather than per keystroke, so a half-typed name never counts as removed.
+                input.onchange = async () => {
+                  if (input.dataset.scopeTextBefore === undefined || input.dataset.scopeTextBefore === input.value) {
+                    pendingScopeDecision = false;
+                    return;
+                  }
+                  if (await confirmScopeTextLoss()) {
+                    dropRemovedTargets();
+                    input.dataset.scopeTextBefore = input.value;
+                  } else {
+                    input.value = input.dataset.scopeTextBefore;
+                    commit();
+                  }
+                  pendingScopeDecision = false;
+                  scheduleSave();
+                };
+              }
+              const rule = field === "description" ? (() => {
+                const invalidCharacters = value => {
+                  const component = row.querySelector('[data-scope-field="component"]')?.value.trim();
+                  return !component || component.startsWith("#") ? [] : componentScopeInvalidCharacters(value);
+                };
+                return {...componentScopeRule, invalidCharacters, valid:value => !invalidCharacters(value).length};
+              })() : (() => {
+                const repeated = value => {
+                  const normalized = value.trim();
+                  return Boolean(normalized && !normalized.startsWith("#") && [...body.querySelectorAll('[data-scope-field="component"]')]
+                    .filter(control => control.value.trim() === normalized).length > 1);
+                };
+                return {
+                  ...componentScopeRule,
+                  valid:value => componentScopeRule.valid(value) && !repeated(value),
+                  message:label => `${label} lists the same component twice: ${JSON.stringify(input.value.trim())}`,
+                };
+              })();
+              wireSetupRule(input, rule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
+              cell.append(input);
+              row.append(cell);
+            });
+            const actions = document.createElement("td");
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "remove-scope-component";
+            remove.textContent = "x";
+            remove.title = "Remove component";
+            remove.setAttribute("aria-label", `Remove ${channelLabels[channel]} component ${index + 1}`);
+            // The row is taken out first because the confirmation reads the draft to work out which
+            // findings lose a target, and it has to read the state being proposed.
+            remove.onclick = async () => {
+              const before = fields.map(field => scopeTextField(environment, channel, field));
+              row.remove();
+              commit();
+              const proposed = fields.map(field => scopeTextField(environment, channel, field));
+              const confirmation = confirmScopeTextLoss();
+              fields.forEach((field, column) => setScopeTextField(environment, channel, field, before[column]));
+              renderRows();
+              if (await confirmation) {
+                fields.forEach((field, column) => setScopeTextField(environment, channel, field, proposed[column]));
+                dropRemovedTargets();
+                renderRows();
+                clearScopeErrors();
+                scheduleSave();
+              }
+            };
+            actions.append(remove);
+            row.append(actions);
+            body.append(row);
+          }
+        };
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "subtle add-scope-component";
+        add.textContent = "Add component";
+        add.onclick = () => {
+          fields.forEach(field => setScopeTextField(environment, channel, field, `${scopeTextField(environment, channel, field)}\n`));
+          renderRows();
+          body.lastElementChild?.querySelector("input")?.focus();
+          scheduleSave();
+        };
+        renderRows();
+        wrap.append(table, add);
+        return wrap;
+      };
       scopeGrid.innerHTML = "";
       report.engagement.tested_environments.forEach(environment => {
         const panel = document.createElement("div");
@@ -1920,51 +2095,44 @@
           // The two boxes of a component channel are read as a pair, by index, so the grouping
           // element is what lets a validator find a component's own description.
           if (isComponentChannel(channel)) group.dataset.componentChannel = "true";
-          // Component first: every channel has one, and narrowing a counter to it must never drop a
-          // whole app type from the count.
-          const fields = isComponentChannel(channel) ? ["component", "description"] : ["component"];
-          fields.forEach(field => {
-            const label = document.createElement("label");
-            label.textContent = isComponentChannel(channel)
-              ? `${channelLabels[channel]} ${field === "description" ? "Description" : "Component"}`
-              : channelLabels[channel];
-            const textarea = document.createElement("textarea");
-            textarea.dataset.scopeField = field;
-            textarea.value = scopeTextField(environment, channel, field);
-            // Two lines to start, then grow with the target list instead of scrolling.
-            textarea.rows = 2;
-            const grow = () => {
-              textarea.style.height = "auto";
-              textarea.style.height = `${textarea.scrollHeight}px`;
-            };
-            textarea.oninput = () => { setScopeTextField(environment, channel, field, textarea.value); grow(); if ([...root.querySelectorAll('#scope-grid textarea[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) root.querySelectorAll("#scope-grid textarea.validation-error").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
-            textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
-            // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
-            textarea.onchange = async () => {
-              if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) return;
-              // Only the component names a target, so retyping a description strands nothing.
-              if (field === "description" || await confirmScopeTextLoss()) {
-                if (field === "component") {
-                  const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
-                  dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id)));
-                }
-                textarea.dataset.scopeTextBefore = textarea.value;
-                return;
-              }
-              textarea.value = textarea.dataset.scopeTextBefore;
-              setScopeTextField(environment, channel, field, textarea.value);
-              grow();
-              scheduleSave();
-            };
-            if (isComponentChannel(channel)) {
-              wireSetupRule(textarea, componentScopeRule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
+          if (isComponentChannel(channel)) {
+            const heading = document.createElement("h3");
+            heading.textContent = channelLabels[channel];
+            group.append(heading, buildComponentTable(environment, channel));
+            panel.append(group);
+            return;
+          }
+          const label = document.createElement("label");
+          label.textContent = channelLabels[channel];
+          const textarea = document.createElement("textarea");
+          textarea.dataset.scopeField = "component";
+          textarea.value = scopeTextField(environment, channel, "component");
+          // Two lines to start, then grow with the target list instead of scrolling.
+          textarea.rows = 2;
+          const grow = () => {
+            textarea.style.height = "auto";
+            textarea.style.height = `${textarea.scrollHeight}px`;
+          };
+          textarea.oninput = () => { setScopeTextField(environment, channel, "component", textarea.value); grow(); clearScopeErrors(); scheduleSave(); };
+          textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
+          // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
+          textarea.onchange = async () => {
+            if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) return;
+            if (await confirmScopeTextLoss()) {
+              dropRemovedTargets();
+              textarea.dataset.scopeTextBefore = textarea.value;
+              return;
             }
-            label.append(textarea);
-            group.append(label);
+            textarea.value = textarea.dataset.scopeTextBefore;
+            setScopeTextField(environment, channel, "component", textarea.value);
             grow();
-            document.fonts?.ready.then(grow);
-            observeWidth(textarea, grow);
-          });
+            scheduleSave();
+          };
+          label.append(textarea);
+          group.append(label);
+          grow();
+          document.fonts?.ready.then(grow);
+          observeWidth(textarea, grow);
           panel.append(group);
         });
         scopeGrid.append(panel);
@@ -2046,11 +2214,15 @@
       note.hidden = !incomplete.length;
       note.textContent = incomplete.length ? `${incomplete.length} finding${incomplete.length === 1 ? " is" : "s are"} incomplete: ${incomplete[0].join(", ")}.` : "";
     };
+    const environmentsLostBy = (finding, previousScope) => {
+      const remaining = affectedEnvironments(finding);
+      return scopeEnvironments(previousScope).filter(environment => !remaining.includes(environment));
+    };
+    const evidenceEnvironmentsLostBy = (finding, previousScope) => environmentsLostBy(finding, previousScope)
+      .filter(environment => imagesForEnvironment(finding, environment).some(image => image.evidence_id || image.caption?.trim()));
     // Losing an environment's last location strands that environment's evidence, so confirm before dropping it.
     const settleScopeChange = async (finding, previousScope) => {
-      const remaining = affectedEnvironments(finding);
-      const lost = scopeEnvironments(previousScope).filter(environment => !remaining.includes(environment));
-      if (!lost.length) return true;
+      const lost = environmentsLostBy(finding, previousScope);
       const stranded = lost.filter(environment => imagesForEnvironment(finding, environment).some(image => image.evidence_id || image.caption?.trim()));
       if (stranded.length) {
         const names = stranded.map(environmentName).join(" and ");
@@ -2247,6 +2419,7 @@
           customInput.placeholder = "One endpoint per line";
           customInput.setAttribute("aria-label", channels.length > 1 ? `${locationLabels[environment]} ${channel.toUpperCase()} affected endpoints` : `${locationLabels[environment]} affected endpoints`);
           customInput.value = (finding.scope.custom_locations?.[environment]?.[channel] || []).join("\n");
+          customInput.dataset.scopeBeforeEdit = JSON.stringify(finding.scope);
           customMeasure.className = "location-lines-measure";
           customInputWrapper.append(customGutter, customInput, customMeasure);
           const renderCustomGutter = () => renderLineMarkers(customInput, customGutter, customMeasure, line => line.trim() ? "\u2022" : "", "affected-endpoint-marker");
@@ -2262,7 +2435,23 @@
             if (values.length) byChannel[channel] = values;
             else delete byChannel[channel];
             if (!Object.keys(byChannel).length) delete finding.scope.custom_locations[environment];
+            const snapshot = customInput.dataset.scopeBeforeEdit;
+            pendingScopeDecision = Boolean(snapshot && evidenceEnvironmentsLostBy(finding, JSON.parse(snapshot)).length);
             resizeCustomLocations();
+            scheduleSave();
+          };
+          customInput.onfocus = () => { customInput.dataset.scopeBeforeEdit = JSON.stringify(finding.scope); };
+          // Clearing the last custom location for an environment drops it, so settle on blur rather than per keystroke.
+          customInput.onblur = async () => {
+            const snapshot = customInput.dataset.scopeBeforeEdit;
+            if (!snapshot) return;
+            let accepted;
+            try {
+              accepted = await settleScopeChange(finding, JSON.parse(snapshot));
+            } finally {
+              pendingScopeDecision = false;
+            }
+            if (!accepted) renderFindings();
             scheduleSave();
           };
           let customInputWidth = 0;
@@ -2350,23 +2539,18 @@
         locationRow.querySelectorAll("[data-custom-location]").forEach(input => { const environment = input.dataset.customLocation; const channel = input.dataset.customChannel; const values = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); if (values.length) ((custom[environment] ||= {})[channel] ||= []).push(...values); });
         locationRow.querySelectorAll("[data-select-all]").forEach(control => { const options = locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`); control.checked = [...options].every(option => option.checked); });
         const previousScope = finding.scope;
+        pendingScopeDecision = true;
         finding.scope = {mode:"custom", target_ids:targetIds, location_values:values, custom_locations:custom};
-        await settleScopeChange(finding, previousScope);
+        try {
+          await settleScopeChange(finding, previousScope);
+        } finally {
+          pendingScopeDecision = false;
+        }
         renderFindings();
         scheduleSave();
       };
       locationRow.querySelectorAll("[data-location]").forEach(control => control.onchange = updateLocations);
       locationRow.querySelectorAll("[data-location-value]").forEach(input => input.oninput = () => { finding.scope.location_values ||= {}; finding.scope.location_values[input.dataset.locationValue] = input.value; scheduleSave(); });
-      locationRow.querySelectorAll("[data-custom-location]").forEach(input => {
-        input.onfocus = () => { input.dataset.scopeBeforeEdit = JSON.stringify(finding.scope); };
-        // Clearing the last custom location for an environment drops it, so settle on commit rather than per keystroke.
-        input.onchange = async () => {
-          const snapshot = input.dataset.scopeBeforeEdit;
-          if (!snapshot) return;
-          if (!await settleScopeChange(finding, JSON.parse(snapshot))) { renderFindings(); return; }
-          scheduleSave();
-        };
-      });
       locationRow.querySelectorAll("[data-select-all]").forEach(control => control.onchange = () => { locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`).forEach(option => { option.checked = control.checked; }); updateLocations(); });
       // Deleting a finding takes its content and screenshots with it, so it needs the same guard as a library replace.
       row.querySelector("button").onclick = async () => {
@@ -2457,7 +2641,7 @@
       const requiredDates = [...root.querySelectorAll('#test-windows input[type="date"]')];
       const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => !input?.value.trim());
       const missingEnvironment = !root.querySelector('#test-windows input[type="checkbox"]:checked');
-      const missingScopePanels = [...root.querySelectorAll("#scope-grid .scope-panel")].filter(panel => ![...panel.querySelectorAll('textarea[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#"))));
+      const missingScopePanels = [...root.querySelectorAll("#scope-grid .scope-panel")].filter(panel => ![...panel.querySelectorAll('[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#"))));
       // A description-only entry would pass an unnarrowed count here and 422 on the server instead.
       const blankDescriptions = missingDescriptionIssues();
       const exclusion = componentExclusionIssue();
@@ -2468,12 +2652,18 @@
           incompleteSetup.forEach(input => input.classList.add("validation-error"));
           // Mark the box the tester has to type into: the component when none is named, the
           // description when one is named without it.
-          missingScopePanels.forEach(panel => panel.querySelectorAll('textarea[data-scope-field="component"]').forEach(input => input.classList.add("validation-error")));
+          missingScopePanels.forEach(panel => panel.querySelectorAll('[data-scope-field="component"]').forEach(input => input.classList.add("validation-error")));
           const blankDescriptionBoxes = blankDescriptions.length
-            ? [...root.querySelectorAll('#scope-grid .scope-channel[data-component-channel] textarea[data-scope-field="description"]')].filter(input => input.value.split("\n").some(line => !line.trim()) || !input.value.trim())
+            ? [...root.querySelectorAll('#scope-grid .scope-channel[data-component-channel] [data-scope-field="description"]')].filter(input => {
+                // Row-aware, like missingDescriptionIssues: only a row that names a component owes one.
+                const named = input.closest("tr")?.querySelector('[data-scope-field="component"]')?.value.trim();
+                return named === undefined
+                  ? input.value.split("\n").some(line => !line.trim()) || !input.value.trim()
+                  : Boolean(named) && !named.startsWith("#") && !input.value.trim();
+              })
             : [];
           blankDescriptionBoxes.forEach(input => input.classList.add("validation-error"));
-          const firstIncomplete = incompleteSetup[0] || missingScopePanels[0]?.querySelector('textarea[data-scope-field="component"]') || blankDescriptionBoxes[0];
+          const firstIncomplete = incompleteSetup[0] || missingScopePanels[0]?.querySelector('[data-scope-field="component"]') || blankDescriptionBoxes[0];
           firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
           firstIncomplete?.focus({preventScroll:true});
           setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
@@ -3164,16 +3354,17 @@
           const index = order.indexOf(type);
           return index < 0 ? -1 : index;
         };
-        const perFinding = [...environmentIssues, ...fragmentIssues(finding).map(issue => ({finding, ...issue}))]
+        const perFinding = [...fragmentIssues(finding).map(issue => ({finding, ...issue})), ...environmentIssues]
           .sort((left, right) => rank(left) - rank(right));
         return [...(missing.length ? [{finding, message:missing.join(", ")}] : []), ...perFinding];
       });
       count.textContent = issues.length ? `${issues.length} to fill in` : "Ready";
       count.dataset.state = issues.length ? "issues" : "ready";
-      // Empty evidence slots are never ringed, and a jump silences the rest so it stands alone.
-      const incomplete = reviewTargetId ? new Set() : new Set(issues
-        .filter(issue => issue.fragmentId && !issue.evidenceSlot && (issue.level || "error") === "error")
-        .map(issue => issue.fragmentId));
+      // Empty evidence slots are ringed only when their own Go to action reveals them. Any jump
+      // silences every competing mark so the requested field stands alone.
+      const incomplete = reviewTargetId
+        ? new Set(issues.filter(issue => issue.evidenceSlot && issue.fragmentId === reviewTargetId).map(issue => issue.fragmentId))
+        : new Set(issues.filter(issue => issue.fragmentId && !issue.evidenceSlot && (issue.level || "error") === "error").map(issue => issue.fragmentId));
       pane.querySelectorAll("[data-fragment-id]").forEach(node => node.classList.toggle("is-incomplete", incomplete.has(node.dataset.fragmentId)));
       // Each section carries its own count, so a tester scrolling the page sees the gap without the panel.
       const typeByLabel = Object.fromEntries(Object.entries(contentNames).map(([type, label]) => [label, type]));

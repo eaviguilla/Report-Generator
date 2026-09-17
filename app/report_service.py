@@ -575,6 +575,8 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
                 description_text = raw_values.get("description", "")
             else:
                 raise ValueError("scope target values must be text")
+            component_text = "" if component_text is None else component_text
+            description_text = "" if description_text is None else description_text
             if not isinstance(component_text, str) or not isinstance(description_text, str):
                 raise ValueError("scope target values must be text")
             environment_label = "Production" if environment == "production" else "Non-Production"
@@ -583,7 +585,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             # consumes its index and cannot shift every description below it onto the wrong row.
             cleaned: list[tuple[str, str]] = []
             seen: set[str] = set()
-            for value, description in zip_longest(component_text.splitlines(), description_text.splitlines(), fillvalue=""):
+            for value, description in zip_longest(component_text.split("\n"), description_text.split("\n"), fillvalue=""):
                 value, description = value.strip(), description.strip()
                 if not value or value.startswith("#"):
                     continue

@@ -846,6 +846,46 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", "Acme.exe")).status_code, 200)
         self.assertEqual([(target.value, target.description) for target in main.workspace.load(report_id).scope_targets], [("Acme.exe", "")])
 
+    def test_component_scope_rejects_unicode_separators_instead_of_creating_hidden_rows(self) -> None:
+        report_id = self.new_report()
+        response = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "mobile", {
+            "component": "Alpha\u2028Beta",
+            "description": "One\u2028Two",
+        }))
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "invalid_scope")
+        self.assertIn('"\u2028" (line separator)', response.json()["error"]["message"])
+
+    def test_component_scope_accepts_null_legacy_pair_fields_as_blank(self) -> None:
+        report_id = self.new_report()
+        payload = self._component_scope_payload(report_id, "mobile", {
+            "component": "Wallet app",
+            "description": "Production build",
+        })
+        payload["engagement"]["tested_environments"] = ["production", "non_production"]
+        payload["engagement"]["test_windows"]["non_production"] = {"start_date": "2026-01-02", "end_date": "2026-01-02"}
+        payload["scope_text"]["non_production"] = {"mobile": {"component": None, "description": None}}
+
+        response = self.client.put(f"/reports/{report_id}", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [(target.environment, target.channel, target.value, target.description) for target in main.workspace.load(report_id).scope_targets],
+            [("production", "mobile", "Wallet app", "Production build")],
+        )
+
+    def test_component_scope_still_rejects_non_text_pair_fields(self) -> None:
+        report_id = self.new_report()
+        response = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "mobile", {
+            "component": ["Wallet app"],
+            "description": {},
+        }))
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "invalid_scope")
+        self.assertEqual(response.json()["error"]["message"], "scope target values must be text")
+
     def test_image_slots_follow_affected_environments_and_allow_multiple(self) -> None:
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)

@@ -70,16 +70,26 @@ button.danger { color: var(--danger); }
 .setup-table td { padding: 4px 8px; border-top: 1px solid var(--line); }
 .setup-table td:first-child, .setup-table th:first-child { padding-left: 0; }
 .setup-table input { width: 100%; }
-.remove-test-account { width: 26px; min-height: 26px; padding: 0; border-color: var(--line); color: var(--danger); background: var(--surface-raised); }
-#add-test-account { margin-top: 8px; padding: 6px 9px; }
+.remove-test-account, .remove-scope-component { width: 26px; min-height: 26px; padding: 0; border-color: var(--line); color: var(--danger); background: var(--surface-raised); }
+#add-test-account, .add-scope-component { margin-top: 8px; padding: 6px 9px; }
 .limitations-field { display: block; padding-top: 12px; }
 .limitations-field textarea { width: 100%; min-height: 86px; }
 #setup .scope-grid { gap: 12px; }
 #setup .scope-grid > .scope-panel:only-child { grid-column: 1 / -1; }
+/* Two environments side by side leaves a component row four text columns across. A list of URLs
+   survives that; a path and a sentence do not, so a grid holding one stacks earlier. */
+@media (max-width: 1040px) {
+  #setup .scope-grid:has(.scope-components) { grid-template-columns: minmax(0, 1fr); }
+}
 #setup .scope-panel { padding: 12px; border-color: var(--line); background: #f9fbfe; border-radius: 4px; }
 #setup .scope-panel h2 { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; }
+#setup .scope-channel + .scope-channel { margin-top: 14px; }
+#setup .scope-channel h3 { margin: 0; color: var(--ink-soft); font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+#setup .scope-components .setup-table { margin-top: 2px; }
+#setup .scope-components .setup-table th { font-size: 8.5px; }
 .muted { color: var(--muted); font-size: 11px; }
 #scope-grid textarea,
+#scope-grid .setup-table input,
 .location-value,
 .location-preview,
 #setup[data-step="findings"] td:nth-child(5) input,
@@ -289,6 +299,7 @@ button.danger { color: var(--danger); }
 body, body * { font-family: "Inter", "Segoe UI", sans-serif !important; }
 input[data-path*="scope"],
 #scope-grid textarea,
+#scope-grid .setup-table input,
 .location-value,
 .location-preview,
 .finding-id-cell input,

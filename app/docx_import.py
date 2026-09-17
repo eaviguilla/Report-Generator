@@ -55,7 +55,7 @@ STATUS_BY_LABEL = {
 }
 RETAINED_STATUSES = {"open_new", "open_previously_discovered"}
 FIGURE_PREFIX = re.compile(r"^Figure\s+\d+\s*[.:\-]?\s*")
-INSTANCE_PREFIX = re.compile(r"^Instance\s+\d+\s*[:.\-]?\s*")
+INSTANCE_PREFIX = re.compile(r"^(?:Instance\s+\d+(?:(?:\s*[:.\-])?(?:\s+|$)))+", re.IGNORECASE)
 DISPLAY_ID = re.compile(r"^[0-9]{1,5}$")
 PRODUCTION_ROW = "Production Environment"
 

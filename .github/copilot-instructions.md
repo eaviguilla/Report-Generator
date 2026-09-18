@@ -1,7 +1,42 @@
-# Running tests in this repo
+# Changing how the app looks
 
-The full suite boots a server and Chromium and takes roughly two and a half minutes. Most changes
-cannot break most of it. Running it "to be safe" is not safe, it is just slow.
+When a change is visual — layout, spacing, colour, a component's appearance — **do not stop at
+"looks done".** Without a check, "looks done" is the only signal available and the user becomes the
+verification loop, noticing every mistake by hand.
+
+Close the loop yourself:
+
+1. Open the running app in the browser and screenshot the element or page you changed.
+2. Compare it against the reference: the screenshot the user gave you, the design you were asked to
+   match, or the same element before the change.
+3. **List the differences explicitly** — position, size, weight, colour, spacing — then fix them and
+   screenshot again. Repeat until the list is empty.
+
+Eyeballing a screenshot finds the obvious faults and misses the rest. When the target is a precise
+match, read computed styles out of the page and diff them against the reference numerically; that is
+what turns "close enough" into actually correct.
+
+Show the evidence — the screenshot, or the diff you ran — rather than asserting it matches.
+
+# Implementing a plan
+
+`docs/plans/` holds one document per change, each opening with a status line: `planning`, `agreed`,
+`in progress`, `shipped`, `superseded` or `abandoned`.
+
+**If you implement a plan, you update its document in the same change.** Nobody else will, and a
+plan that still reads `agreed` after it shipped is indistinguishable from one that was never built.
+
+- Tick the checkboxes in *Agreed plan* as each step lands.
+- Set the status to `shipped`, with the date and the commit.
+- Write one short paragraph on **what deviated** — a step dropped, a requirement discovered while
+  building, a different solution than the one agreed. This is the part people read later; the
+  agreed steps only tell them what was expected, not what happened.
+
+If you implement something a plan covers without following that plan, say so there too. A plan
+contradicted by the code is worse than no plan, because the `loremaster` and anyone reading it will
+take it as fact.
+
+# Running tests in this repo
 
 ## Announce the scope before every test command
 

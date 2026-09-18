@@ -1,5 +1,7 @@
 # Conclusion seeded from the proof of concept, and list paste cleanup
 
+> **Status:** shipped · 2026-09-16 · `e7b843a`
+
 ## Request
 
 > - Add the last line of the generated POC to the beginning of the Conclusion field

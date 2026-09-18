@@ -1,5 +1,7 @@
 # Import a generated DOCX as a retest draft
 
+> **Status:** shipped · 2026-09-15 · `95b6769`
+
 ## Request
 
 > there are 2 new files in the root folder. One is a report that I want to be imported by this app itself. then another is a python script that can export the data from that report to import to the app. Do not use the python script but, use it as reference. You know the data that we put in the report. now use it as reference to know how to get those data in the report. I only care about vulns that are Open, new or previously discovered, the description and recommended remediation of those vulns, and the latest Proof of concept that they have, which is Labeled Proof of Concept. Disregard the Previous proof of Concept. If a POC is labeled as Proof of Concept instead of a Previous Proof of Concept, then it is automatically the latest POC. I want to be able to get all the fragments, and when I import a Report, all details from that report will be a draft in the app. And all the latest POC of the Open vulns in that report will be the Previous POC for the draft in the app.

@@ -1,5 +1,7 @@
 # Retire scope mode "all"
 
+> **Status:** shipped · 2026-09-15 · `53e3bf2`
+
 ## Request
 Option 2 from the diagnosis of "why can I still go to the contents page even if I have not selected at least 1 affected location in the findings page for every vuln":
 

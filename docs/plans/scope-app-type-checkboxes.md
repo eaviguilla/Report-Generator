@@ -1,6 +1,8 @@
 # Scope app-type checkboxes (replace the Test Surface dropdown)
 
-> **Status: implemented on 2026-09-15.** Steps 0 through 8 of the agreed plan are done, except step 0's two parity tests, which were replaced by three behavioural browser tests (`test_unchecking_an_app_type_confirms_then_clears_it_from_every_finding`, `test_a_finding_is_offered_only_the_app_types_it_has_not_installed`, `test_unchecking_a_location_in_the_page_withdraws_that_app_types_offer`). One requirement was added during execution and is not described below: **unchecking an app type now purges it from memory** — its scope targets, the per-finding affected locations selected against them, and the typed additional endpoints — behind a confirm dialog that counts exactly what goes. That replaces the plan's "warn, then let the server 422" behaviour for the channel axis. The deferred mobile scope table is still outstanding; the step 7 warning ships in its place.
+> **Status:** shipped · 2026-09-15 · `acd047a`
+>
+> Steps 0 through 8 of the agreed plan are done, except step 0's two parity tests, which were replaced by three behavioural browser tests (`test_unchecking_an_app_type_confirms_then_clears_it_from_every_finding`, `test_a_finding_is_offered_only_the_app_types_it_has_not_installed`, `test_unchecking_a_location_in_the_page_withdraws_that_app_types_offer`). One requirement was added during execution and is not described below: **unchecking an app type now purges it from memory** — its scope targets, the per-finding affected locations selected against them, and the typed additional endpoints — behind a confirm dialog that counts exactly what goes. That replaces the plan's "warn, then let the server 422" behaviour for the channel axis. The deferred mobile scope table is still outstanding; the step 7 warning ships in its place.
 
 ## Request
 

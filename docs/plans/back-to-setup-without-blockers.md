@@ -1,5 +1,7 @@
 # Back to Setup without blockers
 
+> **Status:** shipped · 2026-09-16 · `e7b843a`
+
 ## Request
 
 > Allow users to go back to setup page without any blockers as users do not need to have a finding to edit the app or testing details

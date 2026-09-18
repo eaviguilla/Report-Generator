@@ -1,5 +1,7 @@
 # Keyboard save and undo
 
+> **Status:** shipped · 2026-09-15 · `f49d503`
+
 ## Request
 ctrl + s and ctrl + z functions for this app
 

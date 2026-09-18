@@ -27,7 +27,7 @@ from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, main_template_path, render_report_docx
 from .library import Library
 from .docx_import import parse_report_docx
-from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots
+from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, finding_input_issues, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
 from .storage import atomic_write_bytes
 from .workspace import StaleReportError, Workspace, app_id_for
 
@@ -643,7 +643,9 @@ def edit(request: Request, report_id: str):
         return RedirectResponse(f"/reports/{report_id}/setup?incomplete=setup", status_code=303)
     if not report.vulnerabilities or not all(finding_is_complete(vulnerability, report) for vulnerability in report.vulnerabilities):
         return RedirectResponse(f"/reports/{report_id}/findings?incomplete=findings", status_code=303)
-    return templates.TemplateResponse(request, "page2_editor.html", {"report": report.model_dump(mode="json", by_alias=True), "library_entries": library.entries})
+    report_payload = report.model_dump(mode="json", by_alias=True)
+    report_payload["_unicode_character_ranges"] = unicode_character_ranges()
+    return templates.TemplateResponse(request, "page2_editor.html", {"report": report_payload, "library_entries": library.entries})
 
 
 @app.put("/reports/{report_id}")
@@ -691,6 +693,15 @@ async def save_report(report_id: str, request: Request):
             422,
             {"message": "Correct the invalid Setup fields", "issues": input_issues},
             code="invalid_setup",
+        )
+    # Its own code: invalid_setup's message sends the tester to a page that does not hold the field.
+    finding_issues = await run_in_threadpool(finding_input_issues, report)
+    if finding_issues:
+        return api_error_response(
+            request,
+            422,
+            {"message": "Correct the invalid finding fields", "issues": finding_issues},
+            code="invalid_finding",
         )
     if report.app_id == "unnamed":
         report.app_id = app_id_for(report.engagement)

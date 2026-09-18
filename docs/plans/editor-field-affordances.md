@@ -1,5 +1,7 @@
 # Editor field affordances
 
+> **Status:** shipped · 2026-09-16 · `e7b843a`
+
 ## Request
 
 > - Vuln id fields to be invisible as well until clicked. Just show a text of Vuln ID placeholder. Then when they click, an empty field will replace that then the vulnerability id can be inputed.

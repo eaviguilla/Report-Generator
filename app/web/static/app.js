@@ -10,6 +10,8 @@
     root.scrollIntoView({block:"start"});
   });
   const serverReport = JSON.parse(root.dataset.report);
+  const unicodeCharacterRanges = serverReport._unicode_character_ranges || {};
+  delete serverReport._unicode_character_ranges;
   let report = serverReport;
   const reportId = report.report_id;
   const reportTypeLabels = {annual_pentest:"Annual Pentest", retest:"Retest", deployment_pentest:"Deployment Pentest", new_test:"New Test"};
@@ -115,7 +117,7 @@
   const library = JSON.parse(root.dataset.library || "[]");
   const severity = ["critical", "high", "medium", "low", "informational"];
   const statuses = [["open_new", "Open (New)"], ["open_previously_discovered", "Open (Previously Discovered)"], ["resolved", "Resolved"]];
-  const contentNames = {description:"Description", recommended_remediation:"Recommended Remediation", previous_proof_of_concept:"Previous Proof of Concept", proof_of_concept:"Proof of Concept", in_conclusion:"In Conclusion"};
+  const contentNames = {description:"Description", recommended_remediation:"Recommended Remediation", previous_proof_of_concept:"Previous Proof of Concept", proof_of_concept:"Proof of Concept", in_conclusion:"In Conclusion", additional_information:"Additional Information"};
   const allowed = {description:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], recommended_remediation:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], previous_proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], in_conclusion:["paragraph","note"]};
   // Twin of docx_report.generation_issues; these carry the finding, so none is ever left empty.
   const requiresFragment = ["description", "recommended_remediation", "in_conclusion"];
@@ -975,6 +977,42 @@
       requestAnimationFrame(onWidthChange);
     }).observe(element);
   };
+  // Shared with the Content page's Additional Information fields, so they live outside setup().
+  const characterNames = new Map([
+    [" ","space"], ["\t","tab"], ["\n","line feed"], ["\r","carriage return"], ["!","exclamation mark"], ['"',"double quote"], ["#","number sign"], ["$","dollar sign"], ["%","percent sign"], ["&","ampersand"], ["'","apostrophe"], ["(","left parenthesis"], [")","right parenthesis"], ["*","asterisk"], ["+","plus sign"], [",","comma"], ["-","hyphen"], [".","period"], ["/","slash"], [":","colon"], [";","semicolon"], ["<","less-than sign"], ["=","equals sign"], [">","greater-than sign"], ["?","question mark"], ["@","at sign"], ["[","left bracket"], ["\\","backslash"], ["]","right bracket"], ["^","caret"], ["_","underscore"], ["`","grave accent"], ["{","left brace"], ["|","vertical bar"], ["}","right brace"], ["~","tilde"],
+  ]);
+  const digitNames = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+  const characterName = character => characterNames.get(character)
+    || (/^[0-9]$/.test(character) ? `digit ${digitNames[Number(character)]}` : null)
+    || (/^[A-Z]$/.test(character) ? `latin capital letter ${character.toLowerCase()}` : null)
+    || (/^[a-z]$/.test(character) ? `latin small letter ${character}` : null)
+    || `Unicode U+${character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
+  const invalidCharacterMessage = (label, characters) => `${label} contains invalid character${characters.length === 1 ? "" : "s"}: ${characters.map(character => `${JSON.stringify(character)} (${characterName(character)})`).join(", ")}`;
+  const characterRule = (label, allowed) => {
+    const invalidCharacters = value => [...new Set([...value].filter(character => !allowed.test(character)))];
+    return {label, invalidCharacters, valid:value => !invalidCharacters(value).length};
+  };
+  const serverCharacterRule = (label, {letters=false, numbers=false, symbols="", lineBreaks=false}) => characterRule(label, {
+    test: character => {
+      const codePoint = character.codePointAt(0);
+      const inRanges = ranges => (ranges || []).some(([first, last]) => codePoint >= first && codePoint <= last);
+      return (letters && inRanges(unicodeCharacterRanges.letters))
+        || (numbers && inRanges(unicodeCharacterRanges.decimals))
+        || symbols.includes(character)
+        || (lineBreaks && (character === "\r" || character === "\n"));
+    },
+  });
+  const showRuleState = (input, invalid, marker) => {
+    if (invalid) {
+      input.dataset[marker] = "true";
+      input.classList.add("validation-error");
+      input.setAttribute("aria-invalid", "true");
+    } else if (input.dataset[marker]) {
+      delete input.dataset[marker];
+      input.classList.remove("validation-error");
+      input.removeAttribute("aria-invalid");
+    }
+  };
   // Builds a bold/italic/underline editor and reports normalized runs on change.
   function rich(runs, onChange, includeToolbar = true, placeholder = "") {
     const wrap = document.createElement("div"); wrap.innerHTML = `${includeToolbar ? '<div class="toolbar" role="toolbar" aria-label="Text formatting"><button type="button" tabindex="-1" title="Bold" aria-label="Bold"><b>B</b></button><button type="button" tabindex="-1" title="Italic" aria-label="Italic"><i>I</i></button><button type="button" tabindex="-1" title="Underline" aria-label="Underline"><u>U</u></button></div>' : ""}<div class="rich" contenteditable="true" role="textbox" aria-multiline="true"></div>`;
@@ -1265,21 +1303,17 @@
     if (!content.fragments.some(fragment => fragment.type === "numbered_list")) content.fragments.unshift(newFragment("numbered_list"));
   };
   const CONVERTIBLE_TYPES = ["paragraph", "note", "code_block"];
-  // Deliberately its own list rather than `allowed`: the Add menu offers no paragraph in either
-  // proof-of-concept section, but converting one there is asked for, and reusing `allowed` would
-  // leave a note convertible out to a code block and never back. in_conclusion is excluded outright
-  // because provision and syncConclusion both re-insert a paragraph when that section holds none.
+  // Not `allowed`: converting to a paragraph in a proof of concept is wanted even though Add forbids
+  // it there. in_conclusion is out because provision re-inserts a paragraph when none is left.
   const CONVERTIBLE_SECTIONS = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept"];
   const conversionTargets = (fragment, content) => {
     if (!CONVERTIBLE_TYPES.includes(fragment.type) || !CONVERTIBLE_SECTIONS.includes(content?.type)) return [];
     return CONVERTIBLE_TYPES.filter(type => type !== fragment.type);
   };
-  // Boilerplate the server owns: provision rewrites or strips it by its `generated` marker, so a
-  // converted copy would either be discarded or outlive the status that justified it.
+  // provision rewrites or strips anything carrying `generated`, so a converted copy would not last.
   const conversionBlockedReason = fragment => (fragment.generated ? "The app maintains this text, so its type is fixed." : null);
-  // Single owner of the payload swap. The source key is deleted, never left behind: readiness
-  // branches on which key is present rather than on `type`, so a code block still carrying `runs`
-  // reads as complete in the browser while the server refuses to generate it.
+  // Deletes the source key, never leaves it: readiness branches on which key is present, not on type,
+  // so a code block still holding `runs` reads complete here while the server refuses to generate it.
   const convertFragment = (fragment, targetType) => {
     const runs = fragment.runs;
     if (targetType === "code_block") {
@@ -1287,14 +1321,13 @@
       fragment.caption = null;
       delete fragment.runs;
     } else {
-      // Paragraph and note both carry runs, so a swap between those two must leave them alone; only
-      // a code block arrives with flat text and needs one built.
+      // Paragraph and note share `runs`; only a code block arrives with flat text.
       fragment.runs = runs || (fragment.text ? [{text: fragment.text}] : []);
       delete fragment.text;
       delete fragment.caption;
     }
     fragment.type = targetType;
-    // The server echoes `generated: null` onto every paragraph, and note declares no such field.
+    // The server echoes `generated: null` onto every paragraph; note declares no such field.
     delete fragment.generated;
   };
 
@@ -1436,16 +1469,6 @@
     const OTHERS_OPTION = "OTHERS";
     // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
     let typingCustomLabel = false;
-    const characterNames = new Map([
-      [" ","space"], ["\t","tab"], ["\n","line feed"], ["\r","carriage return"], ["!","exclamation mark"], ['"',"double quote"], ["#","number sign"], ["$","dollar sign"], ["%","percent sign"], ["&","ampersand"], ["'","apostrophe"], ["(","left parenthesis"], [")","right parenthesis"], ["*","asterisk"], ["+","plus sign"], [",","comma"], ["-","hyphen"], [".","period"], ["/","slash"], [":","colon"], [";","semicolon"], ["<","less-than sign"], ["=","equals sign"], [">","greater-than sign"], ["?","question mark"], ["@","at sign"], ["[","left bracket"], ["\\","backslash"], ["]","right bracket"], ["^","caret"], ["_","underscore"], ["`","grave accent"], ["{","left brace"], ["|","vertical bar"], ["}","right brace"], ["~","tilde"],
-    ]);
-    const digitNames = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-    const characterName = character => characterNames.get(character) || (/^[0-9]$/.test(character) ? `digit ${digitNames[Number(character)]}` : `Unicode U+${character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`);
-    const invalidCharacterMessage = (label, characters) => `${label} contains invalid character${characters.length === 1 ? "" : "s"}: ${characters.map(character => `${JSON.stringify(character)} (${characterName(character)})`).join(", ")}`;
-    const characterRule = (label, allowed) => {
-      const invalidCharacters = value => [...new Set([...value].filter(character => !allowed.test(character)))];
-      return {label, invalidCharacters, valid:value => !invalidCharacters(value).length};
-    };
     const usernameCharacters = characterRule("Username", /^[A-Za-z0-9._@\\-]$/);
     // Twin of report_service.COMPONENT_SCOPE_SYMBOLS. A strict superset of the retired mobile set,
     // so nothing that validated before is rejected now; the backslash and brackets are what make an
@@ -1474,17 +1497,6 @@
       username: {...usernameCharacters, valid:value => !value || value === "N/A" || /^[A-Za-z0-9](?:[A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/.test(value), message:label => `${label} must start and end with a letter or number`},
     };
     const setupNotice = document.querySelector("#setup-validation-note");
-    const showRuleState = (input, invalid, marker) => {
-      if (invalid) {
-        input.dataset[marker] = "true";
-        input.classList.add("validation-error");
-        input.setAttribute("aria-invalid", "true");
-      } else if (input.dataset[marker]) {
-        delete input.dataset[marker];
-        input.classList.remove("validation-error");
-        input.removeAttribute("aria-invalid");
-      }
-    };
     const wireSetupRule = (input, rule, label = rule.label) => {
       input.dataset.setupValidated = "true";
       const validate = () => {
@@ -3078,16 +3090,15 @@
         const targetType = convert.value;
         convert.value = "";
         if (!targetType) return;
-        // Asked before anything is written, and only when the loss is real -- a dialog on a lossless
-        // conversion is what trains a tester to click through the one that matters.
+        // Only when the loss is real: a dialog on a lossless conversion trains the tester to click
+        // through the one that matters.
         const formatted = targetType === "code_block" && (fragment.runs || []).some(run => run.bold || run.italic || run.underline);
         if (formatted && !await window.vrDialog.confirm({
           title: "Make this a code block?",
           message: "Code blocks are plain text. The bold, italic and underline formatting in this fragment will be removed.",
           confirmLabel: "Make it a code block", cancelLabel: "Keep it as it is",
         })) return;
-        // The only place this text is ever shown: there is no caption field for a code block anywhere
-        // in the editor, so it arrived from an imported document and prints unseen.
+        // A code block's caption has no editor field, so this dialog is the only time it is seen.
         const caption = targetType !== "code_block" ? fragment.caption?.trim() : "";
         if (caption && !await window.vrDialog.confirm({
           title: "Delete the caption?",
@@ -3095,8 +3106,8 @@
           confirmLabel: "Delete it and convert", cancelLabel: "Keep the code block",
         })) return;
         convertFragment(fragment, targetType);
-        // Never optional: the editor body is chosen by which payload key is present, so without this
-        // the old input stays on screen and writes its key straight back onto the converted fragment.
+        // Never optional: the editor body is chosen by payload key, so a stale input would write the
+        // old key back and lose whatever was typed into it.
         rerender();
         scheduleSave();
       };
@@ -3355,6 +3366,19 @@
     let expandedContentTypes;
     let engagementContextOpen = false;
     let reviewTargetId = null;
+    // Fixed scalar fields shared by rendering and readiness, so visibility and validation cannot drift.
+    const additionalInformationFields = finding => {
+      const fields = [];
+      if (finding.status !== "open_new") fields.push({
+        key:"severity_review_tickets", label:"Severity Review Tickets", multiline:true,
+        placeholder:"One ticket number per line", rule:serverCharacterRule("Severity Review Tickets", {numbers:true, lineBreaks:true}),
+      });
+      if (report.engagement.segment === "Asia") {
+        fields.push({key:"cvss_score", label:"CVSS Score", placeholder:"For example 9.8", rule:serverCharacterRule("CVSS Score", {numbers:true, symbols:"."})});
+        fields.push({key:"cvss_vector", label:"CVSS Vector", placeholder:"For example CVSS:3.1/AV:N/AC:L/PR:N", rule:serverCharacterRule("CVSS Vector", {letters:true, numbers:true, symbols:"./:"})});
+      }
+      return fields;
+    };
     // A `<details>` rendered `open` unconditionally springs back the moment an autosave rebuilds.
     const collapsedReviewGroups = new Set();
     // Held as state rather than left behind as a class, so a re-render cannot drop the highlight
@@ -3451,14 +3475,39 @@
             message: `${environment === "production" ? "Production" : "Non-Production"} evidence image required`,
           };
         });
+        // Twin of the segment gate in docx_report.generation_issues. Separate issues rather than
+        // folded into missing, or two empty fields would count as one while the server counts two.
+        const cvssIssues = report.engagement.segment === "Asia"
+          ? [["CVSS Score", "cvss_score"], ["CVSS Vector", "cvss_vector"]]
+            .filter(([, key]) => !finding[key]?.trim())
+            .map(([fieldLabel, key]) => ({
+              finding,
+              contentType: "additional_information",
+              contentLabel: contentNames.additional_information,
+              fragmentLabel: fieldLabel,
+              fragmentId: `${finding.uid}:${key}`,
+              message: `${fieldLabel} is required`,
+            }))
+          : [];
+        const invalidAdditionalInformationIssues = additionalInformationFields(finding).flatMap(field => {
+          const invalidCharacters = field.rule.invalidCharacters(finding[field.key] || "");
+          return invalidCharacters.length ? [{
+            finding,
+            contentType: "additional_information",
+            contentLabel: contentNames.additional_information,
+            fragmentLabel: field.label,
+            fragmentId: `${finding.uid}:${field.key}`,
+            message: invalidCharacterMessage(field.label, invalidCharacters),
+          }] : [];
+        });
         // Ordered by section so every proof of concept row sits with the others.
-        const order = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"];
+        const order = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion", "additional_information"];
         const rank = issue => {
           const type = issue.contentType || Object.keys(contentNames).find(key => contentNames[key] === issue.contentLabel);
           const index = order.indexOf(type);
           return index < 0 ? -1 : index;
         };
-        const perFinding = [...fragmentIssues(finding).map(issue => ({finding, ...issue})), ...environmentIssues]
+        const perFinding = [...fragmentIssues(finding).map(issue => ({finding, ...issue})), ...environmentIssues, ...cvssIssues, ...invalidAdditionalInformationIssues]
           .sort((left, right) => rank(left) - rank(right));
         return [...(missing.length ? [{finding, message:missing.join(", ")}] : []), ...perFinding];
       });
@@ -3767,7 +3816,7 @@
           titleInput.onkeydown = event => { if (event.key === "Enter") finishTitle(); if (event.key === "Escape") clearResults(); };
           titleInput.onblur = () => setTimeout(finishTitle, 150);
         };
-        if (expandedContentTypes === undefined) expandedContentTypes = new Set(finding.contents.map(content => content.type));
+        if (expandedContentTypes === undefined) expandedContentTypes = new Set([...finding.contents.map(content => content.type), "additional_information"]);
         // Pure function of current state, so render() and the reportchange refresh build the
         // same nodes. Returns them rather than appending, which is what lets the refresh
         // replace only the banners without redrawing the section around them.
@@ -3992,6 +4041,63 @@
           }
           return block;
         };
+        // Fixed, typed fields rather than free fragments, so there is no Content behind this block.
+        // Its visibility is the union of its fields': hidden only for a non-Asia Open (New) finding.
+        const buildAdditionalInformationBlock = fields => {
+          const block = document.createElement("div");
+          const isExpanded = expandedContentTypes.has("additional_information");
+          block.className = `content-block${isExpanded ? " is-expanded" : ""}`;
+          block.dataset.contentType = "additional_information";
+          const heading = document.createElement("button");
+          heading.className = "content-toggle";
+          heading.type = "button";
+          heading.setAttribute("aria-expanded", String(isExpanded));
+          heading.innerHTML = `<span>${contentNames.additional_information}</span><span class="content-flag" aria-hidden="true" hidden></span><small>${fields.length} field${fields.length === 1 ? "" : "s"}</small>`;
+          heading.onclick = () => {
+            const anchor = Math.max(block.getBoundingClientRect().top - pane.getBoundingClientRect().top, 0);
+            if (isExpanded) expandedContentTypes.delete("additional_information"); else expandedContentTypes.add("additional_information");
+            render();
+            const settle = () => {
+              const moved = pane.querySelector('[data-content-type="additional_information"]');
+              if (moved) pane.scrollTop += moved.getBoundingClientRect().top - pane.getBoundingClientRect().top - anchor;
+            };
+            settle();
+            requestAnimationFrame(settle);
+            pane.querySelector('[data-content-type="additional_information"] .content-toggle')?.focus({preventScroll:true});
+          };
+          block.append(heading);
+          if (!isExpanded) return block;
+          fields.forEach(field => {
+            const card = document.createElement("article");
+            card.className = "fragment";
+            card.tabIndex = -1;
+            // Colons cannot collide with a generated frag_id, which validate_references needs unique.
+            card.dataset.fragmentId = `${finding.uid}:${field.key}`;
+            card.innerHTML = `<div class="fragment-head"><span class="tag">${field.label}</span></div>`;
+            const control = document.createElement(field.multiline ? "textarea" : "input");
+            control.className = field.multiline ? "additional-input additional-tickets" : "additional-input";
+            control.value = finding[field.key] || "";
+            control.placeholder = field.placeholder;
+            control.setAttribute("aria-label", field.label);
+            const grow = () => { control.style.height = "auto"; control.style.height = `${control.scrollHeight}px`; };
+            const validate = () => {
+              const invalidCharacters = field.rule.invalidCharacters(control.value);
+              control.setCustomValidity(invalidCharacters.length ? invalidCharacterMessage(field.label, invalidCharacters) : "");
+              showRuleState(control, invalidCharacters.length > 0, "contentRuleInvalid");
+            };
+            control.oninput = () => {
+              finding[field.key] = control.value;
+              validate();
+              if (field.multiline) grow();
+              scheduleSave();
+            };
+            validate();
+            card.append(control);
+            if (field.multiline) requestAnimationFrame(grow);
+            block.append(card);
+          });
+          return block;
+        };
         // Description sits beside its remediation, and on a retest last year's proof sits beside
         // this year's, because those are the pairs a reader compares. Everything else runs full width.
         // A section this status does not print is carried for safekeeping and stays out of the page.
@@ -4014,6 +4120,8 @@
         printedContents.forEach(content => {
           if (!paired.has(content.type)) box.append(blocks.get(content.type));
         });
+        const additionalFields = additionalInformationFields(finding);
+        if (additionalFields.length) box.append(buildAdditionalInformationBlock(additionalFields));
         pane.append(box);
       });
       updateReadinessPanel();

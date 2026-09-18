@@ -20,6 +20,8 @@ from .storage import atomic_write_bytes
 CAPTION_STYLE_NAMES = ("Figures and Tables", "Caption")
 MANUAL_FIGURE_PREFIX = re.compile(r"^\s*Figure\s+\d+\s*[:.\-]?\s*", re.IGNORECASE)
 FIGURE_SEQUENCE = re.compile(r"\bSEQ\s+Figure\b", re.IGNORECASE)
+# Only the reference docx_report writes for the Asia CVSS table; no other REF field is touched.
+SECTION_NUMBER_FIELD = re.compile(r"^\s*REF\s+vuln_\S+\s+\\w\b", re.IGNORECASE)
 # Word stores font size in half-points, so 9pt is 18.
 CAPTION_HALF_POINTS = "18"
 WORD_AUTOMATION_LOCK = threading.Lock()
@@ -102,7 +104,71 @@ def update_docx_bytes_with_word(contents: bytes) -> bytes:
         path = Path(temporary_directory) / "report.docx"
         path.write_bytes(contents)
         update_docx_fields_with_word(path)
-        return path.read_bytes()
+        document = Document(path)
+        if not flatten_section_number_fields(document):
+            return path.read_bytes()
+        output = BytesIO()
+        document.save(output)
+        return output.getvalue()
+
+
+def flatten_section_number_fields(document: DocumentType) -> int:
+    """Replace each computed section-number reference with its own text, minus the trailing period.
+
+    The number Word reports is the heading's own list label, `%1.%2. `, so the period arrives with
+    it. Editing the field's result would not survive: settings.xml asks Word to refresh fields when
+    the document is opened, which the table of contents needs, and that would put the period back.
+    Only a field Word has already computed is flattened, so a document produced without Word keeps
+    its live field rather than losing the number."""
+    flattened = 0
+    for paragraph in document.element.body.iter(qn("w:p")):
+        for runs, instruction, result in _complex_fields(paragraph):
+            if not SECTION_NUMBER_FIELD.match(instruction):
+                continue
+            text = "".join(node.text or "" for run in result for node in run.findall(qn("w:t")))
+            trimmed = text.strip().removesuffix(".")
+            if not trimmed:
+                continue
+            replacement = deepcopy(result[0])
+            for node in replacement.findall(qn("w:t")):
+                replacement.remove(node)
+            written = OxmlElement("w:t")
+            written.set(qn("xml:space"), "preserve")
+            written.text = trimmed
+            replacement.append(written)
+            runs[0].addprevious(replacement)
+            for run in runs:
+                run.getparent().remove(run)
+            flattened += 1
+    return flattened
+
+
+def _complex_fields(paragraph):
+    """Each begin..end run sequence in one paragraph, as (all runs, instruction text, result runs)."""
+    fields = []
+    runs: list = []
+    instruction: list[str] = []
+    result: list = []
+    separated = False
+    for run in paragraph.findall(qn("w:r")):
+        marker = run.find(qn("w:fldChar"))
+        kind = marker.get(qn("w:fldCharType")) if marker is not None else None
+        if kind == "begin":
+            runs, instruction, result, separated = [run], [], [], False
+            continue
+        if not runs:
+            continue
+        runs.append(run)
+        if kind == "separate":
+            separated = True
+        elif kind == "end":
+            fields.append((runs, "".join(instruction), result))
+            runs = []
+        elif separated:
+            result.append(run)
+        else:
+            instruction.extend(node.text or "" for node in run.findall(qn("w:instrText")))
+    return fields
 
 
 def _remove_page_leading_blank_paragraphs(document) -> int:

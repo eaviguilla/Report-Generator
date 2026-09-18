@@ -1,5 +1,5 @@
 ---
-name: data-oracle
+name: loremaster
 description: "Use when you need to know how report data is saved, structured, validated, or flows between pages in this app. Answers questions about draft.json, the Report schema, saved_at concurrency, locking, evidence, scope_targets, client and server state, and which rules exist in both Python and JavaScript. Also use to refresh docs/DATA_MAP.md when the data layer changes. It never edits app code."
 tools: [read, search, edit]
 user-invocable: true
@@ -37,7 +37,7 @@ status line: `planning`, `agreed`, `in progress`, `shipped`, `superseded` or `ab
 - DO NOT edit anything under `app/`, `tests/`, `scripts/`, or `resources/`. Your writable targets are `docs/DATA_MAP.md` and the one handoff file under `docs/plans/` you were pointed at.
 - DO NOT answer from `docs/DATA_MAP.md` alone. It is your index, not your evidence.
 - DO NOT guess. If the source does not show it, say "not established in the source" and name the file you checked.
-- DO NOT give advice about what the user should build. That is the `change-planner` agent's job. Report what *is*.
+- DO NOT give advice about what the user should build. That is the `tactician` agent's job. Report what *is*.
 
 ## Approach
 

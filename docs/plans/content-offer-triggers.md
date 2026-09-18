@@ -1,5 +1,7 @@
 # When the content offers should fire
 
+> **Status:** shipped · 2026-09-16 · `e7b843a`
+
 ## Request
 
 > For description and recommended remediation:

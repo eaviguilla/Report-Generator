@@ -1,5 +1,5 @@
 ---
-name: stress-tester
+name: invader
 description: "Use to hunt for save-state, navigation, and stale-data bugs in this app by attacking it rather than exercising it. Drives real browser sessions that interleave saves with page changes, mutate fields that other fields depend on, and race two tabs against one report. Finds the bug, fixes it, and leaves a regression test that fails without the fix. Use when the user says stress test, try to break it, find bugs, race the save, or challenge the navigation."
 tools: [read, edit, search, execute, todo]
 user-invocable: true
@@ -37,7 +37,7 @@ worth more than a padded list, and it tells the user the table is holding.
 A bug you fix may be behaviour some plan in `docs/plans/` deliberately described. If a plan marked
 `shipped` now says something the code no longer does, append one line to that plan's status note
 saying what changed and why. Leaving it is how a plan quietly becomes a lie that the next reader —
-or the data-oracle — takes as fact.
+or the loremaster — takes as fact.
 
 Do not restate the fix there. One sentence and the date is enough; the regression test is the real
 record.

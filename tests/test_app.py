@@ -53,6 +53,30 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(safe_name("CON.txt", "fallback"), "fallback")
         self.assertEqual(safe_name("normal name", "fallback"), "normal_name")
 
+    def test_additional_information_fields_default_empty_and_survive_a_save(self) -> None:
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        draft["vulnerabilities"] = [{
+            "uid": "v_legacy",
+            "title": "Drafted before the three fields existed",
+            "status": "open_previously_discovered",
+            "scope": {"mode": "custom", "target_ids": [], "location_values": {}, "custom_locations": {}},
+            "contents": [],
+        }]
+        atomic_write_json(path, draft)
+        loaded = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual((loaded.severity_review_tickets, loaded.cvss_score, loaded.cvss_vector), ("", "", ""))
+
+        vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"][0].update(severity_review_tickets="1234\n5678", cvss_score="9.8", cvss_vector=vector)
+        saved = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(saved.status_code, 200)
+        returned = saved.json()["report"]["vulnerabilities"][0]
+        self.assertEqual((returned["severity_review_tickets"], returned["cvss_score"], returned["cvss_vector"]), ("1234\n5678", "9.8", vector))
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].severity_review_tickets, "1234\n5678")
+
     def test_report_management_lifecycle(self) -> None:
         report_id = self.new_report()
         original_path = main.workspace.find_path(report_id)
@@ -221,6 +245,42 @@ class ReportApiTests(unittest.TestCase):
         renamed = self.client.patch(f"/reports/{report_id}/name", json={"app_name": "Bad/App"})
         self.assertEqual(renamed.status_code, 422)
         self.assertEqual(renamed.json()["detail"], 'Application name contains invalid character: "/" (slash)')
+
+    def test_additional_information_input_validation_rejects_unapproved_characters(self) -> None:
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{
+            "uid": "v_rules",
+            "title": "Character rule finding",
+            "status": "open_previously_discovered",
+            "scope": {"mode": "custom", "target_ids": [], "location_values": {}, "custom_locations": {}},
+            "contents": [],
+        }]
+        cases = [
+            ("cvss_score", "9.8a", 'CVSS Score contains invalid character: "a" (latin small letter a)'),
+            ("cvss_score", "9,8", 'CVSS Score contains invalid character: "," (comma)'),
+            ("cvss_vector", "CVSS:3.1/AV:N_", 'CVSS Vector contains invalid character: "_" (underscore)'),
+            ("cvss_vector", "CVSS:3.1 AV:N", 'CVSS Vector contains invalid character: " " (space)'),
+            # The prefix belongs to the document; typing it into the draft is an error, not a shortcut.
+            ("severity_review_tickets", "1234-5678", 'Severity Review Tickets contains invalid character: "-" (hyphen)'),
+            ("severity_review_tickets", "1234 5678", 'Severity Review Tickets contains invalid character: " " (space)'),
+        ]
+        for field, value, expected_issue in cases:
+            with self.subTest(field=field, value=value):
+                candidate = deepcopy(report)
+                candidate["vulnerabilities"][0][field] = value
+                response = self.client.put(f"/reports/{report_id}", json=candidate)
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json()["error"]["code"], "invalid_finding")
+                self.assertIn(expected_issue, response.json()["error"]["message"])
+
+        candidate = deepcopy(report)
+        candidate["vulnerabilities"][0].update(
+            severity_review_tickets="1234\n56789",
+            cvss_score="10.0",
+            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        )
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=candidate).status_code, 200)
 
     def test_unexpected_errors_return_diagnostics_and_write_referenced_log(self) -> None:
         client = TestClient(main.app, raise_server_exceptions=False)
@@ -2015,6 +2075,32 @@ class ReportApiTests(unittest.TestCase):
             generation_issues(report),
             "deleting the paragraph would discharge the requirement and print N/A",
         )
+
+    def test_cvss_blocks_generation_only_on_asia_reports(self) -> None:
+        """A JH report never shows the pair, so requiring it would block every tester on a field
+        their page does not draw."""
+        report = main.workspace.load(self.new_report())
+        finding = Vulnerability(uid="v_cvss", title="Needs a score", status="open_new")
+        report.vulnerabilities = [finding]
+        provision(finding)
+        expected = ["Needs a score: CVSS Score is required", "Needs a score: CVSS Vector is required"]
+
+        report.engagement.segment = "JH"
+        self.assertEqual([issue for issue in generation_issues(report) if "CVSS" in issue], [])
+
+        report.engagement.segment = "Asia"
+        self.assertEqual([issue for issue in generation_issues(report) if "CVSS" in issue], expected)
+
+        # Whitespace is not a score, and autosave stores whatever the tester has typed so far.
+        finding.cvss_score = "  "
+        finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        self.assertEqual([issue for issue in generation_issues(report) if "CVSS" in issue], expected[:1])
+
+        finding.cvss_score = "9.8"
+        self.assertEqual([issue for issue in generation_issues(report) if "CVSS" in issue], [])
+
+        # Never required, whatever the segment or the status.
+        self.assertEqual([issue for issue in generation_issues(report) if "Severity Review" in issue], [])
 
     def test_an_open_new_finding_never_owes_a_conclusion(self) -> None:
         """open_new does not print the section, and a carried one is kept for safekeeping, not completing."""

@@ -7,13 +7,15 @@ import hashlib
 import tempfile
 import threading
 import unittest
-from datetime import date
+from datetime import date, datetime as RealDateTime
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import URLError
 from urllib.request import urlopen
 
 import uvicorn
+import app.workspace as workspace_module
 from docx import Document
 from PIL import Image
 from playwright.sync_api import sync_playwright
@@ -24,7 +26,7 @@ from app.docx_report import generation_issues
 from app.report_service import status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from app.workspace import Workspace
-from app.models import Content, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
+from app.models import CodeFragment, Content, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
 
 
 class BrowserWorkflowTests(unittest.TestCase):
@@ -1020,6 +1022,101 @@ class BrowserWorkflowTests(unittest.TestCase):
             ["UAT app", "UAT helper"],
         )
 
+    def test_environment_removal_does_not_relabel_uploaded_evidence(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(
+            start_date=date(2026, 1, 3), end_date=date(2026, 1, 4)
+        )
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        finding = report.vulnerabilities[0]
+        finding.scope = Scope(mode="custom", target_ids=["tgt_browser", "tgt_uat"])
+        main.sync_evidence_image_slots(finding, report)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        production_image = next(
+            fragment for fragment in proof.fragments
+            if fragment.type == "image" and fragment.environment == "production"
+        )
+        production_frag_id = production_image.frag_id
+        image = BytesIO()
+        Image.new("RGB", (3, 3), "red").save(image, format="PNG")
+        image_bytes = image.getvalue()
+        production_image.evidence_id = "ev_production"
+        production_image.caption = "Production-only response"
+        report.evidence["ev_production"] = EvidenceItem(
+            file="evidence/ev_production.png",
+            original_name="production.png",
+            width_px=3,
+            height_px=3,
+            sha256=hashlib.sha256(image_bytes).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        evidence_path = main.workspace.find_path(report_id).parent / "evidence" / "ev_production.png"
+        evidence_path.parent.mkdir(exist_ok=True)
+        evidence_path.write_bytes(image_bytes)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Production", exact=True).click()
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertIn("screenshot", dialog.inner_text().lower())
+        dialog.get_by_role("button", name="Make the change anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        saved_image = next(
+            fragment for content in saved.vulnerabilities[0].contents for fragment in content.fragments
+            if getattr(fragment, "evidence_id", None) == "ev_production"
+        )
+        self.assertEqual(saved_image.environment, "production", "Production evidence was relabelled as Non-Production")
+        self.assertIn("ev_production", saved.evidence)
+        self.assertTrue(evidence_path.exists())
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        environment = page.locator(f'[data-fragment-id="{production_frag_id}"] .evidence-environment')
+        self.assertEqual(environment.input_value(), "production")
+        self.assertIn("Production (out of scope)", environment.locator("option:checked").inner_text())
+
+    def test_environment_removal_does_not_describe_an_empty_slot_as_a_screenshot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(
+            start_date=date(2026, 1, 3), end_date=date(2026, 1, 4)
+        )
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        finding = report.vulnerabilities[0]
+        finding.scope = Scope(mode="custom", target_ids=["tgt_browser", "tgt_uat"])
+        main.sync_evidence_image_slots(finding, report)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        production_image = next(
+            fragment for fragment in proof.fragments
+            if fragment.type == "image" and fragment.environment == "production"
+        )
+        self.assertFalse(production_image.evidence_id or production_image.caption)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_role("checkbox", name="Production", exact=True).uncheck()
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertNotIn("screenshot", dialog.inner_text().lower())
+        dialog.get_by_role("button", name="Make the change anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        saved_proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertNotIn(production_image.frag_id, [fragment.frag_id for fragment in saved_proof.fragments])
+
     def test_unchecking_an_app_type_confirms_then_clears_it_from_every_finding(self) -> None:
         """Dropping an app type deletes its scope targets and every affected location and additional
         endpoint recorded under it, so the tester is told exactly what goes before it happens."""
@@ -1041,6 +1138,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         prompt = page.locator(".vr-dialog").inner_text()
         self.assertIn("additional affected endpoint", prompt)
         self.assertIn("Browser finding", prompt)
+        self.assertNotIn("cannot be undone", prompt.lower())
 
         page.locator('[data-dialog-action="cancel"]').click()
         self.assertTrue(page.get_by_label("Test API").is_checked(), "cancelling keeps the app type")
@@ -1054,6 +1152,63 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual([target.channel for target in saved.scope_targets], ["web"])
         self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_browser"], "the api location is gone from the finding")
         self.assertEqual(saved.vulnerabilities[0].scope.custom_locations, {}, "the typed api endpoint is gone too")
+
+        page.get_by_role("button", name="Undo last change").click()
+        page.wait_for_function(
+            "() => document.querySelector('[aria-label=\"Test API\"]')?.checked === true",
+            timeout=10_000,
+        )
+        restored = main.workspace.load(report_id)
+        self.assertEqual(restored.engagement.tested_channels, ["web", "api"])
+        self.assertEqual([target.channel for target in restored.scope_targets], ["web", "api"])
+        self.assertEqual(restored.vulnerabilities[0].scope.target_ids, ["tgt_browser", "tgt_api"])
+        self.assertEqual(
+            restored.vulnerabilities[0].scope.custom_locations,
+            {"production": {"api": ["POST /v1/pay"]}},
+        )
+
+    def test_app_type_removal_warns_when_custom_location_evidence_stops_applying(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["web", "api"]
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(
+            start_date=date(2026, 1, 3), end_date=date(2026, 1, 4)
+        )
+        report.scope_targets = [ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        )]
+        finding = report.vulnerabilities[0]
+        finding.scope = Scope(
+            mode="custom",
+            target_ids=["tgt_uat"],
+            custom_locations={"production": {"api": ["POST /v1/pay"]}},
+        )
+        main.sync_evidence_image_slots(finding, report)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        production_image = next(
+            fragment for fragment in proof.fragments
+            if fragment.type == "image" and fragment.environment == "production"
+        )
+        production_image.caption = "Production API response"
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Test API").click()
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertIn("screenshot", dialog.inner_text().lower())
+        dialog.get_by_role("button", name="Remove API anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        saved_image = next(
+            fragment for content in saved.vulnerabilities[0].contents for fragment in content.fragments
+            if fragment.frag_id == production_image.frag_id
+        )
+        self.assertEqual(saved_image.environment, "production")
+        self.assertEqual(saved.vulnerabilities[0].scope.custom_locations, {})
 
     def test_cancelling_a_finding_location_removal_cannot_save_the_proposed_scope(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -1447,6 +1602,36 @@ class BrowserWorkflowTests(unittest.TestCase):
         saved = main.workspace.load(report_id)
         self.assertEqual(saved.engagement.app_owner, "Saved after native Back")
         self.assertEqual(saved.vulnerabilities[0].title, "History saved title")
+
+    def test_native_back_refreshes_a_revision_newer_only_by_microseconds(self) -> None:
+        class FrozenDateTime(RealDateTime):
+            @classmethod
+            def now(cls, tz=None):
+                value = RealDateTime(2026, 1, 1, 12, 0, 0, 100000)
+                return value if tz is None else value.astimezone(tz)
+
+        with patch.object(workspace_module, "datetime", FrozenDateTime):
+            report_id = self.ready_report(include_finding=True)
+            page = self.page
+            page.goto(f"{self.base_url}/reports/{report_id}/setup")
+            before = main.workspace.load(report_id).saved_at
+            page.get_by_role("button", name="Next: Findings").click()
+            page.wait_for_url("**/findings", timeout=10_000)
+            page.get_by_role("button", name="Edit finding name").click()
+            page.get_by_role("combobox", name="Finding Name").fill("Microsecond-newer title")
+            page.get_by_role("button", name="Save").click()
+            page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+            after = main.workspace.load(report_id).saved_at
+            self.assertGreater(after, before)
+            self.assertEqual(after.replace(microsecond=0), before.replace(microsecond=0))
+            self.assertEqual(after.microsecond // 1000, before.microsecond // 1000)
+
+            page.go_back(wait_until="domcontentloaded")
+            page.wait_for_url("**/setup", timeout=10_000)
+            page.wait_for_function(
+                "JSON.parse(document.querySelector('main[data-report]').dataset.report).vulnerabilities[0].title === 'Microsecond-newer title'",
+                timeout=5_000,
+            )
 
     def test_later_page_save_does_not_erase_an_unresolved_recovery_draft(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -2063,7 +2248,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             header.evaluate("head => [...head.children].map(child => child.className || child.tagName)"),
-            ["fragment-drag-handle", "tag", "toolbar", "fragment-move-up", "fragment-move-down", "danger fragment-delete"],
+            ["fragment-drag-handle", "tag", "toolbar", "fragment-convert", "fragment-move-up", "fragment-move-down", "danger fragment-delete"],
         )
         self.assertEqual(header.locator(".toolbar").get_by_role("button").count(), 3)
         self.assertEqual(
@@ -2266,6 +2451,174 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_timeout(500)
         self.assertEqual(page.locator("#limitations-offer").count(), 0, "a rename offered to rewrite the tester's own wording")
         self.assertEqual(page.get_by_label("Limitations").input_value(), prose)
+
+    def _convert_report(self):
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        description = next(content for content in finding.contents if content.type == "description")
+        description.fragments = [
+            ParagraphFragment(frag_id="f_plain", type="paragraph", runs=[Run(text="A plain paragraph.")]),
+            ParagraphFragment(frag_id="f_bold", type="paragraph", runs=[Run(text="Mind the "), Run(text="gap", bold=True)]),
+            CodeFragment(frag_id="f_capped", type="code_block", caption="Request", text="GET /accounts/123"),
+            CodeFragment(frag_id="f_bare", type="code_block", caption=None, text="GET /health"),
+        ]
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        return report_id, page
+
+    def _stored_fragment(self, report_id: str, frag_id: str) -> dict:
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        return next(
+            fragment for finding in report["vulnerabilities"]
+            for content in finding["contents"] for fragment in content["fragments"]
+            if fragment["frag_id"] == frag_id
+        )
+
+    def test_converting_a_paragraph_to_a_code_block_swaps_the_editor_and_the_payload(self) -> None:
+        """The editor body is chosen by which payload key is present, not by type. Without a re-render
+        the old rich field stays on screen and writes `runs` straight back onto a code block, and
+        everything typed into it is deleted when the save response reconciles."""
+        report_id, page = self._convert_report()
+        card = page.locator('[data-fragment-id="f_plain"]')
+        self.assertEqual(card.locator(".rich").count(), 1)
+
+        card.locator(".fragment-convert").select_option("code_block")
+        page.wait_for_selector('[data-fragment-id="f_plain"] .code-block', timeout=5_000)
+        card = page.locator('[data-fragment-id="f_plain"]')
+        self.assertEqual(card.locator(".rich").count(), 0, "the rich editor survived the conversion")
+
+        card.locator(".code-block").fill("A plain paragraph. Typed after.")
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        stored = self._stored_fragment(report_id, "f_plain")
+        self.assertEqual(stored["type"], "code_block")
+        self.assertEqual(stored["text"], "A plain paragraph. Typed after.")
+        self.assertNotIn("runs", stored, "the source key outlived the conversion")
+
+    def test_the_convert_control_appears_only_where_a_type_change_is_possible(self) -> None:
+        report_id, page = self._convert_report()
+        for frag_id in ("f_plain", "f_capped"):
+            self.assertEqual(page.locator(f'[data-fragment-id="{frag_id}"] .fragment-convert').count(), 1, frag_id)
+
+        proof = page.locator('.content-block[data-content-type="proof_of_concept"]')
+        self.assertEqual(proof.locator(".fragment:has(.list-text-editor) .fragment-convert").count(), 0,
+                         "a numbered list was offered a type change")
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        self.assertEqual(conclusion.locator(".fragment-convert").count(), 0,
+                         "In Conclusion was offered a type change, which provision would undo")
+
+        # The Add menu offers no paragraph in a proof of concept, but converting to one there is
+        # deliberate: reusing that list would let a note convert out to a code block and never back.
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        next(c for c in finding.contents if c.type == "proof_of_concept").fragments.append(
+            NoteFragment(frag_id="f_poc_note", type="note", runs=[Run(text="A note.")])
+        )
+        main.workspace.save(report)
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        options = page.locator('[data-fragment-id="f_poc_note"] .fragment-convert option')
+        self.assertEqual(options.all_text_contents(), ["change to…", "paragraph", "code block"])
+
+    def test_converting_a_captioned_code_block_warns_before_deleting_the_caption(self) -> None:
+        """The caption has no editor field anywhere, so it arrived from an imported document and
+        prints unseen. This dialog is the only place the tester ever reads it."""
+        report_id, page = self._convert_report()
+        page.locator('[data-fragment-id="f_capped"] .fragment-convert').select_option("paragraph")
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertIn('"Request"', dialog.inner_text(), "the dialog did not quote the caption it is about to delete")
+
+        page.click('[data-dialog-action="cancel"]')
+        page.wait_for_selector(".vr-dialog", state="detached")
+        # Declining writes nothing, so the Save button stays disabled and disk still holds the fixture.
+        self.assertEqual(page.locator('[data-fragment-id="f_capped"] .code-block').count(), 1)
+        stored = self._stored_fragment(report_id, "f_capped")
+        self.assertEqual((stored["type"], stored["caption"]), ("code_block", "Request"), "declining still changed the fragment")
+
+        page.locator('[data-fragment-id="f_capped"] .fragment-convert').select_option("paragraph")
+        page.wait_for_selector(".vr-dialog", timeout=5_000)
+        page.click('[data-dialog-action="confirm"]')
+        page.wait_for_selector('[data-fragment-id="f_capped"] .rich', timeout=5_000)
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        stored = self._stored_fragment(report_id, "f_capped")
+        self.assertEqual(stored["type"], "paragraph")
+        self.assertEqual([run["text"] for run in stored["runs"]], ["GET /accounts/123"])
+        self.assertNotIn("caption", stored)
+        self.assertNotIn("text", stored)
+
+    def test_a_lossless_conversion_asks_nothing(self) -> None:
+        """A dialog on a conversion that loses nothing is what trains a tester to click through the
+        one that matters."""
+        report_id, page = self._convert_report()
+        page.locator('[data-fragment-id="f_bare"] .fragment-convert').select_option("note")
+        page.wait_for_selector('[data-fragment-id="f_bare"] .rich', timeout=5_000)
+        self.assertEqual(page.locator(".vr-dialog").count(), 0, "a caption-free code block asked before converting")
+
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        stored = self._stored_fragment(report_id, "f_bare")
+        self.assertEqual(stored["type"], "note")
+        self.assertEqual(stored["runs"], [{"text": "GET /health", "bold": False, "italic": False, "underline": False}])
+        self.assertNotIn("text", stored)
+        self.assertNotIn("caption", stored)
+
+    def test_dropping_run_formatting_into_a_code_block_is_confirmed_first(self) -> None:
+        _report_id, page = self._convert_report()
+        page.locator('[data-fragment-id="f_bold"] .fragment-convert').select_option("code_block")
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertIn("formatting", dialog.inner_text())
+        page.click('[data-dialog-action="confirm"]')
+        page.wait_for_selector('[data-fragment-id="f_bold"] .code-block', timeout=5_000)
+        self.assertEqual(page.locator('[data-fragment-id="f_bold"] .code-block').input_value(), "Mind the gap")
+
+    def test_paragraph_and_note_convert_without_touching_their_runs(self) -> None:
+        """The pair that shares a payload shape, so nothing should be rebuilt on the way across.
+        Written after a first implementation reconstructed runs from a `text` key a paragraph does not
+        have, silently emptying it."""
+        report_id, page = self._convert_report()
+        page.locator('[data-fragment-id="f_bold"] .fragment-convert').select_option("note")
+        page.wait_for_selector('[data-fragment-id="f_bold"] .rich', timeout=5_000)
+        self.assertEqual(page.locator(".vr-dialog").count(), 0, "a lossless conversion asked first")
+        self.assertEqual(page.locator('[data-fragment-id="f_bold"] .rich').inner_text(), "Mind the gap")
+
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        stored = self._stored_fragment(report_id, "f_bold")
+        self.assertEqual(stored["type"], "note")
+        self.assertEqual(
+            [(run["text"], run["bold"]) for run in stored["runs"]],
+            [("Mind the ", False), ("gap", True)],
+            "the runs were rebuilt instead of carried, losing text or formatting",
+        )
+
+    def test_a_proof_of_concept_note_can_become_a_paragraph_and_come_back(self) -> None:
+        """The Add menu has no paragraph here, so this is the one route to one -- and the reason the
+        conversion list is its own rather than borrowed from Add: a one-way door out of `note` would
+        strand anything converted by mistake."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        next(c for c in finding.contents if c.type == "proof_of_concept").fragments.append(
+            NoteFragment(frag_id="f_note", type="note", runs=[Run(text="Observed on every request.")])
+        )
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+
+        for target in ("paragraph", "note"):
+            page.locator('[data-fragment-id="f_note"] .fragment-convert').select_option(target)
+            page.wait_for_selector(f'[data-fragment-id="f_note"] .tag:text-is("{target}")', timeout=5_000)
+            page.locator("#save-button").click()
+            page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+            stored = self._stored_fragment(report_id, "f_note")
+            self.assertEqual(stored["type"], target)
+            self.assertEqual([run["text"] for run in stored["runs"]], ["Observed on every request."])
 
     def _two_list_proof(self, report_id: str, *, continue_second: bool):
         """A proof of concept shaped steps -> image -> steps, which is the only shape the continue

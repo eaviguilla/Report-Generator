@@ -305,7 +305,7 @@ input[data-path*="scope"],
 .finding-id-cell input,
 .finding-id-display,
 .finding-id-value,
-.fragment > textarea,
+.fragment > textarea:not(.instance-title-input),
 .code-block {
   font-family: "JetBrains Mono", Consolas, monospace !important;
   font-weight: 400 !important;

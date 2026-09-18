@@ -307,6 +307,38 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(migrated.engagement.tested_channels, ["web", "mobile"])
         self.assertEqual(len(migrated.vulnerabilities[0].contents[0].fragments[0].items), 1)
 
+    def test_the_remediation_repair_only_touches_paragraphs(self) -> None:
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        boilerplate = report_service.RESOLVED_REMEDIATION
+        draft["vulnerabilities"] = [
+            {
+                "uid": "v_note",
+                "status": "open_new",
+                "contents": [{
+                    "type": "recommended_remediation",
+                    "fragments": [{"frag_id": "f_note", "type": "note", "runs": [{"text": boilerplate}]}],
+                }],
+            },
+            {
+                "uid": "v_paragraph",
+                "status": "open_new",
+                "contents": [{
+                    "type": "recommended_remediation",
+                    "fragments": [{"frag_id": "f_paragraph", "type": "paragraph", "runs": [{"text": boilerplate}]}],
+                }],
+            },
+        ]
+        atomic_write_json(path, draft)
+
+        loaded = main.workspace.load(report_id)
+        note = loaded.vulnerabilities[0].contents[0].fragments[0]
+        paragraph = loaded.vulnerabilities[1].contents[0].fragments[0]
+
+        self.assertEqual("".join(run.text for run in note.runs), boilerplate)
+        self.assertEqual(paragraph.runs, [])
+
     def test_a_legacy_all_scope_loads_as_explicit_custom_targets(self) -> None:
         """A retired mode carrying no IDs resolved its locations on every read. Relabelling it
         without resolving first would leave the finding with no location at all."""

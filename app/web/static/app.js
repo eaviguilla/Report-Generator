@@ -39,6 +39,12 @@
   const localDraftPrefix = `vulnreport-pending:${reportId}`;
   const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
   const tabRevisionKey = `vulnreport-saved-at:${reportId}`;
+  const timestampMicros = value => {
+    const milliseconds = Date.parse(value);
+    if (!Number.isFinite(milliseconds)) return 0;
+    const submillisecond = String(value).match(/\.\d{3}(\d{1,3})/)?.[1] || "";
+    return milliseconds * 1000 + Number(submillisecond.padEnd(3, "0"));
+  };
   let recoveryStorageError = null;
   let tabId;
   try {
@@ -78,7 +84,7 @@
         localStorage.removeItem(key);
         return [];
       }
-    }).sort((left, right) => (Date.parse(right.envelope.capturedAt) || 0) - (Date.parse(left.envelope.capturedAt) || 0));
+    }).sort((left, right) => timestampMicros(right.envelope.capturedAt) - timestampMicros(left.envelope.capturedAt));
     const selectedKey = sessionStorage.getItem(recoverySelectionKey);
     sessionStorage.removeItem(recoverySelectionKey);
     const selectedDraft = drafts.find(draft => draft.key === selectedKey);
@@ -396,7 +402,7 @@
     if (!savedAt) return;
     try {
       const remembered = sessionStorage.getItem(tabRevisionKey);
-      if (!remembered || Date.parse(savedAt) > Date.parse(remembered)) sessionStorage.setItem(tabRevisionKey, savedAt);
+      if (!remembered || timestampMicros(savedAt) > timestampMicros(remembered)) sessionStorage.setItem(tabRevisionKey, savedAt);
     } catch (error) { showRecoveryStorageWarning(error); }
   }
   rememberTabRevision(serverReport.saved_at);
@@ -918,7 +924,7 @@
     if (!historyRestore || pendingSave) return;
     try {
       const latest = sessionStorage.getItem(tabRevisionKey);
-      if (latest && Date.parse(latest) > Date.parse(report.saved_at)) window.location.reload();
+      if (latest && timestampMicros(latest) > timestampMicros(report.saved_at)) window.location.reload();
     } catch (error) { showRecoveryStorageWarning(error); }
   });
   window.addEventListener("pagehide", () => {
@@ -1258,6 +1264,40 @@
   const ensureProofSteps = content => {
     if (!content.fragments.some(fragment => fragment.type === "numbered_list")) content.fragments.unshift(newFragment("numbered_list"));
   };
+  const CONVERTIBLE_TYPES = ["paragraph", "note", "code_block"];
+  // Deliberately its own list rather than `allowed`: the Add menu offers no paragraph in either
+  // proof-of-concept section, but converting one there is asked for, and reusing `allowed` would
+  // leave a note convertible out to a code block and never back. in_conclusion is excluded outright
+  // because provision and syncConclusion both re-insert a paragraph when that section holds none.
+  const CONVERTIBLE_SECTIONS = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept"];
+  const conversionTargets = (fragment, content) => {
+    if (!CONVERTIBLE_TYPES.includes(fragment.type) || !CONVERTIBLE_SECTIONS.includes(content?.type)) return [];
+    return CONVERTIBLE_TYPES.filter(type => type !== fragment.type);
+  };
+  // Boilerplate the server owns: provision rewrites or strips it by its `generated` marker, so a
+  // converted copy would either be discarded or outlive the status that justified it.
+  const conversionBlockedReason = fragment => (fragment.generated ? "The app maintains this text, so its type is fixed." : null);
+  // Single owner of the payload swap. The source key is deleted, never left behind: readiness
+  // branches on which key is present rather than on `type`, so a code block still carrying `runs`
+  // reads as complete in the browser while the server refuses to generate it.
+  const convertFragment = (fragment, targetType) => {
+    const runs = fragment.runs;
+    if (targetType === "code_block") {
+      fragment.text = (runs || []).map(run => run.text || "").join("");
+      fragment.caption = null;
+      delete fragment.runs;
+    } else {
+      // Paragraph and note both carry runs, so a swap between those two must leave them alone; only
+      // a code block arrives with flat text and needs one built.
+      fragment.runs = runs || (fragment.text ? [{text: fragment.text}] : []);
+      delete fragment.text;
+      delete fragment.caption;
+    }
+    fragment.type = targetType;
+    // The server echoes `generated: null` onto every paragraph, and note declares no such field.
+    delete fragment.generated;
+  };
+
   // Deep-clones library fragments with fresh frag_ids; frag_id uniqueness is report-wide, so nothing
   // copied in from the library may keep its original id. Shared by every replace/merge offer.
   const remintFragments = fragments => { const copied = JSON.parse(JSON.stringify(fragments)); copied.forEach(fragment => { fragment.frag_id = id("f"); }); return copied; };
@@ -1665,7 +1705,7 @@
       if (stranded.length) lines.push(`${stranded.length} will be left with no affected location at all, and the report cannot be saved until you give ${stranded.length === 1 ? "it" : "them"} one.`);
       // Screenshots are kept, not deleted -- but an unlabelled one blocks generation until it is
       // reassigned or removed, so the tester hears it here rather than from the readiness panel.
-      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their file but lose their environment, and must be reassigned or deleted before the report can be generated.`);
+      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their original environment and file, but stop appearing in the report until explicitly reassigned or deleted.`);
       return window.vrDialog.confirm({
         title: `${change}?`,
         message: lines.join(" "),
@@ -1682,18 +1722,35 @@
       const typedTargets = scopeTextTargetCount((environment, value) => value === channel && report.engagement.tested_environments.includes(environment));
       const endpointsIn = finding => Object.values(finding.scope?.custom_locations || {})
         .reduce((total, byChannel) => total + (byChannel?.[channel] || []).filter(value => value.trim()).length, 0);
-      const findings = (report.vulnerabilities || []).filter(finding =>
-        (finding.scope?.target_ids || []).some(targetId => targetIds.has(targetId)) || endpointsIn(finding));
+      let images = 0;
+      const findings = (report.vulnerabilities || []).filter(finding => {
+        const scope = finding.scope || {};
+        const remainingScope = {
+          ...scope,
+          target_ids:(scope.target_ids || []).filter(targetId => !targetIds.has(targetId)),
+          custom_locations:Object.fromEntries(Object.entries(scope.custom_locations || {}).map(([environment, byChannel]) => [
+            environment,
+            Object.fromEntries(Object.entries(byChannel || {}).filter(([candidate]) => candidate !== channel)),
+          ])),
+        };
+        const remaining = scopeEnvironments(remainingScope);
+        const lost = scopeEnvironments(scope).filter(environment => !remaining.includes(environment));
+        images += (finding.contents || []).filter(content => content.type !== "previous_proof_of_concept")
+          .flatMap(content => content.fragments || [])
+          .filter(fragment => fragment.type === "image" && lost.includes(fragment.environment)
+            && (fragment.evidence_id || fragment.caption?.trim())).length;
+        return (scope.target_ids || []).some(targetId => targetIds.has(targetId)) || endpointsIn(finding);
+      });
       return {
         targets: Math.max(targetIds.size, typedTargets),
         findings: findings.map(finding => finding.title || "Untitled finding"),
         endpoints: (report.vulnerabilities || []).reduce((total, finding) => total + endpointsIn(finding), 0),
+        images,
       };
     };
     // The tester agreed to lose these targets, so clear the selections pointing at them rather than
-    // leaving the page holding IDs the next save would drop. An image for an environment the finding
-    // no longer reaches keeps its file but loses its label, so the readiness panel asks for a new one
-    // instead of the report silently omitting it.
+    // leaving the page holding IDs the next save would drop. Empty image slots for a lost environment
+    // go away, while filled evidence keeps the environment where it was actually captured.
     const dropTargetsEverywhere = targetIds => {
       if (!targetIds.size) return;
       (report.vulnerabilities || []).forEach(finding => {
@@ -1711,9 +1768,10 @@
         (finding.contents || []).forEach(content => {
           // Previous proof of concept records an earlier engagement, so its labels are history.
           if (content.type === "previous_proof_of_concept") return;
-          (content.fragments || []).forEach(fragment => {
-            if (fragment.type === "image" && lost.includes(fragment.environment)) fragment.environment = null;
-          });
+          content.fragments = (content.fragments || []).filter(fragment => !(
+            fragment.type === "image" && lost.includes(fragment.environment)
+            && !fragment.evidence_id && !fragment.caption?.trim()
+          ));
         });
       });
     };
@@ -1734,7 +1792,8 @@
         if (!lost.length) return;
         (finding.contents || []).forEach(content => {
           if (content.type === "previous_proof_of_concept") return;
-          images += (content.fragments || []).filter(fragment => fragment.type === "image" && lost.includes(fragment.environment)).length;
+          images += (content.fragments || []).filter(fragment => fragment.type === "image"
+            && lost.includes(fragment.environment) && (fragment.evidence_id || fragment.caption?.trim())).length;
         });
       });
       return {findings, images};
@@ -1761,9 +1820,12 @@
       const losses = [impact.targets && `${count(impact.targets, "scope target")} in Setup`, impact.endpoints && count(impact.endpoints, "additional affected endpoint")].filter(Boolean);
       // During a swap the tester ticked the incoming box, so a dialog about the outgoing one alone
       // reads as though it arrived unprompted.
+      const evidence = !impact.images ? "" : impact.images === 1
+        ? " One screenshot keeps its original environment and file, but stops appearing in the report until explicitly reassigned or deleted."
+        : ` ${impact.images} screenshots keep their original environment and files, but stop appearing in the report until explicitly reassigned or deleted.`;
       return window.vrDialog.confirm({
         title: replacedBy ? `Replace ${channelLabels[channel]} with ${channelLabels[replacedBy]}?` : `Remove ${channelLabels[channel]} from the scope?`,
-        message: `${losses.join(", and ")} will be deleted, along with every ${channelLabels[channel]} affected location selected in the findings below.${stranded.length ? ` ${count(stranded.length, "finding")} will be left with no affected location at all.` : ""} This cannot be undone.`,
+        message: `${losses.join(", and ")} will be deleted, along with every ${channelLabels[channel]} affected location selected in the findings below.${stranded.length ? ` ${count(stranded.length, "finding")} will be left with no affected location at all.` : ""}${evidence}`,
         list: impact.findings,
         confirmLabel: replacedBy ? `Switch to ${channelLabels[replacedBy]} anyway` : `Remove ${channelLabels[channel]} anyway`,
         cancelLabel: replacedBy ? `Keep ${channelLabels[channel]}` : "Keep this app type",
@@ -1797,7 +1859,7 @@
       const lines = [];
       if (impact.findings) lines.push(`${impact.findings} finding${impact.findings === 1 ? "" : "s"} point at a target you are removing or renaming, and lose it.`);
       if (stranded.length) lines.push(`${stranded.length} will be left with no location at all, and the report cannot be saved until ${stranded.length === 1 ? "it gets" : "they get"} another.`);
-      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their file but lose their environment, and must be reassigned or deleted before the report can be generated.`);
+      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their original environment and file, but stop appearing in the report until explicitly reassigned or deleted.`);
       return window.vrDialog.confirm({
         title: "Change these scope targets?",
         message: lines.join(" "),
@@ -2852,19 +2914,24 @@
     // narrows the choice nor answers it for the tester.
     const historical = content.type === "previous_proof_of_concept";
     const imageEnvironments = historical ? ["production", "non_production"] : affectedEnvironments(finding);
-    if (!historical && imageEnvironments.length === 1) {
+    const outsideCurrentScope = !historical && Boolean(fragment.evidence_id || fragment.caption?.trim())
+      && Boolean(fragment.environment) && !imageEnvironments.includes(fragment.environment);
+    if (!historical && imageEnvironments.length === 1 && !outsideCurrentScope) {
       fragment.environment = imageEnvironments[0];
       const environmentValue = document.createElement("span");
       environmentValue.className = "evidence-environment-value";
       environmentValue.textContent = imageEnvironments[0] === "production" ? "Production" : "Non-Production";
       facts.append(environmentValue);
     } else {
-      if (!historical && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
+      if (!historical && !outsideCurrentScope && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
       const environmentSelect = document.createElement("select");
       environmentSelect.className = `evidence-environment${fragment.environment ? "" : " is-unset"}`;
       environmentSelect.setAttribute("aria-label", `${contentNames[content.type]} image environment`);
-      const unset = historical && !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
-      environmentSelect.innerHTML = unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
+      const current = outsideCurrentScope
+        ? `<option value="${fragment.environment}" selected>${environmentName(fragment.environment)} (out of scope)</option>`
+        : "";
+      const unset = !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
+      environmentSelect.innerHTML = current + unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
       environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; rerender(); scheduleSave(); };
       facts.append(environmentSelect);
     }
@@ -2998,6 +3065,43 @@
       rerender();
       scheduleSave();
     };
+    const targets = conversionTargets(fragment, content);
+    if (targets.length) {
+      const convert = document.createElement("select");
+      convert.className = "fragment-convert";
+      convert.setAttribute("aria-label", "Change fragment type");
+      convert.innerHTML = `<option value="">change to…</option>${targets.map(type => `<option value="${type}">${type.replaceAll("_", " ")}</option>`).join("")}`;
+      const convertBlocked = conversionBlockedReason(fragment);
+      convert.title = convertBlocked || "Change this fragment's type, keeping its text";
+      convert.disabled = Boolean(convertBlocked);
+      convert.onchange = async () => {
+        const targetType = convert.value;
+        convert.value = "";
+        if (!targetType) return;
+        // Asked before anything is written, and only when the loss is real -- a dialog on a lossless
+        // conversion is what trains a tester to click through the one that matters.
+        const formatted = targetType === "code_block" && (fragment.runs || []).some(run => run.bold || run.italic || run.underline);
+        if (formatted && !await window.vrDialog.confirm({
+          title: "Make this a code block?",
+          message: "Code blocks are plain text. The bold, italic and underline formatting in this fragment will be removed.",
+          confirmLabel: "Make it a code block", cancelLabel: "Keep it as it is",
+        })) return;
+        // The only place this text is ever shown: there is no caption field for a code block anywhere
+        // in the editor, so it arrived from an imported document and prints unseen.
+        const caption = targetType !== "code_block" ? fragment.caption?.trim() : "";
+        if (caption && !await window.vrDialog.confirm({
+          title: "Delete the caption?",
+          message: `This code block has the caption "${caption}", which prints above it in the report. A ${targetType.replaceAll("_", " ")} has no caption, so it will be deleted.`,
+          confirmLabel: "Delete it and convert", cancelLabel: "Keep the code block",
+        })) return;
+        convertFragment(fragment, targetType);
+        // Never optional: the editor body is chosen by which payload key is present, so without this
+        // the old input stays on screen and writes its key straight back onto the converted fragment.
+        rerender();
+        scheduleSave();
+      };
+      card.querySelector(".fragment-head .fragment-move-up").before(convert);
+    }
     const moveUp = card.querySelector(".fragment-move-up");
     const moveDown = card.querySelector(".fragment-move-down");
     moveUp.disabled = content.fragments.indexOf(fragment) === 0;

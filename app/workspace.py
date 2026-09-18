@@ -285,6 +285,7 @@ class Workspace:
                     fragments = content.get("fragments", [])
                     stale = (
                         len(fragments) == 1
+                        and fragments[0].get("type") == "paragraph"
                         and not fragments[0].get("generated")
                         and "".join(run.get("text", "") for run in fragments[0].get("runs", [])).strip() == RESOLVED_REMEDIATION
                     )

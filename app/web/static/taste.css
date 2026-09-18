@@ -1793,7 +1793,8 @@ button.content-toggle:hover:not(:disabled) small {
   padding: 9px 11px;
 }
 
-.evidence-caption {
+.evidence-caption,
+.additional-input {
   width: 100%;
   min-height: 30px;
   padding: 4px 8px;
@@ -1805,18 +1806,29 @@ button.content-toggle:hover:not(:disabled) small {
   font-weight: 500;
 }
 
-.evidence-caption:hover {
+.evidence-caption:hover,
+.additional-input:hover {
   border-color: var(--line);
 }
 
-.evidence-caption:focus {
+.evidence-caption:focus,
+.additional-input:focus {
   border-color: var(--accent);
   background: var(--surface-field);
 }
 
-.evidence-caption::placeholder {
+.evidence-caption::placeholder,
+.additional-input::placeholder {
   color: var(--muted-light);
   font-weight: 400;
+}
+
+/* Autosized from scrollHeight, so it must not carry a scrollbar or a resize grip of its own. */
+.additional-tickets {
+  overflow: hidden;
+  resize: none;
+  line-height: 1.5;
+  font-family: inherit;
 }
 
 .evidence-facts {
@@ -2427,7 +2439,8 @@ body > main {
     border-bottom: 1px solid var(--line);
   }
 
-  .evidence-caption {
+  .evidence-caption,
+  .additional-input {
     font-size: 12px;
   }
 
@@ -3540,7 +3553,8 @@ button.finding-nav.active:not(:disabled)::after {
   padding: 8px 10px;
 }
 
-.evidence-caption {
+.evidence-caption,
+.additional-input {
   font-size: 12px;
 }
 

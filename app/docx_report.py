@@ -50,6 +50,8 @@ STATUS_LABELS = {
     "open_previously_discovered": "Open (Previously Discovered)",
     "resolved": "Resolved",
 }
+# Belongs to the document, never to the draft, so the stored value stays bare digits.
+SEVERITY_TICKET_PREFIX = "GRIMPEN-"
 PLAIN_METADATA_TOKENS = {"app-name", "app-owner", "tester-name", "report-name"}
 UNRESOLVED_MARKERS = (
     "-vuln",
@@ -107,6 +109,11 @@ def generation_issues(report: Report) -> list[str]:
         for environment in environments:
             if not any(image.environment == environment and image.evidence_id for image in images):
                 issues.append(f"{label}: {'Production' if environment == 'production' else 'Non-Production'} evidence image required")
+        # Only Asia prints these, and a field the tester never sees must never block their report.
+        if report.engagement.segment == "Asia":
+            for field_label, value in (("CVSS Score", finding.cvss_score), ("CVSS Vector", finding.cvss_vector)):
+                if not value.strip():
+                    issues.append(f"{label}: {field_label} is required")
         printed = set(content_types_for_status(finding.status))
         for content in finding.contents:
             # A section this status does not print is carried for safekeeping, not for completing.
@@ -617,10 +624,8 @@ def _populate_cvss_table(document: DocumentType, rendered: list[tuple[Vulnerabil
         _reference_field(row.cells[0].paragraphs[0], bookmark)
         _replace_cell_placeholder(row.cells[1], finding.title)
         _replace_cell_placeholder(row.cells[2], severity.title(), font_color=RATING_FONT_COLORS[severity])
-        # CVSS score and vector are tester inputs the app does not collect yet. Blank rather than
-        # "N/A" so only the value changes when it does.
-        _replace_cell_placeholder(row.cells[3], "")
-        _replace_cell_placeholder(row.cells[4], "")
+        _replace_cell_placeholder(row.cells[3], finding.cvss_score)
+        _replace_cell_placeholder(row.cells[4], finding.cvss_vector)
     if not rendered:
         _append_prototype_row(table, prototype)
         for index in range(5):
@@ -761,10 +766,14 @@ def _render_finding_component(
         "vuln_severity": (finding.severity or "informational").title(),
         "vuln_id": finding.display_id or "",
         "status": STATUS_LABELS[finding.status],
-        "severity-review-tickets": "N/A",
     }
     for token, value in values.items():
         replace_component_token(elements, token, value)
+    # Runs, not the string path: only _set_run_text turns a newline into a real w:br. A no-op on
+    # new_finding.docx, which carries no such token.
+    tickets = [line.strip() for line in finding.severity_review_tickets.splitlines() if line.strip()]
+    printed = "\n".join(f"{SEVERITY_TICKET_PREFIX}{ticket}" for ticket in tickets) or "N/A"
+    replace_component_token_runs(elements, "severity-review-tickets", [Run(text=printed)])
     for token, location_values in (
         ("prod_affected_locations", locations["production"]),
         ("non-prod-affected-locations", locations["non_production"]),
@@ -845,7 +854,25 @@ def _render_instance_title(
     for element in elements:
         if element.tag == qn("w:p"):
             _keep_with_next(element)
+            _unbold_runs_after_first(element)
     return elements
+
+
+def _unbold_runs_after_first(paragraph) -> None:
+    """Run formatting is additive, so the tester's words inherit the component's bold."""
+    text_runs = [run for run in paragraph.findall(qn("w:r")) if run.find(qn("w:t")) is not None]
+    for run in text_runs[1:]:
+        properties = run.find(qn("w:rPr"))
+        if properties is None:
+            properties = OxmlElement("w:rPr")
+            run.insert(0, properties)
+        for tag in ("w:b", "w:bCs"):
+            setting = properties.find(qn(tag))
+            if setting is None:
+                setting = OxmlElement(tag)
+                properties.append(setting)
+            # Off, not absent: the paragraph style may declare bold too.
+            setting.set(qn("w:val"), "0")
 
 
 def _render_component_content(
@@ -952,6 +979,9 @@ def _render_component_fragment(
             )
             replace_component_token_runs(elements, token, item.runs)
             rendered.extend(elements)
+        # Only the component's first element: it ships with a trailing blank that would make two.
+        if fragment.type == "numbered_list":
+            rendered.extend(_render_text_component(document, component_root, "paragraph", [])[:1])
         return rendered
     if isinstance(fragment, CodeFragment):
         rendered = _render_caption_component(document, component_root, fragment.caption)

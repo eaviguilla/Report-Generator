@@ -1,5 +1,7 @@
 # Continuing a numbered list from the one before it
 
+> **Status:** shipped · 2026-09-16 · `57cfdb8`
+
 ## Request
 
 > having the numbered list have an option to continue numbering from last numbered list fragment. this is per content. when creating a numbered list, te default would be that the numbering will start/reset from 1. But there will be an option to contnue the count of the previous numbered list on the same content. This will be printed in the generated docx as well. if the option selected is continue numbering, then continue numbering in the docx as well. the numbered list from poc cannot continue the numbered list in previous poc. same with recommended remediation numbered list, it cannot continue the list from description as they are different contents.

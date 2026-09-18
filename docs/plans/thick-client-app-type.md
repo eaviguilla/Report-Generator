@@ -1,5 +1,7 @@
 # Thick Client app type, component scope, and the MAIN_THICK_MOBILE template
 
+> **Status:** shipped · 2026-09-17 · `8430e84`
+
 ## Request
 
 > also, there is now a mobile and thick client report templates and it is called MAIN_THICK_MOBILE.docx . Mobile and Thick Client are app types. so Thick Client will be added in the options for the scope app types. BUT mobile and thick client cannot be selected together. When one is selected, deselect the other one and vise versa. But it is okay to select web and api with mobile or thick client. also, the inputs for these are different. Instead of one text box per environment, there will be 2. Label them as well. The first text box is named Component. the other one will be Description. When a mobile or thick client is selected, you do not use MAIN.docx for the main template but the MAIN_THICK_MOBILE.docx instead. its the same template but with a table for the mobile or thick client scope.

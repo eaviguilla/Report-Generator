@@ -21,7 +21,9 @@ are resolved by their first header cell, never by index, so a template may carry
 a table the others do not without disturbing anything.
 
 The scripts under `scripts/` hard-code `MAIN.docx` and bypass this function, so a
-fixture rendered through them never has the extra tables. That is deliberate.
+fixture rendered through them never has the extra tables. That is deliberate. It
+also means a scripted fixture never prints a collected CVSS value, because the
+Section table is the only place either one is printed.
 
 ## Render path
 
@@ -88,6 +90,14 @@ filled by cloned rows in the same order the findings body renders them — the
 order is returned by `_populate_component_findings` and consumed, not derived a
 second time.
 
+Every column but the first is a **per-finding** value: `finding.title`,
+`finding.severity`, `finding.cvss_score`, `finding.cvss_vector`. The CVSS pair
+is held on the finding, not on the engagement, so a report prints as many pairs
+as it has findings. A report with **no** findings still gets one cloned row with
+all five cells replaced by the empty string, because leaving the prototype
+placeholders in place would fail the unresolved-placeholder check at the end of
+generation.
+
 **`{{section-number}}` becomes a Word `REF` field, never a number counted in
 Python.** `_populate_component_findings` bookmarks each finding-title paragraph
 as `vuln_<uid>`, and the Section cell holds ` REF vuln_<uid> \w \h `. Word
@@ -101,10 +111,25 @@ With the template as it stands, a finding title is `ReportHeading2` under a
 `ReportHeading1` severity heading, and the severity headings begin at section 7 —
 so the first Critical finding reads **7.1**, not `6.2.1`.
 
-**`{{cvss-score}}` and `{{cvss-vector}}` are replaced with an empty string.** The
-app does not collect CVSS yet; blank rather than `N/A` so that only the value
-changes when it does. `MAIN_ASIA.docx` was unreachable before this, because those
-tokens had no source and every unresolved token fails generation.
+**`{{cvss-score}}` and `{{cvss-vector}}` carry the tester's values.**
+`_populate_cvss_table` writes `finding.cvss_score` into cell 3 and
+`finding.cvss_vector` into cell 4 (`app/docx_report.py` L627-L628). Both were an
+empty string until the app started collecting them; blank rather than `N/A` was
+chosen so that only the value would have to change, and only the value did.
+`MAIN_ASIA.docx` was unreachable before either form existed, because those tokens
+had no source and every unresolved token fails generation.
+
+An empty field still prints an empty cell, so the token itself never blocks a
+render. Requiring a value is `generation_issues`' job, and only when the segment
+is Asia (`app/docx_report.py` L112-L116) — a field the tester cannot see must
+never block their report.
+
+Reading a finished report back, `parse_report_docx` recovers both values from
+this table by **matching cell 1 against the finding title, never by row
+position**: the table holds a row per rendered finding, while the importer drops
+every Resolved one (`app/docx_import.py` L482-L492). A recovered score must match
+`^[0-9.]+$` and a vector `^[A-Za-z0-9./:]+$` or it is discarded — stricter than
+the save rule, so an imported value can never be one the next save refuses.
 
 ## Tag formatting
 
@@ -176,6 +201,36 @@ Detail sections are generated dynamically:
 - Previous Proof of Concept and In Conclusion exist only in retest finding
   components.
 
+## Severity Review Tickets, in the retest finding component
+
+`{{severity-review-tickets}}` lives only in
+`resources/finding_types/retest_finding.docx`, so it prints for
+`open_previously_discovered` and `resolved` findings and never for `open_new` —
+on `new_finding.docx` the replacement is a no-op because there is no such token.
+The static label `Severity Review Ticket (if applicable):` is one paragraph, and
+the token owns the whole of the paragraph below it.
+
+It is written with `replace_component_token_runs` rather than the plain string
+path (`app/docx_report.py` L772-L776), because only `_set_run_text` turns a
+newline into a real `w:br`. Each stored line therefore becomes one printed line
+inside that single paragraph, not a paragraph of its own.
+
+The draft stores **bare digits**, one per line; the prefix belongs to the
+document. Every printed line is written as `SEVERITY_TICKET_PREFIX` + the stored
+line — `GRIMPEN-` (`app/docx_report.py` L54) — so `1234` prints as
+`GRIMPEN-1234`. Blank stored lines are dropped, and a value that is empty once
+stripped prints the literal `N/A`, unprefixed.
+
+Reading a finished report back, the importer matches on the label string rather
+than a position, then reads the following paragraph run by run —
+`paragraph.text` would silently drop the `w:br` lines — and normalises it with
+`_ticket_lines` (`app/docx_import.py` L87, L512-L522). That strips a leading key
+of any tracker rather than `GRIMPEN-` alone, splits on newlines, commas and
+semicolons, and keeps only the pieces that are wholly decimal. A piece such as
+`GRIMPEN-3523 (closed 2024)` is dropped whole rather than mined for the digits
+inside it, because a fabricated ticket reference reads as plausibly as a real
+one and nothing downstream would catch it.
+
 ## Fragment anchors
 
 | Anchor | Rendered content |
@@ -206,7 +261,11 @@ captions, an image that has a caption, and the lead-in paragraph above a table.
 Two cases are deliberately uncovered: `Severity Review Ticket (if applicable):`,
 which is filled by token replacement and has no anchor to walk back from, and an
 uncaptioned code block, which is a run of ordinary paragraphs with no
-all-or-nothing block to strand.
+all-or-nothing block to strand. Now that the ticket value is a tester input, the
+first gap is easier to see: a multi-line value is a taller block that can fall
+to the next page and leave its label stranded above. Where the break lands is
+Word's to decide and nothing in the file records it, so this was left alone
+rather than guessed at.
 
 Fragment-template blank paragraphs are preserved between fragments and trimmed
 at content-section boundaries. Generated evidence images clone the centered

@@ -8,6 +8,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from PIL import Image
@@ -21,6 +22,7 @@ from app.docx_report import (
     main_template_path,
     render_report_docx,
 )
+from app.docx_captions import flatten_section_number_fields
 from app.report_service import provision, sync_evidence_image_slots
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
 
@@ -641,6 +643,59 @@ class DocxReportTests(unittest.TestCase):
             self.assertNotEqual(first[1], second[1], "two independent lists shared an nsid")
             self.assertEqual((first[2], second[2]), (1, 1), "each independent list needs its own restart")
 
+    def test_a_numbered_list_is_followed_by_one_blank_paragraph(self) -> None:
+        """Steps ran straight into whatever followed them. The paragraph and table components carry
+        their own trailing blank; the list component does not, because it is cloned once per item."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="description", fragments=[
+                    ListFragment(frag_id="f_steps", type="numbered_list", items=[
+                        ListItem(runs=[Run(text="Step one")]), ListItem(runs=[Run(text="Step two")]),
+                    ]),
+                    ParagraphFragment(frag_id="f_after", type="paragraph", runs=[Run(text="Text after the list.")]),
+                    ListFragment(frag_id="f_bullets", type="bulleted_list", items=[ListItem(runs=[Run(text="A bullet")])]),
+                    ParagraphFragment(frag_id="f_last", type="paragraph", runs=[Run(text="Text after the bullets.")]),
+                ]),
+            ])
+            texts = [
+                "".join(node.text or "" for node in item.iter(qn("w:t")))
+                for item in document.element.body.iterchildren() if item.tag == qn("w:p")
+            ]
+
+            def between(first: str, second: str) -> list[str]:
+                return texts[texts.index(first) + 1:texts.index(second)]
+
+            self.assertEqual(between("Step two", "Text after the list."), [""], "a numbered list gained no blank line, or gained two")
+            # Scope, pinned deliberately: the request named numbered lists, and a bulleted list that
+            # introduces the sentence under it should not be pushed away from it.
+            self.assertEqual(between("A bullet", "Text after the bullets."), [], "a bulleted list gained a blank line it was not asked to")
+
+    def test_only_the_generated_instance_label_is_bold(self) -> None:
+        """The component is bold throughout and run formatting is additive, so the tester's words
+        stay bold unless they are explicitly cleared."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            document = self._layout_document(report_folder, [
+                Content(type="proof_of_concept", fragments=[
+                    InstanceTitleFragment(frag_id="f_instance", type="instance_title", text="Production login page"),
+                ]),
+            ])
+            paragraph = next(
+                item for item in document.element.body.iterchildren()
+                if item.tag == qn("w:p") and "Production login page" in "".join(node.text or "" for node in item.iter(qn("w:t")))
+            )
+            weights = []
+            for run in paragraph.findall(qn("w:r")):
+                if run.find(qn("w:t")) is None:
+                    continue
+                setting = run.find(qn("w:rPr"))
+                bold = setting is not None and setting.find(qn("w:b")) is not None
+                if bold and setting.find(qn("w:b")).get(qn("w:val")) in {"0", "false"}:
+                    bold = False
+                weights.append(("".join(node.text or "" for node in run.iter(qn("w:t"))), bold))
+            self.assertEqual(weights, [("Instance 1:", True), (" Production login page", False)])
+
     def test_an_instance_label_is_numbered_once_even_when_the_tester_typed_it(self) -> None:
         """Three of the instance titles already saved carry the label in their text, from before the
         generator wrote it. Rendering both would read 'Instance 1: Instance 1: Production'."""
@@ -710,7 +765,7 @@ class DocxReportTests(unittest.TestCase):
 
             self.assertEqual(titles, ["Instance 1: Production"])
 
-    def _layout_document(self, report_folder: Path, contents: list, *, status: str = "open_new"):
+    def _layout_document(self, report_folder: Path, contents: list, *, status: str = "open_new", tickets: str = ""):
         """Render one finding through the shipped template, for page-layout assertions."""
         evidence_folder = report_folder / "evidence"
         evidence_folder.mkdir(exist_ok=True)
@@ -732,6 +787,7 @@ class DocxReportTests(unittest.TestCase):
             uid="v_layout", display_id="001", title="Layout finding",
             likelihood="high", impact="high", severity="high", status=status,
             scope=Scope(mode="custom", target_ids=["t_web"]), contents=contents,
+            severity_review_tickets=tickets,
         )]
         return Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder, allow_incomplete=True)))
 
@@ -804,6 +860,52 @@ class DocxReportTests(unittest.TestCase):
             self.assertFalse(_keeps_next(ticket._p))
             title = next(item for item in document.paragraphs if item.text.strip() == "Layout finding")
             self.assertFalse(_keeps_next(title._p), "a finding title already carries its own page break")
+
+    def test_severity_review_tickets_print_one_prefixed_value_per_line(self) -> None:
+        """The prefix belongs to the document. The draft stores bare digits, so a tester never types
+        it and an imported value never carries it back in."""
+        paragraph = lambda name: [ParagraphFragment(frag_id=f"f_{name}", type="paragraph", runs=[Run(text=f"The {name} text.")])]
+        retest_contents = lambda: [
+            Content(type="description", fragments=paragraph("description")),
+            Content(type="recommended_remediation", fragments=paragraph("remediation")),
+            Content(type="previous_proof_of_concept", fragments=paragraph("previous")),
+            Content(type="proof_of_concept", fragments=paragraph("proof")),
+            Content(type="in_conclusion", fragments=paragraph("conclusion")),
+        ]
+
+        def ticket_value(document):
+            """The first paragraph carrying text below the label, so a template blank cannot fool it."""
+            label = next(item for item in document.paragraphs if item.text.strip() == "Severity Review Ticket (if applicable):")
+            node = label._p.getnext()
+            while node is not None and not "".join(part.text or "" for part in node.iter(qn("w:t"))).strip():
+                node = node.getnext()
+            self.assertIsNotNone(node, "the label must be followed by its value")
+            return node
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            document = self._layout_document(
+                Path(temporary_directory), retest_contents(), status="open_previously_discovered", tickets="1234\n5678\n90123",
+            )
+            value = ticket_value(document)
+            self.assertEqual("".join(node.text or "" for node in value.iter(qn("w:t"))), "GRIMPEN-1234GRIMPEN-5678GRIMPEN-90123")
+            # Three values are two breaks. Joined onto one line the text above would still match.
+            self.assertEqual(len(value.findall(".//" + qn("w:br"))), 2)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            document = self._layout_document(Path(temporary_directory), retest_contents(), status="open_previously_discovered")
+            value = ticket_value(document)
+            self.assertEqual("".join(node.text or "" for node in value.iter(qn("w:t"))), "N/A")
+            self.assertEqual(len(value.findall(".//" + qn("w:br"))), 0)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            document = self._layout_document(Path(temporary_directory), [
+                Content(type="description", fragments=paragraph("description")),
+                Content(type="recommended_remediation", fragments=paragraph("remediation")),
+                Content(type="proof_of_concept", fragments=paragraph("proof")),
+            ], tickets="1234")
+            body = "\n".join(item.text for item in document.paragraphs)
+            self.assertNotIn("Severity Review Ticket", body, "new_finding.docx carries no such label")
+            self.assertNotIn("GRIMPEN-", body, "a value on an Open (New) finding must reach nothing")
 
     def test_labels_titles_and_lead_ins_are_kept_with_what_they_introduce(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -930,6 +1032,10 @@ class DocxReportTests(unittest.TestCase):
                 ImageFragment(frag_id="f_img_prod", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
             ]),
         ]
+        if segment == "Asia":
+            # Asia requires both, so the fixture is not generation-clean without them.
+            report.vulnerabilities[0].cvss_score = "8.1"
+            report.vulnerabilities[0].cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
         return report
 
     def test_main_template_path_selects_on_both_axes(self) -> None:
@@ -1005,16 +1111,19 @@ class DocxReportTests(unittest.TestCase):
         report = self._component_report(report_folder, "thick_client", "Asia", [
             ScopeTarget(target_id="t_prod", environment="production", channel="thick_client", value="Acme.exe", description="Main client"),
         ])
-        report.vulnerabilities = [
-            self._finding(uid, title, severity, display_id, ["t_prod"], [
+        report.vulnerabilities = []
+        for uid, title, severity, display_id, score, vector in (
+            ("v_low", "Verbose error messages", "low", "003", "3.1", "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"),
+            ("v_crit", "Remote code execution", "critical", "001", "9.8", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"),
+            ("v_crit_b", "Authentication bypass", "critical", "002", "9.1", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"),
+        ):
+            finding = self._finding(uid, title, severity, display_id, ["t_prod"], [
                 ImageFragment(frag_id=f"f_img_{uid}", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
             ])
-            for uid, title, severity, display_id in (
-                ("v_low", "Verbose error messages", "low", "003"),
-                ("v_crit", "Remote code execution", "critical", "001"),
-                ("v_crit_b", "Authentication bypass", "critical", "002"),
-            )
-        ]
+            # Distinct per finding, so a row paired with the wrong finding fails rather than passing.
+            finding.cvss_score = score
+            finding.cvss_vector = vector
+            report.vulnerabilities.append(finding)
         resources = Path(__file__).resolve().parent.parent / "resources"
         return Document(BytesIO(render_report_docx(report, main_template_path(report, resources), report_folder)))
 
@@ -1046,6 +1155,31 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(bookmarked_styles, {"ReportHeading2"})
             self.assertNotIn("{{section-number}}", "\n".join(cell.text for row in table.rows for cell in row.cells))
 
+    def test_a_computed_section_number_loses_its_trailing_period(self) -> None:
+        """Word reports the heading's list label, "7.1. ", period and all. Trimming the field result
+        would not survive the refresh settings.xml asks for, so a computed field becomes plain text.
+        An uncomputed one is left alone, or a render without Word would deliver an empty cell."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            rendered = self._asia_multi_finding_document(Path(temporary_directory))
+            table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Section")
+            cell = table.rows[1].cells[0]
+            # Stands in for Word, which is the only thing that can compute the number.
+            end = next(
+                node.getparent() for node in cell._tc.iter(qn("w:fldChar"))
+                if node.get(qn("w:fldCharType")) == "end"
+            )
+            computed = OxmlElement("w:r")
+            written = OxmlElement("w:t")
+            written.text = "7.1. "
+            computed.append(written)
+            end.addprevious(computed)
+
+            self.assertEqual(flatten_section_number_fields(rendered), 1)
+            self.assertEqual(cell.text.strip(), "7.1")
+            self.assertEqual(len(list(cell._tc.iter(qn("w:fldChar")))), 0, "the field outlived the flattening")
+            untouched = [len(list(row.cells[0]._tc.iter(qn("w:instrText")))) for row in table.rows[2:]]
+            self.assertEqual(untouched, [1] * len(untouched), "a field Word had not computed was destroyed")
+
     def test_asia_section_rows_follow_the_rendered_finding_order(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             rendered = self._asia_multi_finding_document(Path(temporary_directory))
@@ -1062,8 +1196,15 @@ class DocxReportTests(unittest.TestCase):
             # Severity order first, then title. The body and this table must not sort independently.
             self.assertEqual(headings, ["Authentication bypass", "Remote code execution", "Verbose error messages"])
             self.assertEqual([row.cells[2].text for row in table.rows[1:]], ["Critical", "Critical", "Low"])
-            # CVSS is a tester input the app does not collect yet.
-            self.assertEqual({row.cells[3].text for row in table.rows[1:]} | {row.cells[4].text for row in table.rows[1:]}, {""})
+            self.assertEqual([row.cells[3].text for row in table.rows[1:]], ["9.1", "9.8", "3.1"])
+            self.assertEqual(
+                [row.cells[4].text for row in table.rows[1:]],
+                [
+                    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                    "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N",
+                ],
+            )
 
     def test_asia_section_references_are_marked_for_word_to_compute(self) -> None:
         """A field left clean renders blank until someone presses F9, which nobody does."""

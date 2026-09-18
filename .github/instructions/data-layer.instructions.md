@@ -5,7 +5,7 @@ applyTo: "app/models.py, app/storage.py, app/workspace.py, app/report_service.py
 
 # Data layer change contract
 
-You are editing a file that [docs/DATA_MAP.md](../../docs/DATA_MAP.md) describes. That file is what the `data-oracle` and `change-planner` agents rely on, so a change here that is not reflected there makes both of them confidently wrong.
+You are editing a file that [docs/DATA_MAP.md](../../docs/DATA_MAP.md) describes. That file is what the `loremaster` and `tactician` agents rely on, so a change here that is not reflected there makes both of them confidently wrong.
 
 ## Update the map in the same change
 

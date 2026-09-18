@@ -1,5 +1,7 @@
 # Convert between paragraph, note and code block
 
+> **Status:** shipped · 2026-09-18 · `7da8d7d`
+
 ## Request
 
 > create an option for paragraph, note, and code block to be changed to each other. like, if there

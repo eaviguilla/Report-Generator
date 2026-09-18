@@ -5,8 +5,9 @@ import re
 import unicodedata
 import uuid
 from datetime import datetime
+from functools import cache
 from itertools import zip_longest
-from typing import Literal
+from typing import Callable, Literal
 
 from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TableFragment, Vulnerability, resolve_tested_channels
 
@@ -29,12 +30,51 @@ CHARACTER_NAMES = {
     "[": "left bracket", "\\": "backslash", "]": "right bracket", "^": "caret", "_": "underscore",
     "`": "grave accent", "{": "left brace", "|": "vertical bar", "}": "right brace", "~": "tilde",
 }
+DIGIT_NAMES = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+
+
+def _character_name(character: str, *, portable: bool = False) -> str:
+    if character in CHARACTER_NAMES:
+        return CHARACTER_NAMES[character]
+    if "0" <= character <= "9":
+        return f"digit {DIGIT_NAMES[int(character)]}"
+    if "A" <= character <= "Z":
+        return f"latin capital letter {character.lower()}"
+    if "a" <= character <= "z":
+        return f"latin small letter {character}"
+    if not portable:
+        return unicodedata.name(character, f"Unicode U+{ord(character):04X}").lower()
+    return f"Unicode U+{ord(character):04X}"
+
+
+@cache
+def unicode_character_ranges() -> dict[str, tuple[tuple[int, int], ...]]:
+    """Expose Python's exact character categories to the browser's twin validators."""
+    def ranges(predicate: Callable[[str], bool]) -> tuple[tuple[int, int], ...]:
+        result: list[tuple[int, int]] = []
+        start = previous = None
+        for code_point in range(0x110000):
+            if not predicate(chr(code_point)):
+                continue
+            if start is None:
+                start = previous = code_point
+            elif code_point == previous + 1:
+                previous = code_point
+            else:
+                result.append((start, previous))
+                start = previous = code_point
+        if start is not None:
+            result.append((start, previous))
+        return tuple(result)
+
+    return {"letters": ranges(str.isalpha), "decimals": ranges(str.isdecimal)}
 
 
 def _invalid_characters(
     value: str,
     symbols: str,
     *,
+    allow_letters: bool = True,
     allow_numbers: bool = True,
     allow_spaces: bool = True,
     allow_line_breaks: bool = False,
@@ -46,7 +86,7 @@ def _invalid_characters(
         character
         for character in value
         if not (
-            character.isalpha()
+            (allow_letters and character.isalpha())
             or (allow_numbers and character.isdecimal())
             or character in symbols
             or character in spacing
@@ -60,14 +100,17 @@ def invalid_character_issue(
     value: str,
     symbols: str,
     *,
+    allow_letters: bool = True,
     allow_numbers: bool = True,
     allow_spaces: bool = True,
     allow_line_breaks: bool = False,
+    portable_names: bool = False,
 ) -> str | None:
     """Describe the unique invalid characters in a field value."""
     invalid = _invalid_characters(
         value,
         symbols,
+        allow_letters=allow_letters,
         allow_numbers=allow_numbers,
         allow_spaces=allow_spaces,
         allow_line_breaks=allow_line_breaks,
@@ -75,7 +118,7 @@ def invalid_character_issue(
     if not invalid:
         return None
     descriptions = ", ".join(
-        f"{json.dumps(character, ensure_ascii=False)} ({CHARACTER_NAMES.get(character, unicodedata.name(character, f'Unicode U+{ord(character):04X}').lower())})"
+        f"{json.dumps(character, ensure_ascii=False)} ({_character_name(character, portable=portable_names)})"
         for character in invalid
     )
     noun = "character" if len(invalid) == 1 else "characters"
@@ -86,6 +129,7 @@ def _has_allowed_characters(
     value: str,
     symbols: str,
     *,
+    allow_letters: bool = True,
     allow_numbers: bool = True,
     allow_spaces: bool = True,
     allow_line_breaks: bool = False,
@@ -93,6 +137,7 @@ def _has_allowed_characters(
     return not _invalid_characters(
         value,
         symbols,
+        allow_letters=allow_letters,
         allow_numbers=allow_numbers,
         allow_spaces=allow_spaces,
         allow_line_breaks=allow_line_breaks,
@@ -103,6 +148,11 @@ APP_NAME_SYMBOLS = "-:;.()"
 # Twin of componentScopeRule in app.js. A strict superset of the retired mobile set, so every value
 # that validated before still does; the backslash and brackets are what make an install path typable.
 COMPONENT_SCOPE_SYMBOLS = "/,.;:()&'\"-_\\[]"
+# Twins of the Additional Information rules in app.js. Tickets carry no symbol at all: the GRIMPEN-
+# prefix belongs to the document, not to the stored value.
+TICKET_SYMBOLS = ""
+CVSS_SCORE_SYMBOLS = "."
+CVSS_VECTOR_SYMBOLS = "./:"
 
 
 def valid_application_name(value: str) -> bool:
@@ -143,6 +193,35 @@ def setup_input_issues(engagement: Engagement) -> list[str]:
     if "non_production" in engagement.tested_environments and engagement.non_production_label:
         if issue := invalid_character_issue("Non-Production name", engagement.non_production_label, "/-"):
             issues.append(issue)
+    return issues
+
+
+def finding_input_issues(report: Report) -> list[str]:
+    """Return invalid Additional Information values without treating blank draft fields as errors."""
+    # Deliberately ungated by whether the field is on screen. A value stays valid while hidden, so a
+    # report moving off Asia and back cannot strand a draft that no longer saves.
+    issues = []
+    for finding in report.vulnerabilities:
+        if finding.severity_review_tickets:
+            issue = invalid_character_issue(
+                "Severity Review Tickets",
+                finding.severity_review_tickets,
+                TICKET_SYMBOLS,
+                allow_letters=False,
+                allow_spaces=False,
+                allow_line_breaks=True,
+                portable_names=True,
+            )
+            if issue:
+                issues.append(issue)
+        if finding.cvss_score:
+            issue = invalid_character_issue("CVSS Score", finding.cvss_score, CVSS_SCORE_SYMBOLS, allow_letters=False, allow_spaces=False, portable_names=True)
+            if issue:
+                issues.append(issue)
+        if finding.cvss_vector:
+            issue = invalid_character_issue("CVSS Vector", finding.cvss_vector, CVSS_VECTOR_SYMBOLS, allow_spaces=False, portable_names=True)
+            if issue:
+                issues.append(issue)
     return issues
 
 

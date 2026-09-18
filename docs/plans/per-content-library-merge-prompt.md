@@ -1,5 +1,7 @@
 # Per-content library merge prompt
 
+> **Status:** shipped · 2026-09-15 · `acd047a`
+
 ## Request
 For data consistency fixes:
 

@@ -1,5 +1,7 @@
 # DOCX page break, title placement, and table spacing
 
+> **Status:** shipped · 2026-09-16 · `e7b843a`
+
 ## Request
 
 > for report generation.

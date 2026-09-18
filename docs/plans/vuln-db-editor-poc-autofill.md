@@ -1,5 +1,7 @@
 # Vulnerability library editor with proof-of-concept autofill
 
+> **Status:** shipped · 2026-09-14 · `059fe05`
+
 ## Request
 
 > now, bring back the vuln db editor. lets edit the vuln_library.json in the resources directory. I want to be able to edit all the details and also, add a section for proof of concept. make it so that, when the vuln from vuln db is loaded in the findings tab which replaces the contents, if the vuln in vuln db has a value in the proof of concept, depending on the tested app, API, WEB, or web and api, mobile, then those will auto fill the poc steps. ONLY THE PROOF OF CONCEPT. The previous proof of concept will not be touched by this.

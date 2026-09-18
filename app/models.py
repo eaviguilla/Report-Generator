@@ -221,6 +221,12 @@ class Vulnerability(BaseModel):
     # or dismissed. Stores the text itself because a list item has no id and the textarea rewrites
     # every item on any keystroke, so there is nothing stable to point at.
     conclusion_offer_resolved: list[str] = Field(default_factory=list)
+    # Values the document prints rather than sections of it, so they are fields and not contents.
+    # Empty is what both output paths already mean by "print nothing". The score is a string because
+    # autosave fires mid-keystroke: "9." has to be storable and "9.0" must not be reformatted.
+    severity_review_tickets: str = ""
+    cvss_score: str = ""
+    cvss_vector: str = ""
     contents: list[Content] = Field(default_factory=list)
 
 

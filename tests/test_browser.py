@@ -23,7 +23,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from app import main
 from app.docx_report import generation_issues
-from app.report_service import status_conclusion_runs
+from app.report_service import finding_input_issues, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from app.workspace import Workspace
 from app.models import CodeFragment, Content, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
@@ -3747,9 +3747,19 @@ class BrowserWorkflowTests(unittest.TestCase):
             previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
             next(fragment for fragment in previous.fragments if fragment.type == "image").environment = None
 
+        # The fixture is JH, where the pair is neither shown nor required, so both cases have to
+        # move the segment or the rule is invisible to this test in either language.
+        def asia_without_cvss(report, finding):
+            report.engagement.segment = "Asia"
+
+        def asia_with_cvss(report, finding):
+            report.engagement.segment = "Asia"
+            finding.cvss_score = "9.8"
+            finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
         # Scope-rule drift is invisible here: a finding with no location cannot open the editor, so
         # the loop below never reaches the comparison. Those cases live in the Findings-gate test.
-        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment]
+        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss]
         for case in cases:
             with self.subTest(case=case.__name__):
                 report_id = self.ready_report(include_finding=True)
@@ -3778,6 +3788,151 @@ class BrowserWorkflowTests(unittest.TestCase):
                     not server_issues,
                     f"{case.__name__}: generate button does not match server readiness",
                 )
+
+    def test_additional_information_shows_only_the_fields_that_apply(self) -> None:
+        """The section has no visibility rule of its own: it appears when at least one of its fields
+        does. That leaves exactly one hidden cell, and a rule stated twice could not."""
+        cases = [
+            ("JH", "open_new", []),
+            ("JH", "open_previously_discovered", ["Severity Review Tickets"]),
+            ("JH", "resolved", ["Severity Review Tickets"]),
+            ("Asia", "open_new", ["CVSS Score", "CVSS Vector"]),
+            ("Asia", "open_previously_discovered", ["Severity Review Tickets", "CVSS Score", "CVSS Vector"]),
+            ("Asia", "resolved", ["Severity Review Tickets", "CVSS Score", "CVSS Vector"]),
+        ]
+        for segment, status, expected in cases:
+            with self.subTest(segment=segment, status=status):
+                report_id = self.ready_report(include_finding=True)
+                report, finding = self._complete_finding(report_id)
+                report.engagement.segment = segment
+                finding.status = status
+                main.provision_report(report)
+                main.workspace.save(report)
+
+                self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                self.page.wait_for_selector("#issue-count")
+                block = self.page.locator('[data-content-type="additional_information"]')
+                if not expected:
+                    self.assertEqual(block.count(), 0, "the section appeared with nothing visible inside it")
+                    continue
+                self.assertEqual(block.count(), 1, "the section is missing while a field applies")
+                self.assertEqual(block.locator(".fragment-head .tag").all_text_contents(), expected)
+
+    def test_a_typed_cvss_value_survives_a_reload_and_a_trip_off_asia(self) -> None:
+        """Keeping the value is the whole of the keep-and-hide rule: nothing clears it, so moving
+        the segment away and back has to return it untouched."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.segment = "Asia"
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        self.page.wait_for_selector('[data-content-type="additional_information"]')
+        self.page.fill('[data-fragment-id$=":cvss_score"] .additional-input', "9.8")
+        self.page.fill('[data-fragment-id$=":cvss_vector"] .additional-input', "CVSS:3.1/AV:N")
+        for _ in range(50):
+            if main.workspace.load(report_id).vulnerabilities[0].cvss_vector:
+                break
+            self.page.wait_for_timeout(100)
+
+        stored = main.workspace.load(report_id)
+        self.assertEqual((stored.vulnerabilities[0].cvss_score, stored.vulnerabilities[0].cvss_vector), ("9.8", "CVSS:3.1/AV:N"))
+
+        stored.engagement.segment = "JH"
+        main.workspace.save(stored)
+        self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        self.page.wait_for_selector("#issue-count")
+        self.assertEqual(self.page.locator('[data-fragment-id$=":cvss_score"]').count(), 0, "a JH report drew the field")
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].cvss_score, "9.8", "hiding the field cleared it")
+
+    def test_a_cvss_review_jump_focuses_the_missing_field_card(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.segment = "Asia"
+        finding.cvss_score = ""
+        finding.cvss_vector = ""
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        page.get_by_role("button", name="Go to Additional Information").first.click()
+        target = page.locator('[data-fragment-id$=":cvss_score"]')
+        page.wait_for_selector('[data-fragment-id$=":cvss_score"].is-review-target', timeout=5_000)
+        self.assertTrue(target.evaluate("node => node === document.activeElement"))
+
+    def test_additional_information_validation_message_matches_the_server(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.segment = "Asia"
+        finding.cvss_score = "9.8"
+        finding.cvss_vector = "CVSS:3.1/AV:N"
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        score = page.get_by_role("textbox", name="CVSS Score")
+        candidate = main.workspace.load(report_id)
+        for invalid_value in ("9.8a", "9.8Ν"):
+            with self.subTest(invalid_value=invalid_value):
+                score.fill(invalid_value)
+                candidate.vulnerabilities[0].cvss_score = invalid_value
+                self.assertEqual(
+                    score.evaluate("input => input.validationMessage"),
+                    finding_input_issues(candidate)[0],
+                )
+
+    def test_additional_information_uses_the_servers_unicode_categories(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.segment = "Asia"
+        finding.cvss_score = "9.8"
+        finding.cvss_vector = "CVSS:3.1/AV:N"
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        candidate = main.workspace.load(report_id)
+        valid_values = {"cvss_score": "9.8", "cvss_vector": "CVSS:3.1/AV:N"}
+        cases = (
+            ("CVSS Score", "cvss_score", f"9.{chr(0x11DE0)}"),
+            ("CVSS Vector", "cvss_vector", f"CVSS:3.1/AV:{chr(0x088F)}"),
+        )
+        for label, key, invalid_value in cases:
+            with self.subTest(label=label):
+                page.get_by_role("textbox", name=label).fill(invalid_value)
+                setattr(candidate.vulnerabilities[0], key, invalid_value)
+                server_issue = finding_input_issues(candidate)[0]
+                browser_issue = page.get_by_role("textbox", name=label).evaluate("input => input.validationMessage")
+                setattr(candidate.vulnerabilities[0], key, valid_values[key])
+                self.assertEqual(
+                    browser_issue,
+                    server_issue,
+                )
+
+    def test_invalid_cvss_blocks_generation_until_corrected(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.segment = "Asia"
+        finding.cvss_score = "9.8"
+        finding.cvss_vector = "CVSS:3.1/AV:N"
+        main.provision_report(report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector('#issue-count[data-state="ready"]')
+        score = page.get_by_role("textbox", name="CVSS Score")
+        score.fill("9.8a")
+        page.wait_for_selector('#issue-count[data-state="issues"]', timeout=5_000)
+        self.assertFalse(page.get_by_role("button", name="Generate Report").is_enabled())
+        score.fill("9.8")
+        page.wait_for_selector('#issue-count[data-state="ready"]')
+        self.assertTrue(page.get_by_role("button", name="Generate Report").is_enabled())
 
     def test_browser_findings_gate_matches_server_finding_completeness(self) -> None:
         """The sibling of the readiness contract test, for the rules it cannot see.

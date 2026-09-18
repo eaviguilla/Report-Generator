@@ -44,9 +44,10 @@ SECTION_HEADINGS = (
     ("In Conclusion:", "in_conclusion"),
 )
 # Printed by the finding template, never typed by the tester.
+SEVERITY_TICKET_LABEL = "Severity Review Ticket (if applicable):"
 BOILERPLATE = {
     "The following demonstrates the vulnerability:",
-    "Severity Review Ticket (if applicable):",
+    SEVERITY_TICKET_LABEL,
 }
 STATUS_BY_LABEL = {
     "Open (New)": "open_new",
@@ -72,6 +73,36 @@ def _clean(value: str) -> str:
     """Map the document's placeholder for "nothing here" back to nothing."""
     text = " ".join(value.split())
     return "" if text == "N/A" else text
+
+
+# Whatever a previous report wrote: prefixed or bare, one per line or comma-separated on one.
+TICKET_SEPARATORS = re.compile(r"[\r\n,;]+")
+TICKET_PREFIX = re.compile(r"^[A-Za-z]+-")
+def _valid_cvss_score(value: str) -> bool:
+    """Twin of the save rule: decimal digits and periods only."""
+    return bool(value) and all(character.isdecimal() or character == "." for character in value)
+
+
+def _valid_cvss_vector(value: str) -> bool:
+    """Twin of the save rule: letters, decimal digits, periods, slashes and colons only."""
+    return bool(value) and all(character.isalpha() or character.isdecimal() or character in "./:" for character in value)
+
+
+def _ticket_lines(text: str) -> str:
+    """Normalise a printed ticket list back to the bare digits the draft stores.
+
+    A piece that is not wholly digits once its key is removed is dropped rather than mined for the
+    digits inside it: "GRIMPEN-3523 (closed 2024)" must not yield 2024 as a second ticket, because a
+    fabricated reference reads as plausibly as a real one and nothing downstream would catch it.
+    """
+    tickets = []
+    for piece in TICKET_SEPARATORS.split(text):
+        candidate = TICKET_PREFIX.sub("", _clean(piece))
+        # isdecimal, not isdigit: the twin of the save rule's allow_numbers, so no value survives
+        # here that would 422 on the next save.
+        if candidate.isdecimal():
+            tickets.append(candidate)
+    return "\n".join(tickets)
 
 
 def numbering_formats(document) -> dict[str, str]:
@@ -428,6 +459,9 @@ def _findings(document, formats, targets, non_production_label, evidence):
     # Nothing stops two findings sharing a title, so each heading claims the next unclaimed row of
     # that name. Keying the summary by title instead would give both the same finding number.
     unclaimed = list(summary_rows)
+    # Absent from three of the four templates, so a missing table is normal and never an error.
+    cvss_table = _find_table(document, "Section")
+    unclaimed_cvss = list(cvss_table.rows[1:]) if cvss_table is not None else []
     findings, dropped, rewritten = [], [], []
     for position, (index, title) in enumerate(starts):
         stop = len(body)
@@ -446,22 +480,49 @@ def _findings(document, formats, targets, non_production_label, evidence):
         if row is None:
             continue
         unclaimed.remove(row)
+        # Claimed before the Resolved drop, so a dropped finding consumes its own row rather than
+        # leaving it for the next title to match. Never by index: the table carries a row per
+        # rendered finding while this function omits every Resolved one.
+        cvss_row = next((candidate for candidate in unclaimed_cvss if _clean(candidate.cells[1].text) == title), None)
+        if cvss_row is not None:
+            unclaimed_cvss.remove(cvss_row)
         if row["status"] not in RETAINED_STATUSES:
             dropped.append(title)
             continue
+        cvss_score, cvss_vector = "", ""
+        if cvss_row is not None:
+            score, vector = _clean(cvss_row.cells[3].text), _clean(cvss_row.cells[4].text)
+            cvss_score = score if _valid_cvss_score(score) else ""
+            cvss_vector = vector if _valid_cvss_vector(vector) else ""
 
         detail = None
         sections: dict[str, list] = {}
         current = None
+        tickets = ""
+        awaiting_tickets = False
         for element in body[index + 1:stop]:
             if element.tag == qn("w:tbl") and detail is None and current is None:
                 detail = next(table for table in document.tables if table._tbl is element)
                 continue
             if element.tag == qn("w:p"):
-                found = section_of(Paragraph(element, document).text)
+                paragraph = Paragraph(element, document)
+                found = section_of(paragraph.text)
                 if found:
                     current = found
+                    awaiting_tickets = False
                     sections.setdefault(current, [])
+                    continue
+                # The label and its value both stop here, or they reach in_conclusion as fragments.
+                if " ".join(paragraph.text.split()) == SEVERITY_TICKET_LABEL:
+                    awaiting_tickets = True
+                    continue
+                if awaiting_tickets:
+                    # runs_of, not paragraph.text: the value's lines are w:br, which text drops.
+                    value = "".join(run["text"] for run in runs_of(paragraph))
+                    if not value.strip():
+                        continue
+                    tickets = _ticket_lines(value)
+                    awaiting_tickets = False
                     continue
             if current is not None:
                 sections[current].append(element)
@@ -488,6 +549,9 @@ def _findings(document, formats, targets, non_production_label, evidence):
             "likelihood": row["likelihood"], "impact": row["impact"], "severity": row["severity"],
             "status": "open_previously_discovered",
             "scope": scope,
+            "severity_review_tickets": tickets,
+            "cvss_score": cvss_score,
+            "cvss_vector": cvss_vector,
             "contents": contents,
         })
     return findings, dropped, rewritten

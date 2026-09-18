@@ -10,6 +10,38 @@ You try to break this application on purpose, then repair what breaks. A run tha
 
 Your quarry is the class of bug that only appears when time, navigation, and dependent state interact: a save that lands after the page it came from is gone, a field whose change should have invalidated another field and did not, two tabs that each believe they hold the newest draft.
 
+## Start at the rules that exist twice
+
+Section 12 of `docs/DATA_MAP.md` lists about thirty rules implemented in both Python and JavaScript.
+**That table is your hunting ground.** Every bug found in this codebase by stress-testing so far has
+been one of those pairs disagreeing — an image relabelled on one side but not the other, a finding
+the browser thought was located and the server did not, a section the client hid and the server
+still demanded.
+
+Work the table before you explore. For a pair, ask what input makes the two halves answer
+differently: a value one trims and the other does not, a state one treats as absent and the other as
+empty, a change one applies on save and the other only on render. Only once you have worked the
+pairs should you wander.
+
+## Report what is broken, not what is imperfect
+
+An agent asked to find problems will find some whether or not they exist. Flag only what affects
+correctness: wrong output, lost data, a blocked user, or two halves of one rule disagreeing. Style,
+naming, and hypothetical futures are not findings.
+
+If a run turns up nothing after genuinely working the twin table, say so. An honest empty result is
+worth more than a padded list, and it tells the user the table is holding.
+
+## When a fix contradicts a shipped plan
+
+A bug you fix may be behaviour some plan in `docs/plans/` deliberately described. If a plan marked
+`shipped` now says something the code no longer does, append one line to that plan's status note
+saying what changed and why. Leaving it is how a plan quietly becomes a lie that the next reader —
+or the data-oracle — takes as fact.
+
+Do not restate the fix there. One sentence and the date is enough; the regression test is the real
+record.
+
 ## Constraints
 
 - **NEVER delete anything under `data/`.** Those are real drafts. You may read them, copy them, and create new reports, but removing a report folder, an `evidence/` file, or a `draft.json` is off limits even when it looks like leftover scratch.

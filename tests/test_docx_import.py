@@ -20,8 +20,9 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import main
-from app.docx_import import ReportImportError, classify_paragraph, numbering_formats, parse_report_docx
-from app.docx_report import generation_issues, render_report_docx
+from app.docx_import import ReportImportError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
+from app.docx_report import generation_issues, main_template_path, render_report_docx
+from app.report_service import finding_input_issues
 from app.workspace import Workspace
 from app.models import (
     CodeFragment,
@@ -98,6 +99,119 @@ class FragmentRecognitionTests(unittest.TestCase):
 
     def _rendered(self, folder: Path):
         return Document(BytesIO(render_report_docx(self._report(folder), TEMPLATE, folder)))
+
+    def _retest_report(self, folder: Path, tickets: str = "") -> Report:
+        """Generation-clean and previously discovered, so it renders ``retest_finding.docx``.
+
+        The shared fixture is ``open_new``, which renders ``new_finding.docx`` and carries no ticket
+        paragraph at all, so nothing already here can reach this."""
+        report = self._report(folder)
+        finding = report.vulnerabilities[0]
+        finding.status = "open_previously_discovered"
+        finding.severity_review_tickets = tickets
+        finding.contents.append(Content(type="previous_proof_of_concept", fragments=[
+            ListFragment(frag_id="f_prev", type="numbered_list", items=[ListItem(runs=[Run(text="Last year's step.")])]),
+        ]))
+        finding.contents.append(Content(type="in_conclusion", fragments=[
+            ParagraphFragment(frag_id="f_conc", type="paragraph", runs=[Run(text="Still reachable on retest.")]),
+        ]))
+        return report
+
+    def test_severity_review_tickets_survive_a_round_trip(self) -> None:
+        """Rendered with the prefix, read back without it. Asserting either half alone would pass
+        while the two disagreed, which is the only failure worth catching here."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._retest_report(folder, tickets="1234\n5678\n90123")
+            self.assertEqual(generation_issues(report), [])
+            document = render_report_docx(report, TEMPLATE, folder)
+            self.assertIn("GRIMPEN-1234", "\n".join(item.text for item in Document(BytesIO(document)).paragraphs))
+
+            payload, _evidence, _summary = parse_report_docx(document)
+            self.assertEqual(payload["vulnerabilities"][0]["severity_review_tickets"], "1234\n5678\n90123")
+
+    def test_an_empty_ticket_value_prints_n_a_and_imports_as_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            document = render_report_docx(self._retest_report(folder), TEMPLATE, folder)
+            payload, _evidence, _summary = parse_report_docx(document)
+            self.assertEqual(payload["vulnerabilities"][0]["severity_review_tickets"], "")
+            # The label is the template's, not a fragment the tester wrote.
+            conclusion = next(content for content in payload["vulnerabilities"][0]["contents"] if content["type"] == "in_conclusion")
+            self.assertEqual(conclusion["fragments"], [])
+
+    def test_ticket_formats_from_older_reports_normalise_to_bare_digits(self) -> None:
+        """Liberal in what it accepts, strict in what survives. The last case is the point: mining
+        digits out of surrounding text would invent 2024 as a ticket, and a fabricated reference in
+        a delivered report reads exactly as plausibly as a real one."""
+        for printed, expected in (
+            ("GRIMPEN-1234\nGRIMPEN-5678", "1234\n5678"),
+            ("3454, 3453, 2323", "3454\n3453\n2323"),
+            ("GRIMPEN-1234; 5678", "1234\n5678"),
+            ("3523", "3523"),
+            ("OLDKEY-3523", "3523"),
+            ("  3523  ", "3523"),
+            ("GRIMPEN-3523 (closed 2024)", ""),
+            ("N/A", ""),
+            ("", ""),
+        ):
+            with self.subTest(printed=printed):
+                self.assertEqual(_ticket_lines(printed), expected)
+
+    def test_cvss_values_are_read_back_from_the_row_that_names_the_finding(self) -> None:
+        """The table carries a row per rendered finding while the importer drops every Resolved one,
+        so a Resolved finding first in the document is what proves the match is not positional."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._retest_report(folder)
+            report.engagement.segment = "Asia"
+            retained = report.vulnerabilities[0]
+            retained.severity = retained.likelihood = retained.impact = "low"
+            retained.cvss_score, retained.cvss_vector = "3.1", "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"
+            resolved = copy.deepcopy(retained)
+            resolved.uid, resolved.display_id, resolved.title = "v_done", "002", "Fixed last year"
+            resolved.status = "resolved"
+            resolved.severity = resolved.likelihood = resolved.impact = "critical"
+            resolved.cvss_score, resolved.cvss_vector = "9.8", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+            # Critical sorts above low, so the dropped finding owns the first row of the table.
+            report.vulnerabilities = [retained, resolved]
+            resources = Path(__file__).resolve().parent.parent / "resources"
+            document = render_report_docx(report, main_template_path(report, resources), folder, allow_incomplete=True)
+
+            payload, _evidence, summary = parse_report_docx(document)
+            imported = payload["vulnerabilities"]
+            self.assertEqual([finding["title"] for finding in imported], ["Authorization bypass"])
+            self.assertEqual(imported[0]["cvss_score"], "3.1", "the dropped finding's row was taken by position")
+            self.assertEqual(imported[0]["cvss_vector"], "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N")
+            self.assertIn("Fixed last year", summary["dropped_resolved"])
+
+    def test_cvss_round_trip_preserves_every_value_save_validation_accepts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._retest_report(folder)
+            report.engagement.segment = "Asia"
+            finding = report.vulnerabilities[0]
+            finding.cvss_score = "٩.٨"
+            finding.cvss_vector = "CVSS:3.1/AV:Ν"
+            self.assertEqual(finding_input_issues(report), [])
+
+            resources = Path(__file__).resolve().parent.parent / "resources"
+            document = render_report_docx(report, main_template_path(report, resources), folder)
+            payload, _evidence, _summary = parse_report_docx(document)
+            imported = payload["vulnerabilities"][0]
+            self.assertEqual(
+                (imported["cvss_score"], imported["cvss_vector"]),
+                (finding.cvss_score, finding.cvss_vector),
+            )
+
+    def test_a_template_without_the_section_table_imports_with_the_fields_empty(self) -> None:
+        """Three of the four templates have no such table, so its absence is normal and never raises."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            document = render_report_docx(self._retest_report(folder), TEMPLATE, folder)
+            payload, _evidence, _summary = parse_report_docx(document)
+            finding = payload["vulnerabilities"][0]
+            self.assertEqual((finding["cvss_score"], finding["cvss_vector"]), ("", ""))
 
     def _non_production_report(self, folder: Path, label: str) -> Report:
         """The production fixture never prints a non-production heading, so it cannot catch a

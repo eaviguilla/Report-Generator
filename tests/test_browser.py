@@ -455,6 +455,22 @@ class BrowserWorkflowTests(unittest.TestCase):
         next_button.press("Enter")
         page.wait_for_url(f"**/reports/{report_id}/findings")
 
+    def test_network_access_defaults_to_internal_and_persists_external(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        network = page.get_by_label("Network Access")
+
+        # No blank option: the value can never be empty, so there is no state the model rejects.
+        self.assertEqual(network.locator("option").all_text_contents(), ["Internal", "External"])
+        self.assertEqual(network.input_value(), "Internal")
+
+        network.select_option("External")
+        page.get_by_role("button", name="Save").click()
+        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        page.reload()
+
+        self.assertEqual(page.get_by_label("Network Access").input_value(), "External")
+
     def test_segment_and_report_type_are_required(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")

@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import main
-from app.docx_import import ReportImportError, ReportImportLimitError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
+from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import RESOLVED_REMEDIATION, finding_input_issues
 from app.workspace import Workspace
@@ -154,6 +154,21 @@ class FragmentRecognitionTests(unittest.TestCase):
             "summary": summary,
         }
 
+    def test_both_import_modes_default_network_and_say_so(self) -> None:
+        """Retest is the default mode, so warning only on the editable path would leave the
+        commoner one silent about a value it quietly defaulted."""
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                data = render_report_docx(self._report(folder), TEMPLATE, folder)
+
+                payload, _evidence, summary = parse_report_docx(data, mode=mode)
+
+                self.assertEqual(Report.model_validate(payload).engagement.network, "Internal")
+                self.assertIn(NETWORK_IMPORT_WARNING, summary["warnings"])
+                self.assertNotIn("network", payload["engagement"])
+                self.assertNotIn("network access", summary.get("restored_engagement", []))
+
     def test_severity_review_tickets_survive_a_round_trip(self) -> None:
         """Rendered with the prefix, read back without it. Asserting either half alone would pass
         while the two disagreed, which is the only failure worth catching here."""
@@ -178,6 +193,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual(projection["engagement"], {
                 "app_name": "Northstar Banking", "app_owner": "", "ci_number": "", "bsn_number": "",
                 "segment": "JH", "report_type": None, "report_date": None, "tester": "",
+                "network": "Internal",
                 "tested_environments": ["production"], "tested_channels": ["web"],
                 "non_production_label": "NON-PROD", "start_date": None, "end_date": None,
                 "test_windows": {}, "test_accounts": [{"user_role": "N/A", "username": "N/A"}],
@@ -204,6 +220,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual(len(projection["evidence"]), 1)
             self.assertEqual(projection["summary"], {
                 "retained": 1, "dropped_resolved": [], "statuses_rewritten": ["Authorization bypass"],
+                "warnings": [NETWORK_IMPORT_WARNING],
             })
 
     def test_retest_mode_and_omitted_mode_are_equivalent(self) -> None:

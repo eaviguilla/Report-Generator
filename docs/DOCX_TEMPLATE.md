@@ -61,6 +61,24 @@ are rendered by `_render_component_fragment`.
 | `tester-name` | Tester |
 | `prod-start`, `prod-end`, `prod-time` | Production test window |
 | `non-prod-start`, `non-prod-end`, `non-prod-time` | Non-Production test window |
+| `network` | `Internal` or `External`, from `Engagement.network` |
+
+**`{{network}}` is registered ahead of the templates, and is braced-only.** `_metadata` supplies it
+today, but none of the four shipped templates contains the token yet: each cover page still carries
+the literal word `Internal` as static prose. `_replace_metadata` no-ops on an absent token, so
+generation is byte-identical until the templates are edited — and until then **every** cover prints
+`Internal` whatever the tester chose. That gap was accepted deliberately; see
+`docs/plans/setup-network-access.md`.
+
+It is deliberately **not** in `PLAIN_METADATA_TOKENS`. That set matches bare, unbraced text, and the
+lowercase word `network` already appears three times in body prose ("…must reside on the same
+network…"), so a plain token would rewrite a sentence in every report. For the same reason nothing
+find-and-replaces the literal `Internal`: it occurs three times per template — twice on the cover and
+once as a column header in the Remediation Timelines table, beside `External` — so a document-wide
+replacement would rewrite that policy row to `External | External`.
+
+When the templates are updated, the edit is **8 cells, not 4**: the cover block occurs twice in every
+template (paragraphs 10-13 and 18-21 in `MAIN.docx`).
 
 Tokens may be wrapped in `{{...}}` or appear as plain text where the template
 already uses that form. Split Word runs are supported.

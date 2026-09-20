@@ -1,11 +1,11 @@
 ---
-description: "Plan a change with both specialists. Runs loremaster and tactician over a shared handoff file so the plan is checked against how data actually works before any code is written."
+description: "Plan a change with the specialists it needs. Runs loremaster and tactician over a shared handoff file, and scribe too when the change reaches the Word pipeline, so the plan is checked against how things actually work before any code is written."
 argument-hint: "What you want to build or change"
 agent: "agent"
 tools: [read, edit, search, agent, todo]
 ---
 
-Coordinate the `loremaster` and `tactician` agents over a shared file so each one sees the other's work before the plan is final.
+Coordinate the `loremaster` and `tactician` agents over a shared file so each one sees the other's work before the plan is final. Bring in `scribe` as well when the change reaches the Word document.
 
 Subagents cannot message each other directly; each runs once and returns a single report. You are the messenger. The handoff file is what gives them a common memory, and the round trip below is what makes the exchange real rather than two opinions stapled together.
 
@@ -41,6 +41,32 @@ you start and say which you picked and why:
 When in doubt, start at medium. Escalating after round 1 costs one extra call; running four calls on
 a one-line change wastes all of them.
 
+## Bring in the scribe when the change reaches the document
+
+Size is one axis. Whether the change touches the Word pipeline is the other, and it is independent:
+a one-field change can be entirely a document change, and a large data change can never go near it.
+
+**Add a `scribe` call to round 1 when the change alters what the finished document contains, how it
+is laid out, or how a finished document is read back into a draft.** Skip it otherwise. The
+question to ask yourself is not "is this big" but "does anything here end up in the `.docx`".
+
+The pipeline is around three thousand lines of Word XML handling plus a stage that only runs on
+Windows, and `loremaster` is explicitly told not to cover it. Without `scribe` the planner plans
+against a pipeline nobody has read. What that has actually bought, in one change:
+
+- the hardest requirement in the request **did not exist** — the token the value had to fill owned
+  its own paragraph rather than sitting mid-sentence, so no inline trickery was needed
+- a shared helper **flattens line breaks**, which would have silently joined three values onto one
+  line and passed every text assertion
+- a value containing `{{` and `}}` **aborts generation**, a risk nobody had asked about
+- one of the new values was **per finding, not per report**, which decided where it lived on the model
+
+None of that was reachable from the data layer, and all of it changed the plan.
+
+If an answer from the user later moves work into the pipeline that was not there at round 1 — an
+import round trip, a new template — call `scribe` again for round 2 under its own heading, rather
+than letting the planner guess.
+
 ## The handoff file
 
 Create `docs/plans/<slug>.md`, where `<slug>` is a short kebab-case name for the change. Create `docs/plans/` if it does not exist. This file is the shared workspace for the whole exchange. Do not summarise it in chat instead of writing it; later rounds read it.
@@ -56,6 +82,7 @@ Structure, in order:
 <the user's ask, verbatim>
 
 ## Round 1 - Oracle: how it works today
+## Round 1 - Scribe: the document side   <- only when the change reaches the .docx
 ## Round 1 - Planner: proposal and open questions
 ## Round 2 - Oracle: verdict on the proposal
 ## Round 2 - Planner: revised plan
@@ -85,7 +112,9 @@ solution than the one agreed. The deviations are the part worth reading later:
 
 **Round 1a. Ask the oracle what exists.** Invoke `loremaster`. Give it the request, the handoff file path, and the heading *Round 1 - Oracle*, and tell it to write its report there itself. Ask specifically: which parts of the data layer this touches, the invariants that constrain it, what the existing drafts on disk look like in this area, and which of the involved rules exist in both Python and JavaScript.
 
-**Round 1b. Ask the planner to propose.** Invoke `tactician`. Point it at the handoff file and tell it to read *Round 1 - Oracle* for itself, treating those findings as established fact and not re-deriving them. It writes its proposal under *Round 1 - Planner*. Do not paste the oracle's report into the prompt — the file is right there, and copying it is the cost this design exists to avoid.
+**Round 1s. Ask the scribe about the document, if the change reaches it.** Invoke `scribe` with the heading *Round 1 - Scribe*. Scope it to the pipeline only and tell it not to repeat what the oracle covered: which template or component carries the affected text, what the token replacement actually does with the value, whether the document can even express what the request asks for, and what a finished document gives back on import. Run it **after** the oracle and **before** the planner, so both reports are on the file when the planner reads it. Sequentially, not in parallel — two agents writing one file can lose each other's section.
+
+**Round 1b. Ask the planner to propose.** Invoke `tactician`. Point it at the handoff file and tell it to read *Round 1 - Oracle*, and *Round 1 - Scribe* where it exists, for itself, treating those findings as established fact and not re-deriving them. It writes its proposal under *Round 1 - Planner*. Do not paste either report into the prompt — the file is right there, and copying it is the cost this design exists to avoid.
 
 **Decide whether round 2 is needed.** Read what the planner wrote. Run round 2 when the change is large, when the risk table has a `RISK` row, or when the planner contradicts the oracle. Otherwise record in the file that round 2 was skipped and why, and go straight to the questions.
 

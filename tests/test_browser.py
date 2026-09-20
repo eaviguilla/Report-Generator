@@ -3818,6 +3818,62 @@ class BrowserWorkflowTests(unittest.TestCase):
                 self.assertEqual(block.count(), 1, "the section is missing while a field applies")
                 self.assertEqual(block.locator(".fragment-head .tag").all_text_contents(), expected)
 
+    def test_additional_information_pairs_its_fields_two_to_a_row(self) -> None:
+        """Which of the three fields exist depends on the segment and the status, so the odd one out
+        takes the whole row rather than leaving a half-empty column beside it."""
+        measure = """() => {
+          const cards = [...document.querySelectorAll('[data-content-type="additional_information"] .fragment')];
+          const rows = new Map();
+          for (const card of cards) {
+            const top = Math.round(card.getBoundingClientRect().top);
+            const key = [...rows.keys()].find(value => Math.abs(value - top) < 4) ?? top;
+            rows.set(key, [...(rows.get(key) || []), card.querySelector(".fragment-head .tag").textContent]);
+          }
+          return [...rows.entries()].sort((left, right) => left[0] - right[0]).map(entry => entry[1]);
+        }"""
+        cases = [
+            ("JH", "open_previously_discovered", [["Severity Review Tickets"]]),
+            ("Asia", "open_new", [["CVSS Score", "CVSS Vector"]]),
+            ("Asia", "open_previously_discovered", [["Severity Review Tickets", "CVSS Score"], ["CVSS Vector"]]),
+        ]
+        page = self.page
+        page.set_viewport_size({"width": 1440, "height": 900})
+        for segment, status, expected in cases:
+            with self.subTest(segment=segment, status=status):
+                report_id = self.ready_report(include_finding=True)
+                report, finding = self._complete_finding(report_id)
+                report.engagement.segment = segment
+                finding.status = status
+                main.provision_report(report)
+                main.workspace.save(report)
+
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.wait_for_selector('[data-content-type="additional_information"] .fragment')
+                # Grouped by the top edge each card lands on, so this reads the layout rather than
+                # the class names that were meant to produce it.
+                self.assertEqual(page.evaluate(measure), expected)
+
+        # A textarea opens at two rows and nothing else in the row does, so the tickets box would
+        # stand 16px taller than the field beside it.
+        heights = page.evaluate(
+            """() => Object.fromEntries([...document.querySelectorAll('[data-content-type="additional_information"] .fragment')]
+                 .map(card => [card.querySelector(".tag").textContent,
+                               Math.round(card.querySelector(".additional-input").getBoundingClientRect().height)]))"""
+        )
+        self.assertEqual(
+            heights["Severity Review Tickets"], heights["CVSS Score"],
+            f"the boxes sharing a row are different heights: {heights}",
+        )
+
+        # Too narrow to carry two fields, so the pair stacks the way the content sections do.
+        page.set_viewport_size({"width": 700, "height": 900})
+        page.wait_for_timeout(200)
+        self.assertEqual(
+            page.evaluate(measure),
+            [["Severity Review Tickets"], ["CVSS Score"], ["CVSS Vector"]],
+            "the columns survived a pane too narrow to read them in",
+        )
+
     def test_a_typed_cvss_value_survives_a_reload_and_a_trip_off_asia(self) -> None:
         """Keeping the value is the whole of the keep-and-hide rule: nothing clears it, so moving
         the segment away and back has to return it untouched."""

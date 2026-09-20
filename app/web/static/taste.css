@@ -556,7 +556,6 @@ input[data-path*="scope"],
 .finding-id-cell input,
 .finding-id-display,
 .finding-id-value,
-.fragment > textarea:not(.instance-title-input),
 .code-block,
 .report-name small,
 .finding-nav-meta,
@@ -3063,6 +3062,29 @@ button.finding-nav.active:not(:disabled)::after {
 
 .content-row > .content-block {
   margin-bottom: 0;
+}
+
+/* Which of the three fields exist depends on the segment and the status, so the odd one out takes
+   the whole measure rather than sitting in a half-empty column. */
+.additional-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* The cards space themselves when stacked; inside the grid the gap owns that, or rows drift apart. */
+.additional-grid > .fragment {
+  margin-bottom: 0;
+}
+
+.additional-grid > .fragment:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+@container editor-pane (max-width: 900px) {
+  .additional-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .content-block {

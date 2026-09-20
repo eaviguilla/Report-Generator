@@ -30,6 +30,7 @@ instead of them.
 - DO NOT plan past an ambiguity. If a decision changes the data shape, stop and ask.
 - DO NOT accept a requirement that would silently discard user work. Say so and offer the alternative.
 - DO NOT duplicate the `loremaster` agent's job. When you need a fact about how data flows today, consult `docs/DATA_MAP.md`, and verify in source only where your plan depends on it.
+- DO NOT guess at the Word pipeline. It is the `scribe` agent's ground, and guessing there is cheap to do and expensive to be wrong about. Consult `docs/DOCX_TEMPLATE.md`, use the *Round 1 - Scribe* section when the handoff file has one, and say plainly that the document side is unexamined when it does not.
 
 ## Approach
 

@@ -49,7 +49,7 @@
   const row = report => {
     const reportId = escapeHtml(report.report_id);
     const reportUrlId = encodeURIComponent(report.report_id);
-    return `<article class="report-row"><a class="report-name" href="/reports/${reportUrlId}/setup"><b>${escapeHtml(report.app_name)}</b><small>${reportId}</small></a><time datetime="${escapeHtml(report.saved_at)}">${formatDate(report.saved_at)}</time><span class="report-findings">${report.finding_count}</span><div class="report-actions"><button type="button" data-rename="${reportId}" data-name="${escapeHtml(report.app_name)}" aria-label="Rename" title="Rename application">${actionIcon("rename")}</button><button type="button" data-duplicate="${reportId}" aria-label="Duplicate" title="Duplicate report">${actionIcon("duplicate")}</button><a href="/reports/${reportUrlId}/export" aria-label="Export" title="Export ZIP">${actionIcon("export")}</a><button class="report-delete" type="button" data-delete="${reportId}" aria-label="Delete" title="Delete report">${actionIcon("delete")}</button></div></article>`;
+    return `<article class="report-row" data-report-id="${reportId}"><a class="report-name" href="/reports/${reportUrlId}/setup"><b>${escapeHtml(report.app_name)}</b><small>${reportId}</small></a><time datetime="${escapeHtml(report.saved_at)}">${formatDate(report.saved_at)}</time><span class="report-findings">${report.finding_count}</span><div class="report-actions"><button type="button" data-rename="${reportId}" data-name="${escapeHtml(report.app_name)}" aria-label="Rename" title="Rename application">${actionIcon("rename")}</button><button type="button" data-duplicate="${reportId}" aria-label="Duplicate" title="Duplicate report">${actionIcon("duplicate")}</button><a href="/reports/${reportUrlId}/export" aria-label="Export" title="Export ZIP">${actionIcon("export")}</a><button class="report-delete" type="button" data-delete="${reportId}" aria-label="Delete" title="Delete report">${actionIcon("delete")}</button></div></article>`;
   };
   const load = async () => {
     const [response, legacyResponse] = await Promise.all([fetch("/reports"), fetch("/reports/legacy")]);
@@ -144,18 +144,92 @@
     });
   };
   const escapeHtml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const uploadImport = async (file, mode) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("docx_mode", mode);
+    const response = await fetch("/reports/import", {method:"POST", body:form});
+    if (!response.ok) throw await responseError(response, "import_report", "Import failed");
+    return response.json();
+  };
+  const revealImportedReport = async reportId => {
+    appSearch.value = "";
+    await load();
+    const importedRow = [...rows.querySelectorAll(".report-row")].find(item => item.dataset.reportId === reportId);
+    if (!importedRow) return;
+    const group = importedRow.closest(".app-group");
+    group.open = true;
+    openAppFolders.add(group.dataset.appName);
+    importedRow.scrollIntoView({block:"center"});
+    importedRow.querySelector(".report-name").focus();
+  };
   importInput.onchange = async () => {
     const file = importInput.files?.[0];
     if (!file) return;
-    const form = new FormData();
-    form.append("file", file);
-    setStatus("Importing...");
+    setStatus("Checking import...");
     try {
-      const response = await fetch("/reports/import", {method:"POST", body:form});
-      if (!response.ok) throw await responseError(response, "import_report", "Import failed");
-      const {report_id: reportId} = await response.json();
+      let result = await uploadImport(file, "prompt");
+      if (result.mode_required) {
+        const mode = await window.vrDialog.ask({
+          title: "Import report DOCX",
+          message: "Choose whether to restore the visible report as an editable copy or start a retest from its open findings.",
+          actions: [
+            {key:"editable", label:"Import as editable draft", tone:"primary"},
+            {key:"retest", label:"Import as retest draft", tone:"subtle"},
+            {key:"cancel", label:"Cancel", cancel:true},
+          ],
+        });
+        if (mode === "cancel") {
+          setStatus("Import cancelled.");
+          return;
+        }
+        setStatus("Importing...");
+        result = await uploadImport(file, mode);
+      }
       diagnostics.clear();
-      location.href = `/reports/${reportId}/setup`;
+      if (result.source !== "docx") {
+        location.href = `/reports/${result.report_id}/setup`;
+        return;
+      }
+      const summary = result.summary || {};
+      const notices = [];
+      if (result.mode === "retest") {
+        const rewritten = summary.statuses_rewritten || [];
+        const dropped = summary.dropped_resolved || [];
+        if (rewritten.length) {
+          notices.push(`${rewritten.length} Open New finding${rewritten.length === 1 ? " was" : "s were"} changed to Previously Discovered for retesting: ${rewritten.join(", ")}.`);
+        }
+        if (dropped.length) {
+          notices.push(`${dropped.length} Resolved finding${dropped.length === 1 ? " was" : "s were"} not included: ${dropped.join(", ")}.`);
+        }
+      }
+      notices.push(...(summary.warnings || []), ...(summary.normalizations || []));
+      const findingCount = summary.retained ?? 0;
+      const labels = {open_new:"Open New", open_previously_discovered:"Previously Discovered", resolved:"Resolved"};
+      const statusCounts = Object.entries(summary.status_counts || {})
+        .filter(([, count]) => count)
+        .map(([key, count]) => `${count} ${labels[key] || key}`)
+        .join(", ");
+      const details = [
+        `${findingCount} finding${findingCount === 1 ? "" : "s"}`,
+        statusCounts,
+        summary.evidence_imported != null ? `${summary.evidence_imported} evidence image${summary.evidence_imported === 1 ? "" : "s"}` : "",
+      ].filter(Boolean).join(" · ");
+      const action = await window.vrDialog.ask({
+        title: `Imported as ${result.mode === "editable" ? "editable" : "retest"} draft`,
+        message: `${details}. Review the draft in Setup before continuing.`,
+        list: notices,
+        actions: [
+          {key:"open", label:"Open Setup", tone:"primary"},
+          {key:"stay", label:"Stay on reports", cancel:true},
+        ],
+      });
+      if (action === "open") {
+        location.href = `/reports/${result.report_id}/setup`;
+      } else {
+        await revealImportedReport(result.report_id);
+        setStatus("Report imported.");
+      }
     } catch (error) {
       showError(error, "import_report", "Select a valid VulnReport ZIP or JSON export, or a report DOCX");
     }

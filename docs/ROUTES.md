@@ -45,7 +45,7 @@ same change.
 | GET | `/reports/{id}/export` | Download a ZIP containing draft JSON and evidence |
 | GET | `/reports/{id}/generate` | Render and download a completed DOCX report |
 | POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder |
-| POST | `/reports/import` | Validate/import a ZIP or evidence-free legacy JSON with a new report ID |
+| POST | `/reports/import` | Classify and import a ZIP, evidence-free legacy JSON, or generated DOCX with a new report ID |
 | GET | `/library/search?q=` | Search the offline vulnerability library |
 | POST | `/reports/{id}/library/{library_id}` | Insert a library finding, with the proof-of-concept steps matching the finding's app types |
 | POST | `/reports/{id}/evidence` | Validate, normalize, and store an image |
@@ -60,6 +60,30 @@ composes severity-title, finding-type, and fragment documents. A template
 without an exact `{{findings}}` anchor paragraph is rejected; there is no second
 renderer. The route rejects incomplete content or missing environment evidence
 with `422`.
+
+### Report import protocol
+
+`POST /reports/import` always receives `file` and may receive multipart
+`docx_mode=prompt|editable|retest`. Classification is based on bytes, not the
+filename or MIME type. `prompt` returns `{source: "docx", mode_required: true}`
+without creating a report when the bytes are a generated DOCX; ZIP/JSON bytes
+import immediately. Omitting the field preserves the legacy retest behavior.
+Supplying `editable` or `retest` for non-DOCX bytes, or any unknown token,
+returns `422`.
+
+Retest rewrites retained findings to Previously Discovered, promotes the source
+Proof of Concept to Previous Proof of Concept, seeds a fresh proof, and reports
+rewritten/dropped findings. Editable retains all known statuses and printed
+sections. Before its one `Workspace.import_report` call, the route validates,
+reconciles seeded Setup scope, applies save validators, provisions in memory,
+and proves a second provision pass is stable. Parser resource-limit failures
+return `413`; malformed or lossy imports return `422` before persistence.
+
+Successful DOCX responses add `source: "docx"`, the selected `mode`, and a
+mode-specific `summary`; bundle responses retain `{report_id, source:
+"bundle"}`. Report-plus-evidence creation uses the existing rollback behavior:
+JSON is written before PNGs, and an evidence-write failure removes the new
+directory, but the sequence is not a cross-file transaction.
 
 ## Entry Gates
 
@@ -124,6 +148,9 @@ Run these after navigation or persistence changes:
    is silently orphaned.
 8. Verify a duplicate-fragment legacy draft appears in the manager with its
   concise reason and repair action.
-9. Export/import a report containing evidence; verify the PNG survives and a
-  tampered archive is rejected.
-10. Run `py -3 -m unittest discover -s tests -v`.
+9. Import a generated DOCX through both mode choices; verify the result summary
+   appears before navigation, editable content survives its first PUT, and
+   retest rewrites/drops are named.
+10. Export/import a report containing evidence; verify the PNG survives and a
+    tampered archive is rejected.
+11. Run `py -3 -m unittest discover -s tests -v`.

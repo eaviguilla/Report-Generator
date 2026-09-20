@@ -1780,6 +1780,29 @@ class ReportApiTests(unittest.TestCase):
         payload["report_id"] = "r_unioned"
         self.assertEqual(main.workspace.import_report(payload).engagement.tested_channels, ["mobile", "thick_client"])
 
+    def test_scope_text_from_targets_matches_the_setup_seed_shape(self) -> None:
+        targets = [
+            ScopeTarget(target_id="t_api", environment="production", channel="api", value="POST /v1/pay", order=1),
+            ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test", order=0),
+            ScopeTarget(target_id="t_mobile_2", environment="non_production", channel="mobile", value="Beta.ipa", description="Second build", order=1),
+            ScopeTarget(target_id="t_mobile_1", environment="non_production", channel="mobile", value="Alpha.ipa", description="First build", order=0),
+        ]
+
+        self.assertEqual(report_service.scope_text_from_targets(targets), {
+            "production": {
+                "web": "https://prod.example.test",
+                "api": "POST /v1/pay",
+                "mobile": {"component": "", "description": ""},
+                "thick_client": {"component": "", "description": ""},
+            },
+            "non_production": {
+                "web": "",
+                "api": "",
+                "mobile": {"component": "Alpha.ipa\nBeta.ipa", "description": "First build\nSecond build"},
+                "thick_client": {"component": "", "description": ""},
+            },
+        })
+
     def test_a_component_without_a_description_blocks_setup_and_names_itself(self) -> None:
         """A blank description would reach the binaries table as an empty cell. Naming the component
         is the point: a tally cannot say which of ten rows is missing one."""

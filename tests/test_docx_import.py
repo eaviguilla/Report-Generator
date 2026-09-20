@@ -13,6 +13,7 @@ import unittest
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -20,9 +21,9 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import main
-from app.docx_import import ReportImportError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
+from app.docx_import import ReportImportError, ReportImportLimitError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import finding_input_issues
+from app.report_service import RESOLVED_REMEDIATION, finding_input_issues
 from app.workspace import Workspace
 from app.models import (
     CodeFragment,
@@ -40,6 +41,7 @@ from app.models import (
     Scope,
     ScopeTarget,
     TableFragment,
+    TestAccount,
     TestWindow,
     Vulnerability,
 )
@@ -117,6 +119,41 @@ class FragmentRecognitionTests(unittest.TestCase):
         ]))
         return report
 
+    @staticmethod
+    def _normalized_retest_projection(payload: dict, evidence: dict[str, bytes], summary: dict) -> dict:
+        report = Report.model_validate(payload)
+        target_indexes = {target.target_id: index for index, target in enumerate(report.scope_targets)}
+
+        def fragment_value(fragment) -> dict:
+            value = fragment.model_dump(mode="json", exclude={"frag_id", "evidence_id"}, exclude_none=True)
+            return value
+
+        return {
+            "engagement": report.engagement.model_dump(mode="json"),
+            "targets": [
+                target.model_dump(mode="json", exclude={"target_id"})
+                for target in report.scope_targets
+            ],
+            "findings": [{
+                "display_id": finding.display_id,
+                "title": finding.title,
+                "likelihood": finding.likelihood,
+                "impact": finding.impact,
+                "severity": finding.severity,
+                "status": finding.status,
+                "scope_targets": [target_indexes[target_id] for target_id in finding.scope.target_ids],
+                "tickets": finding.severity_review_tickets,
+                "cvss_score": finding.cvss_score,
+                "cvss_vector": finding.cvss_vector,
+                "contents": [
+                    {"type": content.type, "fragments": [fragment_value(fragment) for fragment in content.fragments]}
+                    for content in finding.contents
+                ],
+            } for finding in report.vulnerabilities],
+            "evidence": sorted((hashlib.sha256(data).hexdigest(), len(data)) for data in evidence.values()),
+            "summary": summary,
+        }
+
     def test_severity_review_tickets_survive_a_round_trip(self) -> None:
         """Rendered with the prefix, read back without it. Asserting either half alone would pass
         while the two disagreed, which is the only failure worth catching here."""
@@ -129,6 +166,86 @@ class FragmentRecognitionTests(unittest.TestCase):
 
             payload, _evidence, _summary = parse_report_docx(document)
             self.assertEqual(payload["vulnerabilities"][0]["severity_review_tickets"], "1234\n5678\n90123")
+
+    def test_retest_default_preserves_the_retest_projection_except_named_neutral_fixes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+
+            payload, evidence, summary = parse_report_docx(data)
+            projection = self._normalized_retest_projection(payload, evidence, summary)
+
+            self.assertEqual(projection["engagement"], {
+                "app_name": "Northstar Banking", "app_owner": "", "ci_number": "", "bsn_number": "",
+                "segment": "JH", "report_type": None, "report_date": None, "tester": "",
+                "tested_environments": ["production"], "tested_channels": ["web"],
+                "non_production_label": "NON-PROD", "start_date": None, "end_date": None,
+                "test_windows": {}, "test_accounts": [{"user_role": "N/A", "username": "N/A"}],
+                "limitations": "N/A", "classification": "Confidential", "template_set": "default-v1",
+            })
+            self.assertEqual(projection["targets"], [{
+                "environment": "production", "channel": "web",
+                "value": "https://prod.example.test", "description": "", "order": 0,
+            }])
+            finding = projection["findings"][0]
+            self.assertEqual(
+                {key: finding[key] for key in ("display_id", "title", "likelihood", "impact", "severity", "status", "scope_targets")},
+                {"display_id": "001", "title": "Authorization bypass", "likelihood": "high", "impact": "high",
+                 "severity": "high", "status": "open_previously_discovered", "scope_targets": [0]},
+            )
+            self.assertEqual([content["type"] for content in finding["contents"]], [
+                "description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion",
+            ])
+            self.assertEqual(
+                [fragment["type"] for fragment in finding["contents"][2]["fragments"]],
+                ["numbered_list", "instance_title", "code_block", "table", "image"],
+            )
+            self.assertEqual([fragment["type"] for fragment in finding["contents"][3]["fragments"]], ["numbered_list", "image"])
+            self.assertEqual(len(projection["evidence"]), 1)
+            self.assertEqual(projection["summary"], {
+                "retained": 1, "dropped_resolved": [], "statuses_rewritten": ["Authorization bypass"],
+            })
+
+    def test_retest_mode_and_omitted_mode_are_equivalent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+
+            implicit = parse_report_docx(data)
+            explicit = parse_report_docx(data, mode="retest")
+
+            self.assertEqual(
+                self._normalized_retest_projection(*implicit),
+                self._normalized_retest_projection(*explicit),
+            )
+
+    def test_duplicate_title_asia_rows_pair_by_occurrence(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            report.engagement.segment = "Asia"
+            first = report.vulnerabilities[0]
+            first.cvss_score = "3.1"
+            first.cvss_vector = "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"
+            second = copy.deepcopy(first)
+            second.uid = "v_duplicate"
+            second.display_id = "002"
+            second.cvss_score = "8.1"
+            second.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+            for content in second.contents:
+                for fragment in content.fragments:
+                    fragment.frag_id += "_duplicate"
+            report.vulnerabilities = [first, second]
+
+            payload, _evidence, _summary = parse_report_docx(
+                render_report_docx(report, main_template_path(report, resources), folder),
+            )
+
+            self.assertEqual(
+                [(finding["display_id"], finding["cvss_score"], finding["cvss_vector"]) for finding in payload["vulnerabilities"]],
+                [("001", first.cvss_score, first.cvss_vector), ("002", second.cvss_score, second.cvss_vector)],
+            )
 
     def test_an_empty_ticket_value_prints_n_a_and_imports_as_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -349,6 +466,469 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual(record["sha256"], hashlib.sha256(next(iter(evidence.values()))).hexdigest())
             Report.model_validate(payload)
 
+    def test_editable_mode_keeps_the_source_status_and_proof_role(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+
+            payload, evidence, _summary = parse_report_docx(data, mode="editable")
+
+            finding = payload["vulnerabilities"][0]
+            self.assertEqual(finding["status"], "open_new")
+            sections = {content["type"]: content["fragments"] for content in finding["contents"]}
+            self.assertNotIn("previous_proof_of_concept", sections)
+            self.assertEqual(
+                [fragment["type"] for fragment in sections["proof_of_concept"]],
+                ["numbered_list", "instance_title", "code_block", "table", "image"],
+            )
+            self.assertEqual(len(evidence), 1)
+            Report.model_validate(payload)
+
+    def test_editable_mode_restores_every_printed_engagement_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            report.engagement.app_owner = "Application Owner"
+            report.engagement.limitations = "No SMS access"
+            report.engagement.test_windows["production"].test_time = "22:00 EST"
+            report.engagement.test_accounts = [
+                TestAccount(user_role="Administrator", username="alice"),
+                TestAccount(user_role="Viewer", username="bob"),
+            ]
+
+            payload, _evidence, _summary = parse_report_docx(
+                render_report_docx(report, TEMPLATE, folder), mode="editable",
+            )
+
+            engagement = payload["engagement"]
+            self.assertEqual(engagement["app_name"], "Northstar Banking")
+            self.assertEqual(engagement["app_owner"], "Application Owner")
+            self.assertEqual(engagement["segment"], "JH")
+            self.assertEqual(engagement["report_type"], "annual_pentest")
+            self.assertEqual(engagement["report_date"], "2026-09-09")
+            self.assertEqual(engagement["tester"], "QA Tester")
+            self.assertEqual(engagement["test_windows"]["production"], {
+                "start_date": "2026-08-01", "end_date": "2026-08-02", "test_time": "22:00 EST",
+            })
+            self.assertEqual(engagement["test_accounts"], [
+                {"user_role": "Administrator", "username": "alice"},
+                {"user_role": "Viewer", "username": "bob"},
+            ])
+            self.assertEqual(engagement["limitations"], "No SMS access")
+            self.assertEqual((engagement.get("ci_number", ""), engagement.get("bsn_number", "")), ("", ""))
+            Report.model_validate(payload)
+
+    def test_editable_mode_preserves_visible_whitespace_in_user_fields(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            report.engagement.limitations = "No SMS access\nRead only after  17:00"
+            report.engagement.tested_channels = ["api", "thick_client"]
+            report.scope_targets = [
+                ScopeTarget(target_id="t_api", environment="production", channel="api", value="POST  /v1/pay"),
+                ScopeTarget(
+                    target_id="t_component", environment="production", channel="thick_client",
+                    value="Acme.exe", description="Desktop  client",
+                ),
+            ]
+            report.vulnerabilities[0].scope.target_ids = ["t_api", "t_component"]
+
+            payload, _evidence, _summary = parse_report_docx(
+                render_report_docx(report, main_template_path(report, resources), folder),
+                mode="editable",
+            )
+
+            self.assertEqual(payload["engagement"]["limitations"], report.engagement.limitations)
+            targets = {target["channel"]: target for target in payload["scope_targets"]}
+            self.assertEqual(targets["api"]["value"], "POST  /v1/pay")
+            self.assertEqual(targets["thick_client"]["description"], "Desktop  client")
+
+    def test_editable_mode_rejects_invalid_nonempty_finding_scalars(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        cases = ("display_id", "cvss_score", "severity_review_tickets")
+        for field in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                report = self._retest_report(folder, tickets="1234")
+                report.engagement.segment = "Asia"
+                finding = report.vulnerabilities[0]
+                finding.cvss_score = "8.1"
+                finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+                document = Document(BytesIO(render_report_docx(report, main_template_path(report, resources), folder)))
+                if field == "display_id":
+                    summary = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Findings")
+                    summary.rows[1].cells[4].text = "ABC"
+                    detail = next(table for table in document.tables if any(row.cells[0].text.strip() == "Location" for row in table.rows))
+                    next(row for row in detail.rows if row.cells[0].text.strip() == "ID").cells[1].text = "ABC"
+                elif field == "cvss_score":
+                    cvss = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Section")
+                    cvss.rows[1].cells[3].text = "8.1?"
+                else:
+                    paragraph = next(paragraph for paragraph in document.paragraphs if "GRIMPEN-1234" in paragraph.text)
+                    paragraph.text = "GRIMPEN-1234\nnot-a-ticket"
+                output = BytesIO()
+                document.save(output)
+
+                with self.assertRaises(ReportImportError):
+                    parse_report_docx(output.getvalue(), mode="editable")
+
+    def test_editable_scope_recovers_all_four_template_variants(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        cases = (
+            ("web", "JH", "https://prod.example.test", ""),
+            ("api", "Asia", "/v1/accounts/{id}", ""),
+            ("thick_client", "JH", "Acme.exe", "Desktop client"),
+            ("mobile", "Asia", "Acme.ipa", "iOS client"),
+        )
+        for channel, segment, value, description in cases:
+            with self.subTest(channel=channel, segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                report = self._report(folder)
+                report.engagement.segment = segment
+                report.engagement.tested_channels = [channel]
+                report.scope_targets = [ScopeTarget(
+                    target_id="t_scope", environment="production", channel=channel,
+                    value=value, description=description,
+                )]
+                report.vulnerabilities[0].scope.target_ids = ["t_scope"]
+                if segment == "Asia":
+                    report.vulnerabilities[0].cvss_score = "8.1"
+                    report.vulnerabilities[0].cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+
+                data = render_report_docx(report, main_template_path(report, resources), folder)
+                payload, _evidence, summary = parse_report_docx(data, mode="editable")
+
+                self.assertEqual(payload["engagement"]["tested_channels"], [channel])
+                self.assertEqual(payload["scope_targets"][0]["value"], value)
+                self.assertEqual(payload["scope_targets"][0]["description"], description)
+                self.assertFalse(any("Review the environment" in warning or "review the app type" in warning for warning in summary["warnings"]))
+                self.assertTrue(any("rendered Word copies" in warning for warning in summary["warnings"]))
+                Report.model_validate(payload)
+
+    def test_non_production_component_environment_uses_finding_evidence_when_dates_are_missing(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            report.engagement.tested_environments = ["non_production"]
+            report.engagement.tested_channels = ["thick_client"]
+            report.engagement.test_windows = {}
+            report.scope_targets = [ScopeTarget(
+                target_id="t_component", environment="non_production", channel="thick_client",
+                value="Acme.Staging.exe", description="UAT desktop client",
+            )]
+            report.vulnerabilities[0].scope.target_ids = ["t_component"]
+
+            payload, _evidence, summary = parse_report_docx(
+                render_report_docx(report, main_template_path(report, resources), folder, allow_incomplete=True),
+                mode="editable",
+            )
+
+            self.assertEqual(payload["scope_targets"], [{
+                **payload["scope_targets"][0],
+                "environment": "non_production",
+                "channel": "thick_client",
+                "value": "Acme.Staging.exe",
+                "description": "UAT desktop client",
+                "order": 0,
+            }])
+            self.assertEqual(payload["vulnerabilities"][0]["scope"]["target_ids"], [payload["scope_targets"][0]["target_id"]])
+            self.assertFalse(any("Review the environment" in warning for warning in summary["warnings"]))
+
+    def test_component_environment_defaults_once_when_both_environments_are_observed(self) -> None:
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            report.engagement.tested_environments = ["production", "non_production"]
+            report.engagement.tested_channels = ["thick_client"]
+            report.engagement.test_windows["non_production"] = TestWindow(
+                start_date=date(2026, 8, 3), end_date=date(2026, 8, 4),
+            )
+            report.scope_targets = [ScopeTarget(
+                target_id="t_component", environment="non_production", channel="thick_client",
+                value="Acme.exe", description="Desktop client",
+            )]
+            report.vulnerabilities[0].scope.target_ids = ["t_component"]
+
+            payload, _evidence, summary = parse_report_docx(
+                render_report_docx(report, main_template_path(report, resources), folder, allow_incomplete=True),
+                mode="editable",
+            )
+
+            self.assertEqual(len(payload["scope_targets"]), 2)
+            targets = {target["environment"]: target for target in payload["scope_targets"]}
+            self.assertEqual(targets["production"]["description"], "Desktop client")
+            self.assertEqual(targets["non_production"]["description"], "")
+            self.assertEqual(payload["vulnerabilities"][0]["scope"]["target_ids"], [targets["non_production"]["target_id"]])
+            self.assertTrue(any('component "Acme.exe"' in warning for warning in summary["warnings"]))
+            self.assertTrue(any('"Acme.exe"; it was added' in warning for warning in summary["warnings"]))
+
+    def test_editable_mode_keeps_all_statuses_and_printed_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            open_new = report.vulnerabilities[0]
+
+            previously_discovered = copy.deepcopy(open_new)
+            previously_discovered.uid = "v_previous"
+            previously_discovered.display_id = "002"
+            previously_discovered.title = "Previously discovered issue"
+            previously_discovered.status = "open_previously_discovered"
+            previously_discovered.contents.extend([
+                Content(type="previous_proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_previous_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Prior evidence.")])]),
+                ]),
+                Content(type="in_conclusion", fragments=[
+                    ParagraphFragment(frag_id="f_previous_conclusion", type="paragraph", runs=[Run(text="Still open.")]),
+                ]),
+            ])
+            for content in previously_discovered.contents:
+                for fragment in content.fragments:
+                    fragment.frag_id += "_previous"
+
+            resolved = copy.deepcopy(previously_discovered)
+            resolved.uid = "v_resolved"
+            resolved.display_id = "003"
+            resolved.title = "Resolved issue"
+            resolved.status = "resolved"
+            for content in resolved.contents:
+                for fragment in content.fragments:
+                    fragment.frag_id += "_resolved"
+            remediation = next(content for content in resolved.contents if content.type == "recommended_remediation")
+            remediation.fragments = [ParagraphFragment(
+                frag_id="f_resolved_remediation",
+                type="paragraph",
+                runs=[Run(text=RESOLVED_REMEDIATION)],
+                generated="resolved_remediation",
+            )]
+            report.vulnerabilities = [open_new, previously_discovered, resolved]
+
+            data = render_report_docx(report, TEMPLATE, folder)
+            payload, evidence, summary = parse_report_docx(data, mode="editable")
+
+            findings = {finding["title"]: finding for finding in payload["vulnerabilities"]}
+            self.assertEqual({title: finding["status"] for title, finding in findings.items()}, {
+                "Authorization bypass": "open_new",
+                "Previously discovered issue": "open_previously_discovered",
+                "Resolved issue": "resolved",
+            })
+            self.assertEqual(
+                [content["type"] for content in findings["Authorization bypass"]["contents"]],
+                ["description", "recommended_remediation", "proof_of_concept"],
+            )
+            self.assertEqual(
+                [content["type"] for content in findings["Previously discovered issue"]["contents"]],
+                ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+            )
+            resolved_remediation = next(
+                content for content in findings["Resolved issue"]["contents"]
+                if content["type"] == "recommended_remediation"
+            )
+            self.assertEqual(resolved_remediation["fragments"][0]["generated"], "resolved_remediation")
+            referenced = {
+                fragment["evidence_id"]
+                for finding in findings.values()
+                for content in finding["contents"]
+                for fragment in content["fragments"]
+                if fragment["type"] == "image" and fragment["evidence_id"]
+            }
+            self.assertEqual(referenced, set(payload["evidence"]))
+            self.assertEqual(referenced, set(evidence))
+            self.assertEqual(summary["retained"], 3)
+            Report.model_validate(payload)
+
+    def test_editable_mode_rejects_edited_resolved_remediation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._retest_report(folder)
+            report.vulnerabilities[0].status = "resolved"
+            remediation = next(content for content in report.vulnerabilities[0].contents if content.type == "recommended_remediation")
+            remediation.fragments = [ParagraphFragment(
+                frag_id="f_resolved_remediation",
+                type="paragraph",
+                runs=[Run(text="Keep this manually edited advice.")],
+            )]
+
+            data = render_report_docx(report, TEMPLATE, folder, allow_incomplete=True)
+            with self.assertRaisesRegex(ReportImportError, "edited remediation while Resolved"):
+                parse_report_docx(data, mode="editable")
+
+    def test_an_unmatched_api_location_becomes_a_visible_review_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            report.engagement.tested_channels = ["api"]
+            report.scope_targets = [ScopeTarget(
+                target_id="t_api", environment="production", channel="api", value="/v1/accounts/{id}",
+            )]
+            report.vulnerabilities[0].scope.target_ids = ["t_api"]
+            document = Document(BytesIO(render_report_docx(report, TEMPLATE, folder)))
+            detail = next(table for table in document.tables if any(row.cells[0].text.strip() == "Location" for row in table.rows))
+            production = next(row for row in detail.rows if row.cells[1].text.startswith("Production Environment"))
+            production.cells[1].paragraphs[1].text = "/v1/accounts/{account_id}"
+            output = BytesIO()
+            document.save(output)
+
+            payload, _evidence, summary = parse_report_docx(output.getvalue(), mode="editable")
+
+            finding = payload["vulnerabilities"][0]
+            selected = next(target for target in payload["scope_targets"] if target["target_id"] in finding["scope"]["target_ids"])
+            self.assertEqual((selected["channel"], selected["value"]), ("api", "/v1/accounts/{account_id}"))
+            self.assertEqual(finding["scope"]["custom_locations"], {})
+            self.assertTrue(any("review the app type" in warning for warning in summary["warnings"]))
+            Report.model_validate(payload)
+
+    def test_retest_summary_discloses_shared_scope_corrections(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            report.engagement.tested_channels = ["api"]
+            report.scope_targets = [ScopeTarget(
+                target_id="t_api", environment="production", channel="api", value="/v1/accounts/{id}",
+            )]
+            report.vulnerabilities[0].scope.target_ids = ["t_api"]
+            document = Document(BytesIO(render_report_docx(report, TEMPLATE, folder)))
+            detail = next(table for table in document.tables if any(row.cells[0].text.strip() == "Location" for row in table.rows))
+            production = next(row for row in detail.rows if row.cells[1].text.startswith("Production Environment"))
+            production.cells[1].paragraphs[1].text = "/v1/accounts/{account_id}"
+            output = BytesIO()
+            document.save(output)
+
+            _payload, _evidence, summary = parse_report_docx(output.getvalue())
+
+            self.assertEqual(summary["retained"], 1)
+            self.assertTrue(any("review the app type" in warning for warning in summary["warnings"]))
+
+    def test_wrapped_scope_and_location_text_stays_one_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            value = "https://prod.example.test/" + "very-long-segment/" * 8
+            report.scope_targets[0].value = value
+
+            payload, _evidence, _summary = parse_report_docx(
+                render_report_docx(report, TEMPLATE, folder), mode="editable",
+            )
+
+            self.assertEqual([target["value"] for target in payload["scope_targets"]], [value])
+            self.assertEqual(payload["vulnerabilities"][0]["scope"]["target_ids"], [payload["scope_targets"][0]["target_id"]])
+
+    def test_note_runs_and_numbered_list_boundaries_survive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+            note = next(fragment for fragment in description.fragments if fragment.type == "note")
+            note.runs = [Run(text="Validate ", bold=True), Run(text="independently.", italic=True)]
+            proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+            image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+            proof.fragments = [
+                ListFragment(frag_id="f_first", type="numbered_list", items=[
+                    ListItem(runs=[Run(text="Step one.")]), ListItem(runs=[Run(text="Step two.")]),
+                ]),
+                image,
+                ListFragment(frag_id="f_continued", type="numbered_list", continue_numbering=True, items=[
+                    ListItem(runs=[Run(text="Step three.")]),
+                ]),
+                ListFragment(frag_id="f_restarted", type="numbered_list", items=[
+                    ListItem(runs=[Run(text="New step one.")]),
+                ]),
+            ]
+
+            payload, _evidence, _summary = parse_report_docx(
+                render_report_docx(report, TEMPLATE, folder), mode="editable",
+            )
+
+            imported_description = payload["vulnerabilities"][0]["contents"][0]["fragments"]
+            imported_note = next(fragment for fragment in imported_description if fragment["type"] == "note")
+            self.assertEqual(imported_note["runs"], [
+                {"text": "Validate ", "bold": True, "italic": True},
+                {"text": "independently.", "italic": True},
+            ])
+            imported_proof = next(
+                content for content in payload["vulnerabilities"][0]["contents"]
+                if content["type"] == "proof_of_concept"
+            )
+            lists = [fragment for fragment in imported_proof["fragments"] if fragment["type"] == "numbered_list"]
+            self.assertEqual([len(fragment["items"]) for fragment in lists], [2, 1, 1])
+            self.assertEqual([fragment.get("continue_numbering", False) for fragment in lists], [False, True, False])
+
+    def test_editable_image_preserves_embedded_png_bytes_and_display_width(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+            document = Document(BytesIO(data))
+            paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+            blip = paragraph._p.find(".//" + qn("a:blip"))
+            expected = document.part.related_parts[blip.get(qn("r:embed"))].blob
+
+            payload, evidence, _summary = parse_report_docx(data, mode="editable")
+
+            image = next(
+                fragment
+                for content in payload["vulnerabilities"][0]["contents"]
+                for fragment in content["fragments"]
+                if fragment["type"] == "image"
+            )
+            self.assertEqual(evidence[image["evidence_id"]], expected)
+            self.assertEqual(image["width_mm"], 155.0)
+
+    def test_docx_resource_limits_reject_before_import(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+            cases = (
+                {"max_package_bytes": len(data) - 1},
+                {"max_files": 1},
+                {"max_uncompressed_bytes": 1},
+                {"max_image_bytes": 1},
+                {"max_image_pixels": 1},
+                {"max_evidence_bytes": 1},
+            )
+            for limits in cases:
+                with self.subTest(limits=limits), self.assertRaises(ReportImportLimitError):
+                    parse_report_docx(data, mode="editable", **limits)
+
+    def test_oversized_media_member_rejects_before_python_docx_materializes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+
+            with patch("app.docx_import.Document") as document, self.assertRaises(ReportImportLimitError):
+                parse_report_docx(data, mode="editable", max_image_bytes=1)
+
+            document.assert_not_called()
+
+    def test_editable_mode_rejects_image_width_above_renderer_maximum(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            document = Document(BytesIO(render_report_docx(self._report(folder), TEMPLATE, folder)))
+            paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+            extent = paragraph._p.find(".//" + qn("wp:extent"))
+            original_width, original_height = int(extent.get("cx")), int(extent.get("cy"))
+            oversized_width = 156 * 36_000
+            extent.set("cx", str(oversized_width))
+            extent.set("cy", str(round(original_height * oversized_width / original_width)))
+            output = BytesIO()
+            document.save(output)
+
+            with self.assertRaisesRegex(ReportImportError, "155 mm"):
+                parse_report_docx(output.getvalue(), mode="editable")
+
+    def test_editable_mode_rejects_rotated_evidence_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            document = Document(BytesIO(render_report_docx(self._report(folder), TEMPLATE, folder)))
+            paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+            paragraph._p.find(".//" + qn("a:xfrm")).set("rot", "60000")
+            output = BytesIO()
+            document.save(output)
+
+            with self.assertRaisesRegex(ReportImportError, "Rotated or flipped"):
+                parse_report_docx(output.getvalue(), mode="editable")
+
     def test_the_note_prefix_is_not_kept_as_content(self) -> None:
         """``Note: `` is printed by note_fragment.docx, so keeping it would render ``Note: Note: ``
         the next time the report is generated."""
@@ -396,8 +976,13 @@ class ImportRouteTests(unittest.TestCase):
             folder = Path(temporary_directory)
             return render_report_docx(FragmentRecognitionTests._report(folder), TEMPLATE, folder)
 
-    def _import(self, name: str, data: bytes):
-        return self.client.post("/reports/import", files={"file": (name, data, "application/octet-stream")})
+    def _import(self, name: str, data: bytes, mode: str | None = None):
+        form = {"docx_mode": mode} if mode is not None else None
+        return self.client.post(
+            "/reports/import",
+            data=form,
+            files={"file": (name, data, "application/octet-stream")},
+        )
 
     def test_a_generated_report_imports_as_a_retest_draft(self) -> None:
         response = self._import("report.docx", self._docx())
@@ -417,6 +1002,264 @@ class ImportRouteTests(unittest.TestCase):
         )
         stored = main.workspace.find_path(report.report_id).parent / "evidence"
         self.assertEqual(len(list(stored.glob("*.png"))), 1)
+
+    def test_prompt_classifies_a_docx_without_creating_a_report(self) -> None:
+        response = self._import("misleading.zip", self._docx(), "prompt")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"source": "docx", "mode_required": True})
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_route_imports_editable_then_first_put_preserves_visible_semantics(self) -> None:
+        response = self._import("report.docx", self._docx(), "editable")
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result["mode"], "editable")
+        self.assertTrue(any("rendered Word copies" in warning for warning in result["summary"]["warnings"]))
+
+        imported = main.workspace.load(result["report_id"])
+        self.assertEqual(imported.vulnerabilities[0].status, "open_new")
+        target_ids = [target.target_id for target in imported.scope_targets]
+        before = main._editable_user_projection(imported)
+        previous_revision = imported.saved_at
+        payload = imported.model_dump(mode="json", by_alias=True)
+        payload["scope_text"] = main.scope_text_from_targets(imported.scope_targets)
+        saved = self.client.put(f"/reports/{imported.report_id}", json=payload)
+
+        self.assertEqual(saved.status_code, 200, saved.text)
+        after = main.workspace.load(imported.report_id)
+        self.assertEqual([target.target_id for target in after.scope_targets], target_ids)
+        self.assertEqual(main._editable_user_projection(after), before)
+        self.assertEqual(after.app_id, "Northstar_Banking")
+        self.assertGreater(after.saved_at, previous_revision)
+
+    def test_explicit_docx_mode_is_rejected_for_a_bundle(self) -> None:
+        created = self.client.get("/new", follow_redirects=False)
+        report_id = created.headers["location"].split("/")[2]
+        exported = self.client.get(f"/reports/{report_id}/export")
+
+        response = self._import("report.docx", exported.content, "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("not a report DOCX", response.json()["detail"])
+
+    def test_prompted_bundle_imports_without_a_mode_round_trip(self) -> None:
+        created = self.client.get("/new", follow_redirects=False)
+        report_id = created.headers["location"].split("/")[2]
+        exported = self.client.get(f"/reports/{report_id}/export")
+
+        response = self._import("misleading.docx", exported.content, "prompt")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["source"], "bundle")
+        self.assertNotIn("mode_required", response.json())
+
+    def test_unknown_docx_mode_is_rejected_without_writing(self) -> None:
+        before = set(Path(self.root.name).glob("apps/**/draft.json"))
+        response = self._import("report.docx", self._docx(), "replace")
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Unknown DOCX import mode", response.json()["detail"])
+        self.assertEqual(set(Path(self.root.name).glob("apps/**/draft.json")), before)
+
+    def test_malformed_editable_import_writes_no_report_directory(self) -> None:
+        document = Document(BytesIO(self._docx()))
+        summary = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Findings")
+        summary.rows[1].cells[5].text = "Pending"
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("unknown finding status", response.json()["detail"])
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_truncated_location_row_is_rejected_without_writing(self) -> None:
+        document = Document(BytesIO(self._docx()))
+        location_row = next(
+            row
+            for table in document.tables
+            for row in table.rows
+            if row.cells and row.cells[0].text.strip() == "Location"
+        )
+        location_row._tr.remove(location_row.cells[-1]._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("invalid Location row", response.json()["detail"])
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_truncated_component_row_is_rejected_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.tested_channels = ["thick_client"]
+            report.scope_targets = [ScopeTarget(
+                target_id="t_component",
+                environment="production",
+                channel="thick_client",
+                value="Acme.exe",
+                description="Desktop client",
+            )]
+            report.vulnerabilities[0].scope.target_ids = ["t_component"]
+            document = Document(BytesIO(render_report_docx(
+                report,
+                main_template_path(report, Path(__file__).resolve().parent.parent / "resources"),
+                folder,
+            )))
+        component = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Component")
+        component.rows[1]._tr.remove(component.rows[1].cells[-1]._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("invalid Component row", response.json()["detail"])
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_component_table_with_both_channel_markers_is_rejected_without_writing(self) -> None:
+        """Mutual exclusion between Mobile and Thick Client is a Setup-page UI rule only; nothing on
+        the load path enforces it. A hand-edited document naming both markers must still be refused
+        at import, since the parser cannot otherwise decide which channel the one Component table
+        belongs to."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.tested_channels = ["thick_client"]
+            report.scope_targets = [ScopeTarget(
+                target_id="t_component",
+                environment="production",
+                channel="thick_client",
+                value="Acme.exe",
+                description="Desktop client",
+            )]
+            report.vulnerabilities[0].scope.target_ids = ["t_component"]
+            document = Document(BytesIO(render_report_docx(
+                report,
+                main_template_path(report, Path(__file__).resolve().parent.parent / "resources"),
+                folder,
+            )))
+        marker_paragraph = next(p for p in document.paragraphs if "Thick Client Application Binary" in p.text)
+        duplicate = copy.deepcopy(marker_paragraph._p)
+        for node in duplicate.findall(".//" + qn("w:t")):
+            if node.text == "Thick Client ":
+                node.text = "Mobile "
+        marker_paragraph._p.addnext(duplicate)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("does not identify exactly one supported app type", response.json()["detail"])
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_truncated_asia_section_row_is_rejected_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.segment = "Asia"
+            finding = report.vulnerabilities[0]
+            finding.cvss_score = "8.1"
+            finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+            document = Document(BytesIO(render_report_docx(
+                report,
+                main_template_path(report, Path(__file__).resolve().parent.parent / "resources"),
+                folder,
+            )))
+        section = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Section")
+        section.rows[1]._tr.remove(section.rows[1].cells[-1]._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("invalid Section row", response.json()["detail"])
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_empty_limitations_row_is_rejected_without_writing(self) -> None:
+        document = Document(BytesIO(self._docx()))
+        limitations = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Limitations")
+        limitations.rows[1]._tr.remove(limitations.rows[1].cells[0]._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("invalid Limitations row", response.json()["detail"])
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_empty_scope_row_is_rejected_without_writing(self) -> None:
+        document = Document(BytesIO(self._docx()))
+        scope = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "URL(s) in Scope")
+        value_row = next(row for row in scope.rows[1:] if row.cells[0].text.strip() == "https://prod.example.test")
+        value_row._tr.remove(value_row.cells[0]._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("invalid URL(s) in Scope row", response.json()["detail"])
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+
+    def test_empty_table_header_row_does_not_break_lookup(self) -> None:
+        document = Document(BytesIO(self._docx()))
+        limitations = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Limitations")
+        header_row = limitations.rows[0]
+        for cell in tuple(header_row.cells):
+            header_row._tr.remove(cell._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertNotEqual(response.status_code, 500, response.text)
+
+    def test_empty_finding_detail_row_is_skipped_without_crashing(self) -> None:
+        document = Document(BytesIO(self._docx()))
+        detail = next(
+            table
+            for table in document.tables
+            if any(row.cells and row.cells[0].text.strip() == "Location" for row in table.rows)
+        )
+        empty_row = detail.add_row()
+        for cell in tuple(empty_row.cells):
+            empty_row._tr.remove(cell._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.docx", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_docx_parser_limits_surface_as_payload_too_large(self) -> None:
+        with patch.object(main, "MAX_BUNDLE_FILES", 1):
+            response = self._import("report.docx", self._docx(), "editable")
+        self.assertEqual(response.status_code, 413)
+
+    def test_editable_preflight_rejects_scope_reconciliation_loss(self) -> None:
+        payload, _evidence, _summary = parse_report_docx(self._docx(), mode="editable")
+        duplicate = copy.deepcopy(payload["scope_targets"][0])
+        duplicate["target_id"] = "tgt_duplicate"
+        payload["scope_targets"].append(duplicate)
+        payload["vulnerabilities"][0]["scope"]["target_ids"].append("tgt_duplicate")
+
+        with self.assertRaisesRegex(ValueError, "Scope reconciliation would alter imported locations"):
+            main.finalize_editable_import(payload)
+
+    def test_editable_import_rolls_back_when_an_evidence_write_fails(self) -> None:
+        with patch("app.workspace.atomic_write_bytes", side_effect=OSError("disk full")):
+            response = self._import("report.docx", self._docx(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
 
     def test_a_bundle_still_takes_the_bundle_branch(self) -> None:
         created = self.client.get("/new", follow_redirects=False)

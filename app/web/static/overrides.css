@@ -348,6 +348,8 @@ input[data-path*="scope"],
 
 @media (max-width: 760px) {
   body > header.app-header { padding: 0 12px; }
+  .vr-dialog-actions:has(button:nth-child(3)) { display: grid; grid-template-columns: 1fr; }
+  .vr-dialog-actions:has(button:nth-child(3)) button { width: 100%; }
   .engagement-name { display: none; }
   .stepper { gap: 20px; }
   main, #setup[data-step="findings"] { padding: 16px 12px 70px; }

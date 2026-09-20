@@ -618,6 +618,24 @@ def _scope_reaches_a_location(scope: dict, targets: list[dict]) -> bool:
     return any(location_lines(values) for by_channel in (scope.get("custom_locations") or {}).values() for values in (by_channel or {}).values())
 
 
+def scope_text_from_targets(targets) -> dict:
+    """Serialize stored targets into the request-only shape Setup builds on page load."""
+    result = {}
+    for environment in ("production", "non_production"):
+        result[environment] = {}
+        for channel in CHANNELS:
+            selected = sorted(
+                (target for target in targets if target.environment == environment and target.channel == channel),
+                key=lambda target: target.order,
+            )
+            values = "\n".join(target.value for target in selected)
+            result[environment][channel] = (
+                {"component": values, "description": "\n".join(target.description for target in selected)}
+                if channel in COMPONENT_CHANNELS else values
+            )
+    return result
+
+
 def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     """Turn setup textarea values into stable scope targets and identify unsafe removals."""
     if "scope_text" not in payload:

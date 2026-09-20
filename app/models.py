@@ -31,6 +31,7 @@ NON_PRODUCTION_LABEL_PRESETS: tuple[str, ...] = ("NON-PROD", "MOD", "UAT", "STAG
 LEGACY_NON_PRODUCTION_LABELS: tuple[str, ...] = ("TEST/MO", "DEV")
 Segment = Literal["JH", "GWAM", "Asia"]
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
+NetworkAccess = Literal["Internal", "External"]
 ContentType = Literal["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]
 StableId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
 
@@ -237,6 +238,9 @@ class Engagement(BaseModel):
     app_owner: str = ""
     segment: Segment | None = None
     report_type: ReportType | None = None
+    # Defaulted rather than nullable, so no draft on disk and no fixture becomes incomplete. The
+    # cost is that an untouched External engagement prints Internal; see DATA_MAP section 13.
+    network: NetworkAccess = "Internal"
     start_date: date | None = None
     end_date: date | None = None
     tested_environments: list[Environment] = Field(default_factory=lambda: ["production", "non_production"])

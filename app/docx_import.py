@@ -64,6 +64,9 @@ INSTANCE_PREFIX = re.compile(r"^(?:Instance\s+\d+(?:(?:\s*[:.\-])?(?:\s+|$)))+",
 DISPLAY_ID = re.compile(r"^[0-9]{1,5}$")
 PRODUCTION_ROW = "Production Environment"
 MAX_IMAGE_WIDTH_MM = 155
+# The cover prints a hardcoded word today, so reading it back would return Internal for every
+# report, including the External ones. Warn instead of recovering.
+NETWORK_IMPORT_WARNING = "Network access was not read from the DOCX; it defaults to Internal -- change it in Setup if this engagement was External."
 
 
 class ReportImportError(ValueError):
@@ -1118,6 +1121,9 @@ def parse_report_docx(
             document, app_name, segment, report_type, targets, detected_non_production_label,
             windows, evidence_environments, warnings,
         )
+    # After the branch, so the default retest path warns too. The cover prints a hardcoded word
+    # today, so reading it back would return Internal for every report including External ones.
+    warnings.append(NETWORK_IMPORT_WARNING)
     payload = {
         "report_id": "r_placeholder", "app_id": "unnamed",
         "saved_at": datetime.now().astimezone().isoformat(),

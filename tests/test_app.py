@@ -49,6 +49,23 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         return response.headers["location"].split("/")[2]
 
+    def test_network_access_defaults_to_internal_and_survives_a_save(self) -> None:
+        """A draft written before the field existed must keep loading. The default is what buys
+        that, and it is why no fixture or script needed repair."""
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        draft["engagement"].pop("network", None)
+        atomic_write_json(path, draft)
+
+        recovered = main.workspace.load(report_id)
+        self.assertEqual(recovered.engagement.network, "Internal")
+        self.assertEqual(main.workspace.list_legacy_reports(), [], "an older draft was demoted to the legacy list")
+
+        recovered.engagement.network = "External"
+        main.workspace.save(recovered)
+        self.assertEqual(main.workspace.load(report_id).engagement.network, "External")
+
     def test_safe_name_rejects_windows_device_names_with_extensions(self) -> None:
         self.assertEqual(safe_name("CON.txt", "fallback"), "fallback")
         self.assertEqual(safe_name("normal name", "fallback"), "normal_name")

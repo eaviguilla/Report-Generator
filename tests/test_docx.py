@@ -17,6 +17,7 @@ from app.docx_report import (
     LOCATION_WRAP_CHARACTERS,
     SCOPE_WRAP_CHARACTERS,
     ReportGenerationError,
+    _metadata,
     _wrap_long_value,
     generation_issues,
     main_template_path,
@@ -1055,6 +1056,15 @@ class DocxReportTests(unittest.TestCase):
                 # The parent doubles as the component fragment root, so every branch must stay in resources.
                 self.assertEqual(chosen.parent, resources)
                 self.assertTrue(chosen.is_file())
+
+    def test_network_metadata_defaults_to_internal_and_carries_the_selection(self) -> None:
+        """The templates carry no {{network}} token yet, so this assertion is the only thing
+        exercising the value until someone edits the eight cover cells in Word."""
+        report = Report(report_id="r_network", app_id="CI-NETWORK", saved_at=datetime.now().astimezone())
+
+        self.assertEqual(_metadata(report)["network"], "Internal")
+        report.engagement.network = "External"
+        self.assertEqual(_metadata(report)["network"], "External")
 
     def test_every_shipped_template_renders_without_unresolved_placeholders(self) -> None:
         """None of the four has been through this renderer before. Each carries its own anchors,

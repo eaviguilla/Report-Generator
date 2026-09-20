@@ -270,6 +270,7 @@ def _metadata(report: Report) -> dict[str, str]:
     accounts = engagement.test_accounts
     values = {
         "segment": engagement.segment or "N/A",
+        "network": engagement.network,
         "app-name": _display_value(engagement.app_name),
         "report-name": _display_value(engagement.app_name),
         "test-type": REPORT_TYPE_LABELS.get(engagement.report_type or "", "N/A"),

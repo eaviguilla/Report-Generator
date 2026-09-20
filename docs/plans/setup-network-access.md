@@ -1,6 +1,6 @@
 # Setup network access field
 
-> **Status:** shipped · 2026-09-21 · uncommitted working tree (base `3167520`)
+> **Status:** shipped · 2026-09-21 · `c599dc6`
 >
 > Steps 1-5 are done. **Step 6 is deliberately not done** — it is the manual Word edit, and the
 > accepted consequence of answer Q1a is that every cover prints `Internal` until it is. Nothing in

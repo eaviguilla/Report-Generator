@@ -77,8 +77,8 @@ always supplies both keys; `_replace_metadata` no-ops on the one that is absent,
 which is also why the other two templates are unaffected by them.
 
 The `Component` table is filled by cloning its single data row once per
-component, production rows first. The table has no environment column, so that
-ordering is the only thing carrying the distinction to the reader. An empty
+component, production rows first. The table has no environment column or row
+count boundary, so a finished DOCX cannot prove which environment owns a row. An empty
 component list yields one `N/A` row, mirroring `User Roles` — leaving the
 prototype row intact would instead fail the unresolved-placeholder check at the
 very end of generation.
@@ -124,12 +124,36 @@ render. Requiring a value is `generation_issues`' job, and only when the segment
 is Asia (`app/docx_report.py` L112-L116) — a field the tester cannot see must
 never block their report.
 
-Reading a finished report back, `parse_report_docx` recovers both values from
-this table by **matching cell 1 against the finding title, never by row
-position**: the table holds a row per rendered finding, while the importer drops
-every Resolved one (`app/docx_import.py` L482-L492). A recovered score must match
-`^[0-9.]+$` and a vector `^[A-Za-z0-9./:]+$` or it is discarded — stricter than
-the save rule, so an imported value can never be one the next save refuses.
+Reading a finished report back, `parse_report_docx` pairs this table with finding
+details by title **and occurrence order**, so duplicate titles retain distinct
+rows. Editable mode keeps Resolved rows; retest claims their rows before applying
+its intentional Resolved filter. A non-empty editable score or vector must pass
+the same Unicode-aware character allowlist as an ordinary save or the entire
+import is rejected; it is never silently erased.
+
+## Import contract
+
+`parse_report_docx(data, mode="retest")` supports these four canonical template
+structures. Omission of `mode` remains retest-compatible. `editable` creates a
+new draft from supported visible document semantics: all known statuses and
+their printed sections, engagement metadata, scope, Additional Information, and
+reachable evidence. It does not recover hidden source-draft state, original IDs,
+or original image upload metadata.
+
+Web/API tables encode channel and environment. Component rows encode their
+channel but not their environment: a sole positive environment observation is
+used, otherwise the global row defaults to Production and a warning names it.
+Unmatched or ambiguous finding locations become selected, covered review
+targets, so their text remains visible on Setup and Findings rather than being
+discarded on the first save.
+
+Every retained image occurrence receives fresh evidence identity while keeping
+its embedded PNG bytes exactly. ZIP member counts and expanded size, media byte
+size, selected evidence aggregate, PNG dimensions, and pixel count are bounded
+before persistence. Editable width comes only from one proportional, uncropped,
+unrotated inline drawing at or below 155 mm; unsupported geometry rejects.
+Because the embedded raster is Word-rendered, regeneration may resample it or
+add another canonical border, and the import result discloses that limitation.
 
 ## Tag formatting
 

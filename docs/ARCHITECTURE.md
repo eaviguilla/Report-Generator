@@ -130,11 +130,20 @@ and Word automation exist only there.
 
 ---
 
-## Starting from last year's report
+## Importing a finished report
 
-For a retest, the tester can import the previous year's finished Word document instead of retyping
-it. **python-docx** reads that document back apart, and the app turns it into an editable report:
-findings return as previously discovered, last year's proof of concept is filed as history for
-comparison, and a fresh empty proof of concept is created for this year, with an empty screenshot
-slot for each environment still in scope. Any images embedded in the old document are extracted and
-saved as evidence files by **Pillow**.
+The manager sends the selected file to the server for byte-based classification. A generated Word
+report then offers two explicit choices. **Retest draft** keeps the established transformation:
+retained findings become Previously Discovered, the visible proof of concept becomes history, and a
+fresh proof and screenshot slots are created for the new test. **Editable draft** instead keeps all
+known statuses and every supported section visible in the document, along with recoverable
+engagement fields, scope, Additional Information, and evidence.
+
+Editable import creates a new report from the document's visible semantics; it does not reconstruct
+the original hidden draft, IDs, or upload metadata. Ambiguous scope is placed in visible review
+targets and named in warnings. Unsupported structure or values that would be lost reject the whole
+import. **python-docx** performs the structural read, while **Pillow** verifies bounded embedded PNGs.
+Before the one workspace write, the server runs the same scope reconciliation, field validation,
+and provisioning rules used by an ordinary save and proves that a second pass does not alter the
+imported user content. The manager shows counts, transformations, and warnings before opening Setup
+or revealing the new report in the list.

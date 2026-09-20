@@ -12,7 +12,7 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -26,8 +26,8 @@ from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, main_template_path, render_report_docx
 from .library import Library
-from .docx_import import parse_report_docx
-from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, finding_input_issues, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, setup_input_issues, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
+from .docx_import import ReportImportLimitError, parse_report_docx
+from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, finding_input_issues, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, scope_text_from_targets, setup_input_issues, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
 from .storage import atomic_write_bytes
 from .workspace import StaleReportError, Workspace, app_id_for
 
@@ -186,6 +186,7 @@ MAX_BUNDLE_FILES = configured_limit("VULNREPORT_MAX_BUNDLE_FILES", 1000)
 MAX_IMAGE_BYTES = configured_limit("VULNREPORT_MAX_IMAGE_BYTES", 20 * 1024 * 1024)
 MAX_IMAGE_PIXELS = configured_limit("VULNREPORT_MAX_IMAGE_PIXELS", 40_000_000)
 MAX_REPORT_EVIDENCE_BYTES = configured_limit("VULNREPORT_MAX_REPORT_EVIDENCE_BYTES", 250 * 1024 * 1024)
+DOCX_IMPORT_MODES = {"prompt", "editable", "retest"}
 
 
 @app.exception_handler(HTTPException)
@@ -307,6 +308,8 @@ def is_report_docx(contents: bytes) -> bool:
         return False
     with zipfile.ZipFile(io.BytesIO(contents)) as archive:
         infos = [info for info in archive.infolist() if not info.is_dir()]
+        if len(infos) > MAX_BUNDLE_FILES:
+            raise HTTPException(413, "Report archive contains too many files")
         if sum(info.file_size for info in infos) > MAX_BUNDLE_UNCOMPRESSED_BYTES:
             raise HTTPException(413, "Expanded report bundle exceeds the 250 MB limit")
         return any(info.filename == "word/document.xml" for info in infos)
@@ -544,6 +547,73 @@ def unused_export_path(path: Path) -> Path:
     return candidate
 
 
+def _fragment_has_imported_work(fragment: dict) -> bool:
+    if fragment.get("generated"):
+        return False
+    if fragment.get("type") in {"paragraph", "note"}:
+        return any(run.get("text", "").strip() for run in fragment.get("runs", []))
+    if fragment.get("type") in {"numbered_list", "bulleted_list"}:
+        return any(run.get("text", "").strip() for item in fragment.get("items", []) for run in item.get("runs", []))
+    if fragment.get("type") == "table":
+        cells = [*fragment.get("header", []), *(cell for row in fragment.get("rows", []) for cell in row)]
+        return bool((fragment.get("caption") or "").strip() or any(run.get("text", "").strip() for cell in cells for run in cell.get("runs", [])))
+    if fragment.get("type") == "image":
+        return bool(fragment.get("evidence_id") or (fragment.get("caption") or "").strip())
+    return bool((fragment.get("text") or "").strip() or (fragment.get("caption") or "").strip())
+
+
+def _editable_user_projection(report: Report) -> dict:
+    """Values provisioning must not remove or alter during editable-import finalization."""
+    payload = report.model_dump(mode="json", by_alias=True)
+    payload = {key: value for key, value in payload.items() if key not in {"report_id", "app_id", "saved_at", "_folder_name_hint"}}
+    for vulnerability in payload["vulnerabilities"]:
+        for content in vulnerability["contents"]:
+            content["fragments"] = [
+                {key: value for key, value in fragment.items() if key != "frag_id"}
+                for fragment in content["fragments"]
+                if _fragment_has_imported_work(fragment)
+            ]
+    return payload
+
+
+def _provisioned_projection(report: Report) -> dict:
+    payload = report.model_dump(mode="json", by_alias=True)
+    for vulnerability in payload["vulnerabilities"]:
+        for content in vulnerability["contents"]:
+            for fragment in content["fragments"]:
+                fragment.pop("frag_id", None)
+    return payload
+
+
+def finalize_editable_import(payload: dict) -> tuple[dict, list[str]]:
+    """Run an editable DOCX through the ordinary first-save rules without writing it."""
+    prior = Report.model_validate(payload)
+    imported_user = _editable_user_projection(prior)
+    candidate = prior.model_dump(mode="json", by_alias=True)
+    candidate["scope_text"] = scope_text_from_targets(prior.scope_targets)
+    removed_references = reconcile_targets(candidate, prior)
+    if removed_references:
+        raise ValueError(f"Recovered scope would strand: {', '.join(removed_references)}")
+    normalise_scope_modes(candidate)
+    report = Report.model_validate(candidate)
+    if _editable_user_projection(report) != imported_user:
+        raise ValueError("Scope reconciliation would alter imported locations")
+    issues = [*setup_input_issues(report.engagement), *finding_input_issues(report)]
+    if issues:
+        raise ValueError("Imported report contains fields that cannot be saved: " + "; ".join(issues))
+
+    before_provision = _provisioned_projection(report)
+    provision_report(report)
+    if _editable_user_projection(report) != imported_user:
+        raise ValueError("Server provisioning would alter imported user content")
+    after_provision = _provisioned_projection(report)
+    normalizations = [] if before_provision == after_provision else ["Server-owned empty editor placeholders were added."]
+    provision_report(report)
+    if _provisioned_projection(report) != after_provision:
+        raise ValueError("Imported report does not reach a stable provisioned state")
+    return report.model_dump(mode="json", by_alias=True), normalizations
+
+
 @app.get("/reports/{report_id}")
 def open_report(report_id: str):
     """Send a direct report URL to Setup or show the standard missing-report page."""
@@ -552,17 +622,40 @@ def open_report(report_id: str):
 
 
 @app.post("/reports/import")
-async def import_report(file: UploadFile = File(...)):
+async def import_report(file: UploadFile = File(...), docx_mode: str | None = Form(None)):
     """Validate a JSON draft, a ZIP bundle, or a report this app generated, and save it separately."""
     try:
+        if docx_mode is not None and docx_mode not in DOCX_IMPORT_MODES:
+            raise HTTPException(422, "Unknown DOCX import mode")
         contents = await read_upload_limited(file, MAX_BUNDLE_BYTES, "Report bundle")
-        if await run_in_threadpool(is_report_docx, contents):
-            payload, images, summary = await run_in_threadpool(parse_report_docx, contents)
+        is_docx = await run_in_threadpool(is_report_docx, contents)
+        if is_docx:
+            if docx_mode == "prompt":
+                return {"source": "docx", "mode_required": True}
+            mode = docx_mode or "retest"
+            payload, images, summary = await run_in_threadpool(
+                parse_report_docx,
+                contents,
+                mode,
+                max_package_bytes=MAX_BUNDLE_BYTES,
+                max_files=MAX_BUNDLE_FILES,
+                max_uncompressed_bytes=MAX_BUNDLE_UNCOMPRESSED_BYTES,
+                max_image_bytes=MAX_IMAGE_BYTES,
+                max_image_pixels=MAX_IMAGE_PIXELS,
+                max_evidence_bytes=MAX_REPORT_EVIDENCE_BYTES,
+            )
+            if mode == "editable":
+                payload, normalizations = await run_in_threadpool(finalize_editable_import, payload)
+                summary["normalizations"] = normalizations
             evidence_files = {f"evidence/{evidence_id}.png": data for evidence_id, data in images.items()}
             report = await run_in_threadpool(workspace.import_report, payload, evidence_files)
-            return {"report_id": report.report_id, "source": "docx", "summary": summary}
+            return {"report_id": report.report_id, "source": "docx", "mode": mode, "summary": summary}
+        if docx_mode in {"editable", "retest"}:
+            raise HTTPException(422, "DOCX import mode was supplied for a file that is not a report DOCX")
         payload, evidence_files = await run_in_threadpool(parse_import, contents)
         report = await run_in_threadpool(workspace.import_report, payload, evidence_files)
+    except ReportImportLimitError as error:
+        raise HTTPException(413, str(error)) from error
     except (UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile, UnidentifiedImageError, OSError, ValidationError, ValueError) as error:
         raise HTTPException(422, f"Select a valid VulnReport export: {error}") from error
     return {"report_id": report.report_id, "source": "bundle"}

@@ -800,3 +800,72 @@ Write `open_new` for a source `Open (New)` finding — it destroys the promoted 
 ### Known gap
 
 Mobile-scope reports import with empty scope and are blocked on Setup until the tester fills it in. No mobile example or report template exists yet, so nothing here is designed against a guess.
+
+## Follow-up plan - editable DOCX import option
+
+> **Status:** planning
+
+### Understanding
+
+The generated-DOCX import works today, but it has only one meaning: turn the uploaded report into a retest draft. That is useful when the tester is starting a new retest, but wrong when the tester wants to keep editing the imported report in the report generator. The change is to offer a choice before saving the DOCX import: **Editable draft** preserves the document's current report shape as closely as the importer can recover it; **Retest draft** keeps the current behaviour, where open findings are rewritten to previously discovered, the current Proof of Concept becomes Previous Proof of Concept, and Resolved findings are dropped.
+
+### Blast radius
+
+| File | Change |
+|---|---|
+| `app/docx_import.py` | Split reading a generated DOCX from shaping an imported draft. Add an import mode, likely `editable` / `retest`, with `retest` preserving the current transformation and `editable` preserving statuses and current sections. |
+| `app/main.py` | Accept a mode on `POST /reports/import` for DOCX files, pass it to `parse_report_docx`, and reject a non-DOCX mode on ZIP/JSON imports. |
+| `app/web/static/manager.js` | When a `.docx` is selected, ask the user which mode to use before posting. Keep ZIP/JSON one-click import unchanged. Show the mode-specific summary before navigating. |
+| `app/web/templates/home.html` | No structural change expected; the existing hidden file input already accepts DOCX. Only add markup if the mode choice cannot use the existing dialog helper cleanly from JavaScript. |
+| `tests/test_docx_import.py` | Add parallel coverage for editable mode and retest mode from the same generated fixture. Existing retest assertions stay as regression tests. |
+| `tests/test_app.py` | Route tests for DOCX mode selection, default/invalid mode handling, and proof that ZIP/JSON imports ignore or reject DOCX-only mode. |
+| `tests/test_browser.py` | Browser flow proving the user sees the choice and the selected mode reaches the server. Existing import failure-copy assertion remains unchanged unless UI copy changes. |
+| `docs/DATA_MAP.md` | Record that generated-DOCX import has two shaping modes and which one mutates statuses, sections, and evidence meaning. |
+
+### Open questions
+
+1. **Does “edit the imported document” mean faithful reconstruction of the generated report, including Resolved findings and the source Previous Proof of Concept?**
+    Why it matters: this decides the payload shape. My default is **yes**: editable mode keeps all summary-table findings, keeps each status, keeps `Proof of Concept` as `proof_of_concept`, keeps `Previous Proof of Concept` when the source detail layout has it, and keeps `In Conclusion` when present. Without that, the option is only a softer retest import and still discards user-visible document content.
+
+2. **Should the UI default to Editable draft or Retest draft when a DOCX is selected?**
+    Why it matters: the current one-click behavior is retest import, so changing the default changes muscle memory. My default is **ask every time** with no preselected destructive path; the user must choose because one mode preserves Resolved findings and one drops them.
+
+3. **Should editable mode carry the source `report_type`, dates, tester, limitations and test accounts when they can be recovered?**
+    Why it matters: retest mode deliberately treats those as new-engagement facts. Editable mode is different: the user is editing the imported report, so carrying document facts is less surprising. My default is still conservative for fields the DOCX cannot recover reliably: carry only values already recovered today with confidence, and leave unrecoverable Setup fields blank or app-defaulted.
+
+### Data risks
+
+| Failure mode | Verdict | Reasoning |
+|---|---|---|
+| Stale write | clear | Import creates a fresh report through `Workspace.import_report`; no existing `saved_at` is compared. The mode value is request metadata, not a report revision. |
+| Lost update | clear | The save still goes through `Workspace.import_report` and then `Workspace.save`; no read-modify-write of an existing draft is added. |
+| Orphan reference | RISK | Editable mode keeps more sections and more images than retest mode, so every recovered `evidence_id`, `frag_id`, and `scope.target_ids` entry must still be minted once and validated before save. |
+| Silent stranding | RISK | Editable mode may keep Resolved findings or previously discovered findings whose locations no longer match recovered scope. Those must be left visibly incomplete rather than widened to `all` or silently dropped. |
+| Schema break | clear | No schema change is needed. Existing drafts continue to validate; only new imported payloads differ by mode. |
+| Request/response asymmetry | RISK | A mode sent by the browser must not be treated as a report field. The response summary should include the chosen mode so the client can display exactly what was saved. |
+| Rule drift | RISK | Retest mode currently owns status and section rewrites inside `_findings`; editable mode will tempt a second copy. The parser should produce neutral extracted findings, then two small shaping functions should own the mode difference. |
+| Navigation trap | RISK | Editable mode preserving more data can still produce a draft blocked by Setup or Findings. The summary must name missing Setup fields and findings with zero locations before navigation. |
+| Derived-state fight | RISK | A faithful editable payload must already be a fixed point for `provision_report`; otherwise the first browser save could add, drop, or rewrite sections. Tests must re-run provisioning on both modes and compare dumps. |
+| Backup exhaustion | clear | The imported `draft.json` is new, so there is no existing backup to consume. |
+
+### Plan
+
+- [ ] **Step 1 - Extract a neutral DOCX parse result**. Files: `app/docx_import.py`, `tests/test_docx_import.py`. Refactor the current parser so the document-reading phase returns recovered engagement data, scope targets, findings, sections, evidence bytes, dropped/unknown parse notes, and source statuses without deciding retest semantics. Test: the existing retest fixture parsed through the neutral layer still exposes the same raw sections the current importer used. Invariant: reading the Word document never drops Resolved findings or rewrites a status; only a shaping mode may do that.
+
+- [ ] **Step 2 - Keep retest mode byte-for-behaviour compatible**. Files: `app/docx_import.py`, `tests/test_docx_import.py`, `tests/test_app.py`. Implement `shape_retest_import(parsed_docx)` using the current rules: keep Open findings only, rewrite them to `open_previously_discovered`, move source `proof_of_concept` into `previous_proof_of_concept`, discard source Previous PoC and In Conclusion, and build an empty current PoC. Test: current retest import tests pass unchanged, including the summary fields `retained`, `dropped_resolved`, and `statuses_rewritten` unless the summary is intentionally versioned. Invariant: choosing Retest draft produces the same report shape users get today.
+
+- [ ] **Step 3 - Add editable shaping mode**. Files: `app/docx_import.py`, `tests/test_docx_import.py`. Implement `shape_editable_import(parsed_docx)` to preserve every recovered finding status and section that can exist for that status: `open_new` keeps Description, Recommended Remediation and current Proof of Concept; `open_previously_discovered` and `resolved` keep Previous Proof of Concept, current Proof of Concept and In Conclusion when present. Test: a fixture with Open New, Open Previously Discovered and Resolved findings imports with all three statuses still present, source current PoC still current, source Previous PoC still previous, and no Resolved finding dropped. Invariant: editable mode does not turn a document into a retest.
+
+- [ ] **Step 4 - Prove provisioning is a fixed point in both modes**. Files: `tests/test_docx_import.py`, maybe `app/docx_import.py` if repairs are needed. Test: after each mode builds a `Report`, deep-copy it, run `provision_report`, and assert the dump is unchanged except for allowed timestamp/report-id fields if any are generated outside the assertion. Invariant: the first browser save cannot silently change the imported draft's sections, historical images, or current proof slots.
+
+- [ ] **Step 5 - Wire mode through the route**. Files: `app/main.py`, `tests/test_app.py`. Read an import mode from multipart form data for DOCX imports, default only if the browser has intentionally sent one, and reject unknown modes with 422. ZIP and JSON imports should ignore no mode or reject a supplied DOCX mode consistently; choose one rule and test it. Test: generated DOCX imports in `editable` and `retest`; invalid mode returns 422; bundle and JSON behaviour remains unchanged. Invariant: existing import formats do not gain hidden semantics.
+
+- [ ] **Step 6 - Add the browser choice before upload**. Files: `app/web/static/manager.js`, maybe `app/web/templates/home.html`, `tests/test_browser.py`. When the selected file looks like DOCX by extension or MIME type, show a dialog with two actions: Editable draft and Retest draft. Append the chosen mode to `FormData`; if the user cancels, do not upload. Test: selecting a DOCX and choosing each action posts the expected mode and navigates to the new draft; selecting ZIP/JSON still imports without the mode dialog. Invariant: the destructive retest transformation is never the accidental result of picking a DOCX.
+
+- [ ] **Step 7 - Make summaries mode-specific**. Files: `app/docx_import.py`, `app/web/static/manager.js`, `tests/test_docx_import.py`, `tests/test_browser.py`. Editable summary names preserved findings, any sections the importer could not recover, findings with no locations, and unrecoverable Setup fields. Retest summary keeps the current retained/dropped/rewritten/PoC-promoted language. Test: summaries differ by mode for the same DOCX. Invariant: the user is told whether content was preserved or transformed before landing on Setup.
+
+- [ ] **Step 8 - Update the data map**. Files: `docs/DATA_MAP.md`. Record the two import modes, which fields are recovered versus deliberately blank, and which mode rewrites statuses and PoC sections. Test: docs-only, so `scripts/relevant_tests.py` should report `Tests: none` unless paired with code in the implementing change. Invariant: the import data contract does not remain documented as retest-only.
+
+### What I would not do
+
+I would not add a second upload endpoint for editable imports. The existing route already owns sniffing JSON, ZIP and DOCX, and splitting endpoints would duplicate all the size, ZIP and error handling. I would not make editable mode call the current parser and then try to undo the retest transformation; by then Resolved findings and source Previous Proof of Concept are already gone. I would not silently default a DOCX to retest mode in the browser, because that path intentionally discards document content. I would not widen the schema or add a new report field for import mode; it is an import-time choice, not report data.

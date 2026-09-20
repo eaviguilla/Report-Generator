@@ -1,6 +1,6 @@
 # Editable DOCX import
 
-> **Status:** shipped · 2026-09-21
+> **Status:** shipped · 2026-09-21 · `4c5fd78`
 
 ## Request
 

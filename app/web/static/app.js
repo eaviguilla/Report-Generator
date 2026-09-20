@@ -4067,6 +4067,8 @@
           };
           block.append(heading);
           if (!isExpanded) return block;
+          const grid = document.createElement("div");
+          grid.className = "additional-grid";
           fields.forEach(field => {
             const card = document.createElement("article");
             card.className = "fragment";
@@ -4079,6 +4081,9 @@
             control.value = finding[field.key] || "";
             control.placeholder = field.placeholder;
             control.setAttribute("aria-label", field.label);
+            // A textarea starts at two rows, which would stand 16px taller than the single-line
+            // fields beside it; grow() takes it from one row upwards as tickets are typed.
+            if (field.multiline) control.rows = 1;
             const grow = () => { control.style.height = "auto"; control.style.height = `${control.scrollHeight}px`; };
             const validate = () => {
               const invalidCharacters = field.rule.invalidCharacters(control.value);
@@ -4094,8 +4099,9 @@
             validate();
             card.append(control);
             if (field.multiline) requestAnimationFrame(grow);
-            block.append(card);
+            grid.append(card);
           });
+          block.append(grid);
           return block;
         };
         // Description sits beside its remediation, and on a retest last year's proof sits beside

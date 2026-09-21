@@ -494,6 +494,56 @@ class DocxReportTests(unittest.TestCase):
                 self.assertEqual(paragraph.text.replace("\n", ""), target)
                 self.assertTrue(all(len(line) <= SCOPE_WRAP_CHARACTERS for line in paragraph.text.split("\n")))
 
+    def test_an_environment_with_no_affected_location_still_reads_as_a_list(self) -> None:
+        """N/A sat in a plain paragraph while the environment beside it was bulleted, so one cell of
+        the pair read as a list and the other as a sentence."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            (report_folder / "evidence").mkdir()
+            buffer = BytesIO()
+            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+            (report_folder / "evidence" / "ev_na.png").write_bytes(buffer.getvalue())
+            now = datetime.now().astimezone()
+            report = Report(
+                report_id="r_na", app_id="CI-DOCX", saved_at=now,
+                engagement=Engagement(
+                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    report_date=date(2026, 9, 9), tester="QA Tester",
+                    tested_environments=["production", "non_production"], tested_channels=["web"],
+                    test_windows={
+                        "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2)),
+                        "non_production": TestWindow(start_date=date(2026, 8, 3), end_date=date(2026, 8, 4)),
+                    },
+                ),
+                scope_targets=[
+                    ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test"),
+                    ScopeTarget(target_id="t_uat", environment="non_production", channel="web", value="https://uat.example.test"),
+                ],
+                evidence={"ev_na": EvidenceItem(file="evidence/ev_na.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)},
+            )
+            # Production only, so the Non-Production cell is the empty one under test.
+            report.vulnerabilities = [self._finding("v_na", "Authorization bypass", "high", "001", ["t_prod"], [
+                ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_na", caption="Production response"),
+            ])]
+            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder)))
+
+            cell = next(
+                cell
+                for table in rendered.tables
+                for row in table.rows for cell in row.cells
+                # Matched on the heading rather than the label, which follows the configurable
+                # non-production name and reads "Lower Region Environment:" by default.
+                if "Environment:" in cell.text and "N/A" in cell.text
+            )
+            bullets = [paragraph for paragraph in cell.paragraphs if paragraph.style.name == "List Paragraph"]
+            self.assertEqual([paragraph.text for paragraph in bullets], ["N/A"])
+            self.assertIsNotNone(
+                bullets[0]._p.find(qn("w:pPr")).find(qn("w:numPr")),
+                "the N/A placeholder must be a real bullet, like the locations it stands in for",
+            )
+            self.assertNotIn("\u2022", cell.text, "the glyph comes from the list style, not the text")
+            self.assertNotIn("{{", cell.text, "the token survived, which aborts generation")
+
     def test_a_value_with_no_separator_inside_the_limit_still_breaks(self) -> None:
         """Breaking runs back to the nearest special character; a value offering none is cut
         at the limit, because letting the line run widens the table."""
@@ -1047,6 +1097,10 @@ class DocxReportTests(unittest.TestCase):
                 ("web", "Asia", "MAIN_ASIA.docx"),
                 ("thick_client", "JH", "MAIN_THICK_MOBILE.docx"),
                 ("mobile", "Asia", "MAIN_THICK_MOBILE_ASIA.docx"),
+                # Asia is a boolean, not one value among several, so GDT lands in the JH column by
+                # design. The decision lives here rather than in the code it does not change.
+                ("web", "GDT", "MAIN.docx"),
+                ("thick_client", "GDT", "MAIN_THICK_MOBILE.docx"),
             ):
                 report = self._component_report(Path(temporary_directory), channel, segment, [
                     ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
@@ -1070,7 +1124,7 @@ class DocxReportTests(unittest.TestCase):
         """None of the four has been through this renderer before. Each carries its own anchors,
         table headers and tokens, and every one of them is a hard precondition."""
         resources = Path(__file__).resolve().parent.parent / "resources"
-        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia")):
+        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia"), ("web", "GDT"), ("thick_client", "GDT")):
             with self.subTest(channel=channel, segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
                 report_folder = Path(temporary_directory)
                 report = self._component_report(report_folder, channel, segment, [

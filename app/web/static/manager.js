@@ -200,12 +200,12 @@
           notices.push(`${rewritten.length} Open New finding${rewritten.length === 1 ? " was" : "s were"} changed to Previously Discovered for retesting: ${rewritten.join(", ")}.`);
         }
         if (dropped.length) {
-          notices.push(`${dropped.length} Resolved finding${dropped.length === 1 ? " was" : "s were"} not included: ${dropped.join(", ")}.`);
+          notices.push(`${dropped.length} Resolved or Closed finding${dropped.length === 1 ? " was" : "s were"} not included: ${dropped.join(", ")}.`);
         }
       }
       notices.push(...(summary.warnings || []), ...(summary.normalizations || []));
       const findingCount = summary.retained ?? 0;
-      const labels = {open_new:"Open New", open_previously_discovered:"Previously Discovered", resolved:"Resolved"};
+      const labels = {open_new:"Open New", open_previously_discovered:"Previously Discovered", open_resolved_on_non_prod:"Resolved on Non-Prod", resolved:"Resolved", closed:"Closed"};
       const statusCounts = Object.entries(summary.status_counts || {})
         .filter(([, count]) => count)
         .map(([key, count]) => `${count} ${labels[key] || key}`)

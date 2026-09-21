@@ -12,6 +12,7 @@ from copy import deepcopy
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+from typing import get_args
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -23,7 +24,7 @@ from pydantic import ValidationError
 from starlette.requests import ClientDisconnect
 
 from app import main
-from app import docx_report, models, report_service
+from app import docx_import, docx_report, models, report_service
 from app.docx_report import _finding_locations, _metadata, generation_issues
 from app.library import Library
 from app.report_service import affected_channels, affected_environments, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
@@ -233,7 +234,7 @@ class ReportApiTests(unittest.TestCase):
         nested_cases = [
             ({"test_windows": {"production": {"test_time": "08:00_17:00"}}}, 'Production time contains invalid character: "_" (underscore)'),
             ({"test_accounts": [{"user_role": "Admin_2", "username": "N/A"}]}, 'User role 1 contains invalid character: "_" (underscore)'),
-            ({"test_accounts": [{"user_role": "Admin", "username": "bad user"}]}, 'Username 1 contains invalid character: " " (space)'),
+            ({"test_accounts": [{"user_role": "Admin", "username": "bad/user"}]}, 'Username 1 contains invalid character: "/" (slash)'),
             ({"test_windows": {"production": {"start_date": "2026-01-02", "end_date": "2026-01-01"}}}, "start date"),
         ]
         for engagement_update, expected_issue in nested_cases:
@@ -255,7 +256,7 @@ class ReportApiTests(unittest.TestCase):
                 "production": {"start_date": "2026-01-01", "end_date": "2026-01-01", "test_time": "08:00-17:00"},
                 "non_production": {"start_date": "2026-01-03", "end_date": "2026-01-04", "test_time": "Anytime"},
             },
-            "test_accounts": [{"user_role": "Admin-2 / QA", "username": "DOMAIN\\qa.user@example"}],
+            "test_accounts": [{"user_role": "Admin-2 / QA", "username": "DOMAIN\\qa user@example"}],
             "limitations": "No API - version 2. (Read only) & 'approved' / \"reviewed\"",
         })
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=candidate).status_code, 200)
@@ -670,6 +671,97 @@ class ReportApiTests(unittest.TestCase):
         remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
         self.assertEqual([fragment.type for fragment in remediation.fragments], ["paragraph"])
         self.assertEqual(remediation.fragments[0].runs, [], "the resolved boilerplate outlived the resolved status")
+
+    def test_the_fourth_status_saves_and_prints_what_previously_discovered_prints(self) -> None:
+        """Every section rule is written as "is it new" or "is it resolved", so a fourth status
+        inherits the retest shape without a rule of its own. The point is that it saves at all:
+        widening the enum is what lets a draft hold it."""
+        finding = Vulnerability(uid="v_non_prod", title="Fixed in the lower region", status="open_resolved_on_non_prod")
+        provision(finding)
+        self.assertEqual(
+            [content.type for content in finding.contents],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+        )
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        self.assertNotEqual(
+            [run.text for run in remediation.fragments[0].runs],
+            ["None, the vulnerability has been remediated."],
+            "an open finding must not claim it was remediated",
+        )
+
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{
+            "uid": "v_non_prod", "title": "Fixed in the lower region", "likelihood": "low", "impact": "low",
+            "severity": "low", "status": "open_resolved_on_non_prod",
+            "scope": {"mode": "custom", "custom_locations": {"production": {"web": ["https://prod.example.test"]}}},
+        }]
+        response = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            main.workspace.load(report_id).vulnerabilities[0].status,
+            "open_resolved_on_non_prod",
+            "the status did not survive the round trip",
+        )
+
+    def test_the_fifth_status_saves_and_keeps_the_remediation_the_tester_wrote(self) -> None:
+        """Closed borrows only the retest drop from Resolved. The app must not write its remediation,
+        must not remove one, and must give it the same five sections Resolved prints."""
+        finding = Vulnerability(uid="v_shut", title="Shut without a fix", status="closed")
+        provision(finding)
+        self.assertEqual(
+            [content.type for content in finding.contents],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+        )
+        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+        self.assertNotEqual(
+            [run.text for run in remediation.fragments[0].runs],
+            [report_service.RESOLVED_REMEDIATION],
+            "Closed is not Resolved and must not claim a remediation happened",
+        )
+
+        remediation.fragments[0].runs = [Run(text="Accepted by the business owner.")]
+        provision(finding)
+        self.assertEqual(
+            [run.text for run in remediation.fragments[0].runs],
+            ["Accepted by the business owner."],
+            "provisioning rewrote a remediation the tester typed",
+        )
+
+        report_id = self.new_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{
+            "uid": "v_shut", "title": "Shut without a fix", "likelihood": "low", "impact": "low",
+            "severity": "low", "status": "closed",
+            "scope": {"mode": "custom", "custom_locations": {"production": {"web": ["https://prod.example.test"]}}},
+        }]
+        response = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].status, "closed")
+
+    def test_a_closed_finding_loses_unmarked_remediated_boilerplate_on_load(self) -> None:
+        """Deliberate, and the one place the app does touch a Closed remediation. The load repair
+        cannot tell a typed copy from boilerplate written before the marker existed, and Closed is in
+        the same class as the open statuses: it must not ship claiming a fix that never happened."""
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        for status, expected_runs in (("closed", []), ("resolved", [{"text": report_service.RESOLVED_REMEDIATION}])):
+            with self.subTest(status=status):
+                draft = read_json(path)
+                draft["vulnerabilities"] = [{
+                    "uid": "v_stale", "title": "Stale boilerplate", "status": status,
+                    "scope": {"mode": "custom", "target_ids": [], "location_values": {}, "custom_locations": {}},
+                    "contents": [{"type": "recommended_remediation", "fragments": [
+                        {"frag_id": "f_stale", "type": "paragraph", "runs": [{"text": report_service.RESOLVED_REMEDIATION}]},
+                    ]}],
+                }]
+                atomic_write_json(path, draft)
+
+                loaded = main.workspace.load(report_id).vulnerabilities[0]
+                remediation = next(content for content in loaded.contents if content.type == "recommended_remediation")
+                self.assertEqual([{"text": run.text} for run in remediation.fragments[0].runs], expected_runs)
+                if status == "resolved":
+                    self.assertEqual(remediation.fragments[0].generated, "resolved_remediation", "the marker was not applied")
 
     def test_a_testers_own_remediation_survives_provisioning(self) -> None:
         """The boilerplate is recognised by its marker, not its wording, so a tester who writes that
@@ -2048,7 +2140,7 @@ class ReportApiTests(unittest.TestCase):
             'Quoted phrase " is Open. still title',
             "Regex . * + ? [ ] ( ) metacharacters",
         ):
-            for status_word in ("Open", "Resolved"):
+            for status_word in ("Open", "Resolved", "CLOSED"):
                 with self.subTest(title=title, status=status_word):
                     runs = report_service.status_conclusion_runs(title, status_word)
                     written = "".join(run.text for run in runs)
@@ -2057,6 +2149,34 @@ class ReportApiTests(unittest.TestCase):
                         f"the builder wrote {written!r}, which its own recogniser rejects",
                     )
                     self.assertEqual(report_service.default_conclusion_span(written), (0, len(written)))
+
+    def test_the_conclusion_builder_writes_the_exact_sentence_each_status_owns(self) -> None:
+        """Recognition alone is not enough: the widened pattern accepts `is CLOSED.` just as readily
+        as `is now CLOSED.`, so a missing verb arm would pass the test above while printing the wrong
+        sentence into a delivered document."""
+        for status, expected in (
+            ("open_new", 'The finding "X" is still Open.'),
+            ("open_previously_discovered", 'The finding "X" is still Open.'),
+            ("open_resolved_on_non_prod", 'The finding "X" is still Open.'),
+            ("resolved", 'The finding "X" is Resolved.'),
+            ("closed", 'The finding "X" is now CLOSED.'),
+        ):
+            with self.subTest(status=status):
+                word = report_service.status_conclusion_word(status)
+                written = "".join(run.text for run in report_service.status_conclusion_runs("X", word))
+                self.assertEqual(written, expected)
+                # Bold, not italic, and only on the status word itself.
+                bolded = [run.text for run in report_service.status_conclusion_runs("X", word) if run.bold]
+                self.assertEqual(bolded, [word])
+
+    def test_every_status_has_a_label_the_importer_can_read_back(self) -> None:
+        """A status with no printed label is a KeyError on the generate path, and a label the
+        importer does not know silently downgrades the finding on the way back in."""
+        members = set(get_args(models.Status))
+        self.assertEqual(set(docx_report.STATUS_LABELS), members)
+        self.assertEqual(set(docx_import.LABEL_BY_STATUS), members)
+        for status in members:
+            self.assertEqual(docx_import.LABEL_BY_STATUS[status], docx_report.STATUS_LABELS[status])
 
     def test_an_emptied_conclusion_paragraph_is_not_refilled(self) -> None:
         """The app used to claim the first text-less paragraph, which wrote boilerplate above a

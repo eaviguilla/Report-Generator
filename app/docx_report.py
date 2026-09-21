@@ -48,7 +48,9 @@ CHANNEL_ORDER = list(CHANNELS)
 STATUS_LABELS = {
     "open_new": "Open (New)",
     "open_previously_discovered": "Open (Previously Discovered)",
+    "open_resolved_on_non_prod": "Open (Resolved on Non-Prod)",
     "resolved": "Resolved",
+    "closed": "Closed",
 }
 # Belongs to the document, never to the draft, so the stored value stays bare digits.
 SEVERITY_TICKET_PREFIX = "GRIMPEN-"
@@ -708,9 +710,8 @@ def _replace_token_with_bullets(
 ) -> None:
     """Swap a cell token for real bullet-list paragraphs cloned from the bullet fragment."""
     pattern = re.compile(r"\{\{\s*" + re.escape(token) + r"\s*\}\}", re.IGNORECASE)
-    if not values:
-        replace_component_token_runs(elements, token, [Run(text="N/A")])
-        return
+    # An environment with nothing affected still reads as a list, so the cell matches the ones beside it.
+    values = values or ["N/A"]
     filename, bullet_token = FRAGMENT_COMPONENT_FILES["bulleted_list"]
     for element in elements:
         for paragraph in list(element.iter(qn("w:p"))):

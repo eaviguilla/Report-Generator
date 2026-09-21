@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import tempfile
 import unittest
 from datetime import date, datetime
@@ -720,7 +721,15 @@ class FragmentRecognitionTests(unittest.TestCase):
                 runs=[Run(text=RESOLVED_REMEDIATION)],
                 generated="resolved_remediation",
             )]
-            report.vulnerabilities = [open_new, previously_discovered, resolved]
+            resolved_on_non_prod = copy.deepcopy(previously_discovered)
+            resolved_on_non_prod.uid = "v_non_prod"
+            resolved_on_non_prod.display_id = "004"
+            resolved_on_non_prod.title = "Fixed in the lower region only"
+            resolved_on_non_prod.status = "open_resolved_on_non_prod"
+            for content in resolved_on_non_prod.contents:
+                for fragment in content.fragments:
+                    fragment.frag_id += "_non_prod"
+            report.vulnerabilities = [open_new, previously_discovered, resolved, resolved_on_non_prod]
 
             data = render_report_docx(report, TEMPLATE, folder)
             payload, evidence, summary = parse_report_docx(data, mode="editable")
@@ -730,7 +739,13 @@ class FragmentRecognitionTests(unittest.TestCase):
                 "Authorization bypass": "open_new",
                 "Previously discovered issue": "open_previously_discovered",
                 "Resolved issue": "resolved",
+                "Fixed in the lower region only": "open_resolved_on_non_prod",
             })
+            self.assertEqual(
+                [content["type"] for content in findings["Fixed in the lower region only"]["contents"]],
+                ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+                "the fourth status prints what previously discovered prints",
+            )
             self.assertEqual(
                 [content["type"] for content in findings["Authorization bypass"]["contents"]],
                 ["description", "recommended_remediation", "proof_of_concept"],
@@ -753,7 +768,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             }
             self.assertEqual(referenced, set(payload["evidence"]))
             self.assertEqual(referenced, set(evidence))
-            self.assertEqual(summary["retained"], 3)
+            self.assertEqual(summary["retained"], 4)
             Report.model_validate(payload)
 
     def test_editable_mode_rejects_edited_resolved_remediation(self) -> None:
@@ -1020,6 +1035,114 @@ class ImportRouteTests(unittest.TestCase):
         stored = main.workspace.find_path(report.report_id).parent / "evidence"
         self.assertEqual(len(list(stored.glob("*.png"))), 1)
 
+    def test_a_retest_inherits_every_status_except_open_new(self) -> None:
+        """A retest re-tests the distinction last year's status recorded, so only Open (New) is
+        meaningless on one. Before this, anything outside a two-name set was dropped and reported as
+        resolved - which would have eaten a finding for carrying a status added after it was written."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            carried = report.vulnerabilities[0]
+            carried.status = "open_resolved_on_non_prod"
+            carried.contents.extend([
+                Content(type="previous_proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_prior", type="numbered_list", items=[ListItem(runs=[Run(text="Prior evidence.")])]),
+                ]),
+                Content(type="in_conclusion", fragments=[
+                    ParagraphFragment(frag_id="f_prior_conclusion", type="paragraph", runs=[Run(text="Open in production.")]),
+                ]),
+            ])
+
+            payload, _, summary = parse_report_docx(render_report_docx(report, TEMPLATE, folder), mode="retest")
+
+            finding = payload["vulnerabilities"][0]
+            self.assertEqual(finding["status"], "open_resolved_on_non_prod", "the retest lost the status it inherited")
+            self.assertEqual(summary["dropped_resolved"], [], "an open finding was dropped and called resolved")
+            self.assertEqual(summary["statuses_rewritten"], [], "nothing changed, so nothing may be reported as changed")
+
+    def test_a_gdt_report_title_yields_segment_name_and_report_type_together(self) -> None:
+        """The three assignments live inside one `if`, so a segment the allowlist does not know loses
+        all three as a unit -- and raises nothing, because the unknown-report-type error sits inside
+        the branch a failed match never enters."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.segment = "GDT"
+
+            payload, _, _ = parse_report_docx(render_report_docx(report, TEMPLATE, folder), mode="editable")
+
+            engagement = payload["engagement"]
+            self.assertEqual(engagement["segment"], "GDT")
+            self.assertEqual(engagement["app_name"], "Northstar Banking")
+            self.assertEqual(engagement["report_type"], "annual_pentest")
+
+    def test_gdt_titles_round_trip_every_report_type_label(self) -> None:
+        """The title parser receives report type only as a display label, so each label must map
+        back to its stored value once the GDT segment has passed the cover-title gate."""
+        for report_type in ("annual_pentest", "retest", "deployment_pentest", "new_test"):
+            with self.subTest(report_type=report_type), tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                report = FragmentRecognitionTests._report(folder)
+                report.engagement.segment = "GDT"
+                report.engagement.report_type = report_type
+
+                payload, _, _ = parse_report_docx(render_report_docx(report, TEMPLATE, folder), mode="editable")
+
+                engagement = payload["engagement"]
+                self.assertEqual(engagement["segment"], "GDT")
+                self.assertEqual(engagement["report_type"], report_type)
+
+    def test_a_retest_drops_closed_findings_and_keeps_the_open_ones(self) -> None:
+        """Closed borrows exactly one rule from Resolved -- the retest drop -- and a dropped finding
+        takes its evidence and typed work with it, so the summary is its only trace."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            kept = report.vulnerabilities[0]
+            kept.status = "open_resolved_on_non_prod"
+            kept.contents.extend([
+                Content(type="previous_proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_prior", type="numbered_list", items=[ListItem(runs=[Run(text="Prior evidence.")])]),
+                ]),
+                Content(type="in_conclusion", fragments=[
+                    ParagraphFragment(frag_id="f_prior_conclusion", type="paragraph", runs=[Run(text="Open in production.")]),
+                ]),
+            ])
+            shut = copy.deepcopy(kept)
+            shut.uid, shut.display_id, shut.title, shut.status = "v_shut", "002", "Closed last year", "closed"
+            report.vulnerabilities = [kept, shut]
+
+            document = render_report_docx(report, TEMPLATE, folder)
+            self.assertIn("Closed", "\n".join(item.text for table in Document(BytesIO(document)).tables for row in table.rows for item in row.cells))
+
+            payload, _, summary = parse_report_docx(document, mode="retest")
+
+            self.assertEqual([finding["title"] for finding in payload["vulnerabilities"]], ["Authorization bypass"])
+            self.assertEqual(summary["dropped_resolved"], ["Closed last year"])
+
+    def test_an_editable_import_keeps_a_closed_finding_as_closed(self) -> None:
+        """Editable mode is the recovery path for anything a retest drops, so the status has to
+        survive it rather than downgrading to previously discovered."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            finding = report.vulnerabilities[0]
+            finding.status = "closed"
+            finding.contents.extend([
+                Content(type="previous_proof_of_concept", fragments=[
+                    ListFragment(frag_id="f_prior", type="numbered_list", items=[ListItem(runs=[Run(text="Prior evidence.")])]),
+                ]),
+                Content(type="in_conclusion", fragments=[
+                    ParagraphFragment(frag_id="f_prior_conclusion", type="paragraph", runs=[Run(text="Shut without a fix.")]),
+                ]),
+            ])
+
+            payload, _, summary = parse_report_docx(render_report_docx(report, TEMPLATE, folder), mode="editable")
+
+            self.assertEqual(payload["vulnerabilities"][0]["status"], "closed")
+            # A recognised label warns about nothing; an unrecognised one downgrades and says so.
+            self.assertEqual([warning for warning in summary["warnings"] if "imported as" in warning], [])
+
     def test_prompt_classifies_a_docx_without_creating_a_report(self) -> None:
         response = self._import("misleading.zip", self._docx(), "prompt")
 
@@ -1078,18 +1201,33 @@ class ImportRouteTests(unittest.TestCase):
         self.assertIn("Unknown DOCX import mode", response.json()["detail"])
         self.assertEqual(set(Path(self.root.name).glob("apps/**/draft.json")), before)
 
-    def test_malformed_editable_import_writes_no_report_directory(self) -> None:
+    def test_an_unrecognised_status_is_assumed_rather_than_refusing_the_document(self) -> None:
+        """A report written by an older version, or edited by hand, must still import. Only the
+        summary cell is changed here, so the detail cell still reads the original label - which is
+        the case that has to stop being an inconsistency."""
         document = Document(BytesIO(self._docx()))
         summary = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Findings")
+        title = summary.rows[1].cells[0].text.strip()
         summary.rows[1].cells[5].text = "Pending"
         output = BytesIO()
         document.save(output)
 
         response = self._import("report.docx", output.getvalue(), "editable")
 
-        self.assertEqual(response.status_code, 422)
-        self.assertIn("unknown finding status", response.json()["detail"])
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(response.status_code, 200)
+        draft = json.loads(next(Path(self.root.name).glob("apps/**/draft.json")).read_text())
+        assumed = next(finding for finding in draft["vulnerabilities"] if finding["title"] == title)
+        self.assertEqual(assumed["status"], "open_previously_discovered")
+        self.assertEqual(
+            [content["type"] for content in assumed["contents"]],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+            "provisioning rebuilds to the status's shape, so what the importer hands over must match it",
+        )
+        warnings = response.json()["summary"]["warnings"]
+        self.assertTrue(
+            any(title in warning and "Pending" in warning for warning in warnings),
+            f"the assumption was made silently: {warnings}",
+        )
 
     def test_truncated_location_row_is_rejected_without_writing(self) -> None:
         document = Document(BytesIO(self._docx()))

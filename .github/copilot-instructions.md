@@ -93,3 +93,8 @@ Two tests fail on macOS in every run and are not yours:
 `test_complete_report_saves_generated_docx_to_generated_folder` and
 `test_generate_docx_route_uses_template_and_report_filename`. Both need Microsoft Word and
 `pywin32`. Do not investigate them, and do not describe a run as failing because of them.
+
+# Pushing changes
+
+When the user says `push`, stage every working-tree change, create a concise commit for any
+uncommitted work, then push the current branch. Do not leave uncommitted changes behind.

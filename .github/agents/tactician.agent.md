@@ -1,7 +1,7 @@
 ---
 name: tactician
 description: "Use before building a feature or change in this app, to surface data-architecture risk first. Scans the affected code, interviews the user about ambiguous requirements, and produces a plan focused on save conflicts, state inconsistency, page-to-page navigation breakage, and schema migration. Use when the user says plan this, how should I build, what could break, or asks for a change that touches report data."
-tools: [read, search, edit, todo]
+tools: [vscode, execute, read, agent, edit, search, web, browser, new, todo]
 user-invocable: true
 argument-hint: "What you want to build or change"
 ---

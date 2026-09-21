@@ -1097,10 +1097,12 @@ class DocxReportTests(unittest.TestCase):
                 ("web", "Asia", "MAIN_ASIA.docx"),
                 ("thick_client", "JH", "MAIN_THICK_MOBILE.docx"),
                 ("mobile", "Asia", "MAIN_THICK_MOBILE_ASIA.docx"),
-                # Asia is a boolean, not one value among several, so GDT lands in the JH column by
-                # design. The decision lives here rather than in the code it does not change.
+                # Asia is a boolean, not one value among several, so GDT and GFT land in the JH
+                # column by design. The decision lives here rather than in the code it does not change.
                 ("web", "GDT", "MAIN.docx"),
                 ("thick_client", "GDT", "MAIN_THICK_MOBILE.docx"),
+                ("web", "GFT", "MAIN.docx"),
+                ("thick_client", "GFT", "MAIN_THICK_MOBILE.docx"),
             ):
                 report = self._component_report(Path(temporary_directory), channel, segment, [
                     ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
@@ -1124,7 +1126,7 @@ class DocxReportTests(unittest.TestCase):
         """None of the four has been through this renderer before. Each carries its own anchors,
         table headers and tokens, and every one of them is a hard precondition."""
         resources = Path(__file__).resolve().parent.parent / "resources"
-        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia"), ("web", "GDT"), ("thick_client", "GDT")):
+        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia"), ("web", "GDT"), ("thick_client", "GDT"), ("web", "GFT"), ("thick_client", "GFT")):
             with self.subTest(channel=channel, segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
                 report_folder = Path(temporary_directory)
                 report = self._component_report(report_folder, channel, segment, [

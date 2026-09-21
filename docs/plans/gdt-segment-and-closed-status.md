@@ -1916,3 +1916,40 @@ documentation was updated where the text actually is.
 **`docs/DATA_MAP.md` §12 needed one claim retracted.** It described the four label copies as having
 no drift guard. Two of the four are now pinned to each other by the step 1 contract test, so that
 sentence was corrected rather than left standing.
+
+## Follow-up: the GFT segment, 2026-09-22
+
+A fifth segment, `GFT`, was added on exactly the terms settled here — no master of its own, reusing
+the non-Asia pair, the whole document cost being one printed string.
+
+**No exchange was run, deliberately.** This plan had already located every place the segment set
+lives and the owner had already answered the two questions that made `GDT` large: which template,
+and whether it prints CVSS. With nothing left to discover, four subagent calls would have
+rediscovered this document. It is recorded here rather than in a plan of its own, because a plan
+costs more than the change it would describe.
+
+The same three source sites, the same three test sites:
+
+| | |
+|---|---|
+| `app/models.py` | `Segment` gains `"GFT"` |
+| `app/docx_import.py` | the title-parser allowlist gains it |
+| `app/web/templates/page1_setup.html` | one `<option>`, last as always |
+| `tests/test_docx.py` | both matrices widen from six rows to eight |
+| `tests/test_browser.py` | the verbatim option list, in the same edit as the `<option>` |
+| `tests/test_docx_import.py` | the title test, rewritten — see below |
+
+**One thing was improved rather than copied.** `test_a_gdt_report_title_yields_segment_name_and_report_type_together`
+tested one hardcoded segment, so adding a sixth would have needed a third near-identical test and a
+seventh a fourth. It is now
+`test_every_segment_the_model_allows_parses_back_out_of_a_title`, driven from `get_args(Segment)`.
+
+That converts a copied test into a **drift guard**: a segment added to the `Literal` but not to the
+importer's allowlist now fails there. This plan's *"what this change deliberately does not do"* listed
+the segment set's copies as unguarded, and one of those copies no longer is. The picker remains
+guarded only by the verbatim browser assertion, which is unchanged.
+
+**Verified.** `tests.test_docx` and `tests.test_docx_import` 95 tests, `tests.test_app` 106,
+`tests.test_browser` 163 — the only failures the two known Word/`pywin32` cases. The drift guard
+passes across all five segments, which is what makes the importer's allowlist and the `Literal`
+agree in fact rather than by assumption. No line endings flipped.

@@ -1110,7 +1110,7 @@ def parse_report_docx(
     app_name, segment, report_type = "", None, None
     for paragraph in document.paragraphs[:20]:
         parts = [part.strip() for part in re.split(r"\s[\u2013\u2014-]\s", paragraph.text) if part.strip()]
-        if len(parts) >= 3 and parts[0] in ("JH", "GWAM", "Asia", "GDT"):
+        if len(parts) >= 3 and parts[0] in ("JH", "GWAM", "Asia", "GDT", "GFT"):
             segment, app_name = parts[0], " - ".join(parts[1:-1])
             label = re.sub(r"\s+\d{4}$", "", parts[-1])
             report_type = REPORT_TYPE_BY_LABEL.get(label)

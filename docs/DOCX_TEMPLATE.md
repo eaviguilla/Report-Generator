@@ -15,17 +15,18 @@ root, so every branch must stay inside `resources/`.
 | no component app type | `MAIN.docx` | `MAIN_ASIA.docx` |
 | Mobile or Thick Client covered | `MAIN_THICK_MOBILE.docx` | `MAIN_THICK_MOBILE_ASIA.docx` |
 
-**Asia is a boolean, not one value among several**, so `JH`, `GWAM` and `GDT`
-all land in the *not Asia* column — GDT by decision rather than by omission. No
-`MAIN_GDT.docx` was authored and none is wanted: the whole document cost of the
-segment is one printed string, `{{segment}}` on the title line, supplied by
-`_metadata` as `engagement.segment or "N/A"`, so a GDT report carries no Section
-table and demands no CVSS pair. The decision lives in the tests rather than in a
-branch — `test_main_template_path_selects_on_both_axes` covers six rows, and
-`test_every_shipped_template_renders_without_unresolved_placeholders` renders
-the same six, so GDT is proved to render with nothing unresolved. Giving GDT its
-own masters later means two Word-authored files and a per-segment suffix lookup
-in place of the boolean.
+**Asia is a boolean, not one value among several**, so `JH`, `GWAM`, `GDT` and
+`GFT` all land in the *not Asia* column — the last two by decision rather than by
+omission. No `MAIN_GDT.docx` or `MAIN_GFT.docx` was authored and none is wanted:
+the whole document cost of either segment is one printed string, `{{segment}}` on
+the title line, supplied by `_metadata` as `engagement.segment or "N/A"`, so such
+a report carries no Section table and demands no CVSS pair. The decision lives in
+the tests rather than in a branch — `test_main_template_path_selects_on_both_axes`
+covers eight rows, and
+`test_every_shipped_template_renders_without_unresolved_placeholders` renders the
+same eight, so both are proved to render with nothing unresolved. Giving either
+its own masters later means two Word-authored files and a per-segment suffix
+lookup in place of the boolean.
 
 Each template is a superset of the one above and left of it. The component pair
 adds a Component/Description table; the Asia pair adds a Section table. Tables

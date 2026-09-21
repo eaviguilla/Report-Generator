@@ -474,7 +474,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_segment_and_report_type_are_required(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
-        self.assertEqual(page.get_by_label("Segment").locator("option").all_text_contents(), ["Select segment", "JH", "GWAM", "Asia", "GDT"])
+        self.assertEqual(page.get_by_label("Segment").locator("option").all_text_contents(), ["Select segment", "JH", "GWAM", "Asia", "GDT", "GFT"])
         self.assertEqual(page.get_by_label("Report Type").locator("option").all_text_contents(), ["Select report type", "Annual Pentest", "Retest", "Deployment Pentest", "New Test"])
         page.get_by_label("Application Name").fill("Required Fields")
         page.get_by_label("CI Number").fill("CI-REQUIRED")

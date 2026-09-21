@@ -14,6 +14,7 @@ import unittest
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from typing import get_args
 from unittest.mock import patch
 
 from docx import Document
@@ -41,6 +42,7 @@ from app.models import (
     Run,
     Scope,
     ScopeTarget,
+    Segment,
     TableFragment,
     TestAccount,
     TestWindow,
@@ -1060,21 +1062,29 @@ class ImportRouteTests(unittest.TestCase):
             self.assertEqual(summary["dropped_resolved"], [], "an open finding was dropped and called resolved")
             self.assertEqual(summary["statuses_rewritten"], [], "nothing changed, so nothing may be reported as changed")
 
-    def test_a_gdt_report_title_yields_segment_name_and_report_type_together(self) -> None:
-        """The three assignments live inside one `if`, so a segment the allowlist does not know loses
-        all three as a unit -- and raises nothing, because the unknown-report-type error sits inside
-        the branch a failed match never enters."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            report = FragmentRecognitionTests._report(folder)
-            report.engagement.segment = "GDT"
+    def test_every_segment_the_model_allows_parses_back_out_of_a_title(self) -> None:
+        """The title parser holds the segment set a second time, as a literal tuple, and the two
+        copies have no other guard. Driving this from the Literal is what catches a segment added to
+        one and not the other -- a miss loses segment, app name and report type together, and raises
+        nothing, because the unknown-report-type error sits inside the branch a failed match never
+        enters."""
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        for segment in get_args(Segment):
+            with self.subTest(segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                report = FragmentRecognitionTests._report(folder)
+                report.engagement.segment = segment
+                if segment == "Asia":
+                    report.vulnerabilities[0].cvss_score = "9.8"
+                    report.vulnerabilities[0].cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 
-            payload, _, _ = parse_report_docx(render_report_docx(report, TEMPLATE, folder), mode="editable")
+                document = render_report_docx(report, main_template_path(report, resources), folder)
+                payload, _, _ = parse_report_docx(document, mode="editable")
 
-            engagement = payload["engagement"]
-            self.assertEqual(engagement["segment"], "GDT")
-            self.assertEqual(engagement["app_name"], "Northstar Banking")
-            self.assertEqual(engagement["report_type"], "annual_pentest")
+                engagement = payload["engagement"]
+                self.assertEqual(engagement["segment"], segment)
+                self.assertEqual(engagement["app_name"], "Northstar Banking")
+                self.assertEqual(engagement["report_type"], "annual_pentest")
 
     def test_gdt_titles_round_trip_every_report_type_label(self) -> None:
         """The title parser receives report type only as a display label, so each label must map

@@ -29,7 +29,7 @@ NonProductionLabel = Annotated[str, Field(min_length=1, max_length=40)]
 NON_PRODUCTION_LABEL_PRESETS: tuple[str, ...] = ("NON-PROD", "MOD", "UAT", "STAGE")
 # Retired presets. Still recognised on import so reports generated before the set changed round trip.
 LEGACY_NON_PRODUCTION_LABELS: tuple[str, ...] = ("TEST/MO", "DEV")
-Segment = Literal["JH", "GWAM", "Asia", "GDT"]
+Segment = Literal["JH", "GWAM", "Asia", "GDT", "GFT"]
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
 NetworkAccess = Literal["Internal", "External"]
 ContentType = Literal["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]

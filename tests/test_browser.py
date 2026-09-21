@@ -130,7 +130,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ("Tester", "QA_Tester", "QA Tester", 'Tester contains invalid character: "_" (underscore)'),
             ("Production time", "08:00_17:00", "08:00-17:00", 'Production time contains invalid character: "_" (underscore)'),
             ("User role 1", "Admin_2", "Admin-2 / QA", 'User role 1 contains invalid character: "_" (underscore)'),
-            ("Username 1", "bad user", "DOMAIN\\qa.user@example", 'Username 1 contains invalid character: " " (space)'),
+            ("Username 1", "bad/user", "DOMAIN\\qa user@example", 'Username 1 contains invalid character: "/" (slash)'),
             ("Limitations", "No testing @ production", "No API - version 2. (Read only) & 'approved' / \"reviewed\"; see scope: prod only.", 'Limitations contains invalid character: "@" (at sign)'),
         ]
         for label, invalid_value, valid_value, expected_message in field_cases:
@@ -474,7 +474,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_segment_and_report_type_are_required(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
-        self.assertEqual(page.get_by_label("Segment").locator("option").all_text_contents(), ["Select segment", "JH", "GWAM", "Asia"])
+        self.assertEqual(page.get_by_label("Segment").locator("option").all_text_contents(), ["Select segment", "JH", "GWAM", "Asia", "GDT"])
         self.assertEqual(page.get_by_label("Report Type").locator("option").all_text_contents(), ["Select report type", "Annual Pentest", "Retest", "Deployment Pentest", "New Test"])
         page.get_by_label("Application Name").fill("Required Fields")
         page.get_by_label("CI Number").fill("CI-REQUIRED")
@@ -1378,32 +1378,311 @@ class BrowserWorkflowTests(unittest.TestCase):
             [selector, base64.b64encode(image_data.getvalue()).decode()],
         )
 
+    def paste_png_as_item_only(self, selector: str | None = None) -> None:
+        """A clipboard whose image is reachable only through `items`.
+
+        OneNote and Word put HTML on the clipboard beside the picture, and the browser then leaves
+        `files` empty. A real DataTransfer always fills both, so the shape has to be faked.
+        """
+        image_data = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        self.page.evaluate(
+            """([selector, encoded]) => {
+                const file = new File([Uint8Array.from(atob(encoded), character => character.charCodeAt(0))], "pasted.png", {type: "image/png"});
+                const event = new Event("paste", {bubbles: true, cancelable: true});
+                Object.defineProperty(event, "clipboardData", {value: {
+                    files: [],
+                    items: [
+                        {kind: "string", type: "text/html", getAsFile: () => null},
+                        {kind: "file", type: "image/png", getAsFile: () => file},
+                    ],
+                }});
+                const target = selector ? document.querySelector(selector) : document.body;
+                target.dispatchEvent(event);
+            }""",
+            [selector, base64.b64encode(image_data.getvalue()).decode()],
+        )
+
+    def arm_evidence(self, fragment_id: str) -> None:
+        """Arm an evidence image the way a click does, without opening the file picker a label would."""
+        self.page.evaluate(
+            """id => document.querySelector(`.evidence-tile[data-fragment-id="${id}"]`)
+                .dispatchEvent(new PointerEvent("pointerdown", {bubbles: true}))""",
+            fragment_id,
+        )
+
+    def evidence_ids(self, filled: bool | None = None) -> list[str]:
+        return self.page.evaluate(
+            """filled => [...document.querySelectorAll(".evidence-tile")]
+                .filter(tile => filled === null || tile.classList.contains("has-evidence") === filled)
+                .map(tile => tile.dataset.fragmentId)""",
+            filled,
+        )
+
     def test_pasting_a_screenshot_attaches_it_as_evidence(self) -> None:
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.locator(".evidence-tile").first.wait_for(timeout=5_000)
-        self.assertIn("paste", page.locator(".evidence-thumb").first.inner_text().lower(), "an empty slot must say how to paste")
+        # An unarmed image must not offer a paste that would not reach it.
+        self.assertNotIn("paste", page.locator(".evidence-thumb").first.inner_text().lower())
+        self.arm_evidence(self.evidence_ids()[0])
+        self.assertIn("paste", page.locator(".evidence-thumb").first.inner_text().lower(), "the armed image must say how to paste")
         self.paste_png(".evidence-tile")
         page.locator(".image-preview").first.wait_for(timeout=5_000)
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
 
         page.reload()
         self.assertEqual(page.locator(".image-preview").count(), 1)
-        self.assertEqual(page.locator(".evidence-thumb span").count(), 0, "the prompt stayed on a filled slot")
+        self.assertEqual(page.locator(".evidence-thumb span").count(), 0, "the prompt stayed on a filled image")
 
-    def test_pasting_with_nothing_focused_fills_the_first_empty_slot(self) -> None:
+    def test_pasting_a_screenshot_whose_clipboard_carries_no_file_list_still_attaches(self) -> None:
+        """OneNote and Word put HTML on the clipboard beside the picture, which leaves
+        `clipboardData.files` empty. Reading only that list dropped the paste with no message."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.locator(".evidence-tile").first.wait_for(timeout=5_000)
-        self.paste_png()
+        self.arm_evidence(self.evidence_ids()[0])
+        self.paste_png_as_item_only(".evidence-tile")
         page.locator(".image-preview").first.wait_for(timeout=5_000)
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
 
         page.reload()
-        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
-        self.assertEqual(proof.locator(".image-preview").count(), 1)
+        self.assertEqual(page.locator(".image-preview").count(), 1)
+
+    def test_pasting_an_image_from_a_focused_editor_uses_the_armed_evidence_slot(self) -> None:
+        """Text focus must not steal an image paste from the evidence image the tester armed, and
+        the editor receiving the event must retain its text rather than acquiring clipboard noise."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        description = page.locator(".content-block").filter(has_text="Description").locator(".rich").first
+        description.fill("Keep this description")
+        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        evidence_id = self.evidence_ids()[0]
+        self.arm_evidence(evidence_id)
+
+        self.paste_png(".content-block .rich")
+        page.locator(f'.evidence-tile[data-fragment-id="{evidence_id}"] .image-preview').wait_for(timeout=8_000)
+        page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+        self.assertEqual(description.inner_text(), "Keep this description")
+
+        page.reload()
+        stored = main.workspace.load(report_id)
+        stored_description = next(content for content in stored.vulnerabilities[0].contents if content.type == "description")
+        proof = next(content for content in stored.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual(stored_description.fragments[0].runs[0].text, "Keep this description")
+        self.assertTrue(
+            any(isinstance(fragment, ImageFragment) and fragment.frag_id == evidence_id and fragment.evidence_id for fragment in proof.fragments),
+            "the armed image must hold the pasted evidence after reload",
+        )
+
+    def test_two_rapid_pastes_into_one_armed_slot_leave_no_orphaned_evidence(self) -> None:
+        """The target advances only when an upload finishes. Two pastes before then queue against
+        the same fragment, so the earlier image must be replaced cleanly rather than left as an
+        unreferenced record and file in the report."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        self.arm_evidence(self.evidence_ids()[0])
+        page.evaluate(
+            """() => {
+                const originalFetch = window.fetch.bind(window);
+                window.heldPasteUploads = [];
+                window.fetch = (input, init = {}) => {
+                    if (String(input).endsWith("/evidence") && init.method === "POST") {
+                        return new Promise(resolve => window.heldPasteUploads.push(() => originalFetch(input, init).then(resolve)));
+                    }
+                    return originalFetch(input, init);
+                };
+            }"""
+        )
+        self.paste_png()
+        self.paste_png()
+        page.wait_for_function("window.heldPasteUploads.length === 1")
+        page.evaluate("window.heldPasteUploads.shift()()")
+        page.wait_for_function("window.heldPasteUploads.length === 1")
+        page.evaluate("window.heldPasteUploads.shift()()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        page.reload()
+        stored = main.workspace.load(report_id)
+        references = {
+            fragment.evidence_id
+            for finding in stored.vulnerabilities
+            for content in finding.contents
+            for fragment in content.fragments
+            if isinstance(fragment, ImageFragment) and fragment.evidence_id
+        }
+        self.assertEqual(set(stored.evidence), references, "replaced rapid paste left unreferenced evidence behind")
+
+    def test_deleting_a_paste_target_during_upload_leaves_no_orphaned_evidence(self) -> None:
+        """The server registers evidence before the client assigns its ID to the target fragment.
+        If the tester deletes that extra tile during the upload, the completed mutation must clean
+        up the now-unreferenced record rather than leave exportable evidence with no owner."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        page.get_by_role("button", name="Add another screenshot").first.click()
+        page.wait_for_function("() => document.querySelectorAll('.evidence-tile').length === 2")
+        self.arm_evidence(self.evidence_ids(filled=False)[-1])
+        page.evaluate(
+            """() => {
+                const originalFetch = window.fetch.bind(window);
+                window.heldPasteUploads = [];
+                window.fetch = (input, init = {}) => {
+                    if (String(input).endsWith("/evidence") && init.method === "POST") {
+                        return new Promise(resolve => window.heldPasteUploads.push(() => originalFetch(input, init).then(resolve)));
+                    }
+                    return originalFetch(input, init);
+                };
+            }"""
+        )
+        self.paste_png()
+        page.wait_for_function("window.heldPasteUploads.length === 1")
+        page.get_by_role("button", name="Delete screenshot 2").click()
+        page.wait_for_function("() => document.querySelectorAll('.evidence-tile').length === 1")
+        page.evaluate("window.heldPasteUploads.shift()()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        page.reload()
+        stored = main.workspace.load(report_id)
+        references = {
+            fragment.evidence_id
+            for finding in stored.vulnerabilities
+            for content in finding.contents
+            for fragment in content.fragments
+            if isinstance(fragment, ImageFragment) and fragment.evidence_id
+        }
+        self.assertEqual(set(stored.evidence), references, "deleted upload target left unreferenced evidence behind")
+
+    def test_replacing_one_shared_evidence_image_keeps_the_other_reference(self) -> None:
+        """Replacement cleanup may remove an old record only after checking every fragment. Two
+        screenshots can intentionally reuse one evidence file, so replacing one must not lose the
+        other image's source file or turn its reference into a 404."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        first_input = page.locator('.evidence-tile input[type="file"]').first
+        image = BytesIO()
+        Image.new("RGB", (2, 2), "white").save(image, format="PNG")
+        first_input.set_input_files({"name": "shared.png", "mimeType": "image/png", "buffer": image.getvalue()})
+        page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        first = next(fragment for fragment in proof.fragments if isinstance(fragment, ImageFragment))
+        original_id = first.evidence_id
+        proof.fragments.append(ImageFragment(frag_id="f_shared_evidence", type="image", environment="production", evidence_id=original_id))
+        main.workspace.save(report)
+
+        page.reload()
+        page.locator(".evidence-tile").nth(1).wait_for(timeout=5_000)
+        replacement = BytesIO()
+        Image.new("RGB", (3, 3), "red").save(replacement, format="PNG")
+        page.locator('.evidence-tile input[type="file"]').first.set_input_files({
+            "name": "replacement.png", "mimeType": "image/png", "buffer": replacement.getvalue(),
+        })
+        page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+
+        stored = main.workspace.load(report_id)
+        images = [
+            fragment
+            for content in stored.vulnerabilities[0].contents
+            for fragment in content.fragments
+            if isinstance(fragment, ImageFragment)
+        ]
+        self.assertIn(original_id, stored.evidence, "replacement cleanup deleted evidence still used by another image")
+        self.assertEqual(images[1].evidence_id, original_id)
+        self.assertEqual(len({fragment.evidence_id for fragment in images if fragment.evidence_id}), 2)
+
+    def test_pasting_with_nothing_armed_imports_nothing(self) -> None:
+        """The old fallback filled the first empty image anywhere in the pane, which is how a
+        screenshot landed on a finding the tester was not looking at. Now it goes nowhere and says so."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+
+        self.paste_png()
+        page.wait_for_selector("#paste-notice.is-visible", timeout=5_000)
+        self.assertIn("evidence image", page.locator("#paste-notice").inner_text())
+        page.wait_for_timeout(800)
+        self.assertEqual(page.locator(".image-preview").count(), 0)
+        # The draft is the assertion, not the screen: an image that reached the report without a
+        # fragment to hold it would leave the pane looking exactly this empty.
+        self.assertEqual(main.workspace.load(report_id).evidence, {})
+
+    def test_a_pasted_screenshot_lands_in_the_armed_image_and_advances(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        # A second empty image is the whole point: with one, landing in the armed image and landing
+        # in the first empty image are the same event and prove nothing.
+        page.get_by_role("button", name="Add another screenshot").first.click()
+        page.wait_for_function("() => document.querySelectorAll('.evidence-tile:not(.has-evidence)').length >= 2", timeout=5_000)
+        empty = self.evidence_ids(filled=False)
+
+        # The last one, so landing in the first would look like success under the old rule.
+        self.arm_evidence(empty[-1])
+        self.paste_png()
+        page.locator(f'.evidence-tile[data-fragment-id="{empty[-1]}"] .image-preview').wait_for(timeout=8_000)
+        page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+
+        self.assertEqual(page.locator(f'.evidence-tile[data-fragment-id="{empty[0]}"] .image-preview').count(), 0,
+                         "the image reached the first empty slot rather than the armed one")
+        armed_now = page.locator(".evidence-tile.is-paste-target").count()
+        self.assertLessEqual(armed_now, 1, "only one image is ever armed")
+
+        # On the draft as well as on the screen, so a render that merely looks right cannot pass.
+        stored = main.workspace.load(report_id)
+        attached = {
+            fragment.frag_id: getattr(fragment, "evidence_id", None)
+            for finding in stored.vulnerabilities for content in finding.contents
+            for fragment in content.fragments if fragment.frag_id in {empty[0], empty[-1]}
+        }
+        self.assertIsNotNone(attached.get(empty[-1]), "the armed image holds no evidence")
+        self.assertIsNone(attached.get(empty[0]), "the unarmed image was filled")
+
+    def test_undo_then_redo_of_a_replaced_screenshot_keeps_the_file(self) -> None:
+        """Undo used to drop the evidence record, the next save pruned its file, and redo restored a
+        reference to a file nothing could bring back."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        target = self.evidence_ids(filled=False)[0]
+
+        self.arm_evidence(target)
+        self.paste_png()
+        page.locator(f'.evidence-tile[data-fragment-id="{target}"] .image-preview').wait_for(timeout=8_000)
+        page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+
+        self.arm_evidence(target)
+        self.paste_png()
+        page.wait_for_timeout(1_500)
+        page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+
+        page.locator("#undo-button").click()
+        page.wait_for_timeout(1_500)
+        page.locator("#redo-button").click()
+        page.wait_for_timeout(1_500)
+
+        stored = main.workspace.load(report_id)
+        folder = main.workspace.find_path(report_id).parent
+        referenced = [
+            fragment.evidence_id
+            for finding in stored.vulnerabilities for content in finding.contents
+            for fragment in content.fragments if getattr(fragment, "evidence_id", None)
+        ]
+        for evidence_id in referenced:
+            self.assertIn(evidence_id, stored.evidence, "a fragment points at a record that is gone")
+            self.assertTrue((folder / stored.evidence[evidence_id].file).exists(), "the image file was pruned out from under a redo")
 
     def test_leaving_a_page_mid_upload_keeps_the_screenshot(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -1658,6 +1937,46 @@ class BrowserWorkflowTests(unittest.TestCase):
             f"browser says {browser_state!r} but the server reports {server_issues}",
         )
         self.assertEqual(self.page.get_by_role("button", name="Generate Report").is_enabled(), not server_issues)
+
+    def test_editable_import_and_first_save_keep_open_resolved_on_non_prod(self) -> None:
+        """The status prints retest sections but is not one of the historical two-status cases.
+        Its parser round trip is unit-tested; this covers the browser's first canonical save after
+        the manager imports the editable document."""
+        source_id = self.ready_report(include_finding=True)
+        source = main.workspace.load(source_id)
+        finding = source.vulnerabilities[0]
+        finding.status = "open_resolved_on_non_prod"
+        main.provision_report(source)
+        main.workspace.save(source)
+        document = render_report_docx(
+            source,
+            main_template_path(source, Path(__file__).resolve().parent.parent / "resources"),
+            main.workspace.find_path(source_id).parent,
+            allow_incomplete=True,
+        )
+
+        self.page.goto(f"{self.base_url}/")
+        self.page.locator("#import-report").set_input_files({
+            "name": "lower-region.docx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "buffer": document,
+        })
+        result = self.page.get_by_role("dialog")
+        result.get_by_role("button", name="Import as editable draft").click()
+        result.get_by_role("heading", name="Imported as editable draft").wait_for()
+        result.get_by_role("button", name="Open Setup").click()
+        self.page.wait_for_url("**/reports/*/setup")
+        imported_id = self.page.url.split("/reports/")[1].split("/")[0]
+
+        self.page.get_by_label("Application Owner").fill("Imported owner")
+        self.page.get_by_role("button", name="Save").click()
+        self.page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+        stored = main.workspace.load(imported_id).vulnerabilities[0]
+        self.assertEqual(stored.status, "open_resolved_on_non_prod")
+        self.assertEqual(
+            [content.type for content in stored.contents],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+        )
 
     def test_upload_attempt_during_conflict_keeps_the_resolution_state(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -3005,6 +3324,122 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_url("**/edit", timeout=10_000)
         page.wait_for_selector("#issue-count")
         self.assertEqual(page.locator(".poc-offer").count(), 0, "the finding no longer touches api, so its steps are not offered")
+
+    def test_the_fourth_status_is_offered_and_prints_the_retest_sections(self) -> None:
+        """The dropdown is the last thing to learn a status, because until the server, the document
+        and the importer all know it, offering it hands the tester a value that loses work."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#findings tr")
+        status = page.locator("#findings tr").first.locator("select").last
+        self.assertIn(
+            "Open (Resolved on Non-Prod)",
+            status.evaluate("select => [...select.options].map(option => option.textContent)"),
+        )
+
+        saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
+        with page.expect_response(saved_put):
+            status.select_option("open_resolved_on_non_prod")
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        stored = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(stored.status, "open_resolved_on_non_prod", "the client offered a status the server refused")
+        self.assertEqual(
+            [content.type for content in stored.contents],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+        )
+
+    def test_the_fifth_status_is_offered_and_saves_as_closed(self) -> None:
+        """Same rule as the fourth: the dropdown learns a status last, once the server, the document,
+        the importer, the recogniser and the builder already know it. This is the first moment a
+        draft on disk can hold `closed`."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#findings tr")
+        status = page.locator("#findings tr").first.locator("select").last
+        self.assertIn("Closed", status.evaluate("select => [...select.options].map(option => option.textContent)"))
+
+        saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
+        with page.expect_response(saved_put):
+            status.select_option("closed")
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+        stored = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(stored.status, "closed", "the client offered a status the server refused")
+        self.assertEqual(
+            [content.type for content in stored.contents],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+        )
+
+    def test_switching_from_resolved_to_closed_removes_only_generated_remediation(self) -> None:
+        """Closed shares Resolved's five sections but must not carry the app-generated claim that
+        remediation occurred. This exercises the client provisioning path, not just server models."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        status = page.locator("#findings tr").first.locator("select").last
+        status.select_option("resolved")
+        page.get_by_role("button", name="Change the status").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        status = page.locator("#findings tr").first.locator("select").last
+        status.select_option("closed")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        page.reload()
+        stored = main.workspace.load(report_id).vulnerabilities[0]
+        remediation = next(content for content in stored.contents if content.type == "recommended_remediation")
+        self.assertEqual(stored.status, "closed")
+        self.assertEqual(
+            [content.type for content in stored.contents],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+        )
+        self.assertEqual(remediation.fragments[0].runs, [], "Closed retained a false generated remediation claim")
+        self.assertIsNone(remediation.fragments[0].generated)
+
+    def test_gdt_closed_finding_keeps_pasted_evidence_without_asia_cvss_fields(self) -> None:
+        """GDT and Closed were added together, but exercise different rules: GDT must remain a
+        non-Asia segment while Closed must retain the proof image that receives a paste."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Segment").select_option("GDT")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        status = page.locator("#findings tr").first.locator("select").last
+        status.select_option("closed")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+        additional = page.locator('[data-content-type="additional_information"]')
+        self.assertEqual(additional.locator(".fragment-head .tag").all_text_contents(), ["Severity Review Tickets"])
+        self.arm_evidence(self.evidence_ids()[0])
+        self.paste_png()
+        page.locator(".image-preview").first.wait_for(timeout=8_000)
+        page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+
+        page.reload()
+        page.locator(".image-preview").first.wait_for(timeout=5_000)
+        stored = main.workspace.load(report_id)
+        finding = stored.vulnerabilities[0]
+        self.assertEqual(stored.engagement.segment, "GDT")
+        self.assertEqual(finding.status, "closed")
+        self.assertEqual(
+            [content.type for content in finding.contents],
+            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+        )
+        evidence_ids = [
+            fragment.evidence_id
+            for content in finding.contents
+            if content.type.endswith("proof_of_concept")
+            for fragment in content.fragments
+            if isinstance(fragment, ImageFragment) and fragment.evidence_id
+        ]
+        self.assertEqual(evidence_ids, list(stored.evidence), "the pasted file must remain referenced after reload")
 
     def test_changing_a_finding_status_in_the_browser_keeps_last_years_proof(self) -> None:
         """The editor hides the previous proof when a finding becomes "open new". Deleting it would
@@ -4565,6 +5000,48 @@ class BrowserWorkflowTests(unittest.TestCase):
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
         self.assertEqual(main.workspace.load(imported_id).vulnerabilities[0].status, "open_previously_discovered")
 
+    def test_retest_docx_import_drops_and_discloses_a_closed_finding(self) -> None:
+        """Closed is intentionally absent from a retest draft, but the summary must name that
+        choice so a tester does not mistake the omitted finding for an import data-loss bug."""
+        source_id = self.ready_report(include_finding=True)
+        source = main.workspace.load(source_id)
+        closed = Vulnerability(
+            uid="v_closed_import",
+            display_id="002",
+            title="Closed browser finding",
+            likelihood="low",
+            impact="low",
+            severity="low",
+            status="closed",
+            scope=Scope(mode="custom", target_ids=["tgt_browser"]),
+        )
+        main.provision(closed)
+        source.vulnerabilities.append(closed)
+        main.workspace.save(source)
+        document = render_report_docx(
+            source,
+            main_template_path(source, Path(__file__).resolve().parent.parent / "resources"),
+            main.workspace.find_path(source_id).parent,
+            allow_incomplete=True,
+        )
+
+        self.page.goto(f"{self.base_url}/")
+        self.page.locator("#import-report").set_input_files({
+            "name": "mixed-status.docx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "buffer": document,
+        })
+        self.page.get_by_role("dialog").get_by_role("button", name="Import as retest draft").click()
+        result = self.page.get_by_role("dialog")
+        result.get_by_role("heading", name="Imported as retest draft").wait_for()
+        self.assertIn("1 Resolved or Closed finding was not included: Closed browser finding.", result.text_content())
+        result.get_by_role("button", name="Open Setup").click()
+        self.page.wait_for_url("**/reports/*/setup")
+        imported_id = self.page.url.split("/reports/")[1].split("/")[0]
+        imported = main.workspace.load(imported_id)
+        self.assertEqual([finding.title for finding in imported.vulnerabilities], ["Browser finding"])
+        self.assertEqual(imported.vulnerabilities[0].status, "open_previously_discovered")
+
     def test_docx_import_warning_text_is_rendered_safely(self) -> None:
         responses = [
             {"source": "docx", "mode_required": True},
@@ -4590,7 +5067,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         result = self.page.get_by_role("dialog")
         result.get_by_role("heading", name="Imported as retest draft").wait_for()
-        self.assertIn("1 Resolved finding was not included: Fixed issue.", result.text_content())
+        self.assertIn("1 Resolved or Closed finding was not included: Fixed issue.", result.text_content())
         self.assertIn('<img src=x onerror="window.__warningExecuted=true">', result.text_content())
         self.assertEqual(result.locator("img").count(), 0)
         self.assertFalse(self.page.evaluate("window.__warningExecuted"))

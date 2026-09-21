@@ -18,7 +18,7 @@ REPORT_TYPE_LABELS = {
     "new_test": "New Test",
 }
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._@\\-]*[A-Za-z0-9])?$")
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$")
 RESOLVED_REMEDIATION = "None, the vulnerability has been remediated."
 CHARACTER_NAMES = {
     " ": "space", "\t": "tab", "\n": "line feed", "\r": "carriage return",
@@ -183,7 +183,7 @@ def setup_input_issues(engagement: Engagement) -> list[str]:
         if account.user_role and (issue := invalid_character_issue(f"User role {index}", account.user_role, "/-")):
             issues.append(issue)
         if account.username and account.username != "N/A" and not USERNAME_PATTERN.fullmatch(account.username):
-            issue = invalid_character_issue(f"Username {index}", account.username, "._@\\-", allow_spaces=False)
+            issue = invalid_character_issue(f"Username {index}", account.username, "._@\\-")
             issues.append(issue or f"Username {index} must start and end with a letter or number")
     if engagement.limitations and (issue := invalid_character_issue("Limitations", engagement.limitations, "/,.;:()&'\"-", allow_line_breaks=True)):
         issues.append(issue)
@@ -323,7 +323,7 @@ def provision(vulnerability: Vulnerability) -> None:
         remediation.fragments = kept or [ParagraphFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="paragraph", runs=[])]
     conclusion = next((content for content in vulnerability.contents if content.type == "in_conclusion"), None)
     if conclusion is not None:
-        status = "Resolved" if vulnerability.status == "resolved" else "Open"
+        status = status_conclusion_word(vulnerability.status)
         paragraphs = [fragment for fragment in conclusion.fragments if isinstance(fragment, ParagraphFragment)]
         generated = next((fragment for fragment in paragraphs if fragment.generated == "status_conclusion"), None)
         # Deliberately no "first paragraph with no text" arm: a paragraph the tester emptied is theirs.
@@ -494,15 +494,22 @@ def _fragment_has_text(fragment: ParagraphFragment) -> bool:
     return any(run.text.strip() for run in fragment.runs)
 
 
-STATUS_CONCLUSION_PATTERN = re.compile(r'The finding ".*" is(?: still)? (?:Open|Resolved)\.', re.DOTALL)
+STATUS_CONCLUSION_PATTERN = re.compile(r'The finding ".*" is(?: still| now)? (?:Open|Resolved|CLOSED)\.', re.DOTALL)
+
+
+def status_conclusion_word(status: str) -> str:
+    """Twin of statusConclusionWord in app.js. CLOSED is upper case deliberately; the patterns are
+    case-sensitive, so tidying it to title case freezes every sentence already on disk."""
+    return {"resolved": "Resolved", "closed": "CLOSED"}.get(status, "Open")
 
 
 def status_conclusion_runs(title: str, status_word: str) -> list[Run]:
     """Single owner of the default conclusion sentence. Paired with STATUS_CONCLUSION_PATTERN, which
     must keep matching whatever this builds: relax one and every default on disk freezes at the title
     and status it was stored with, because nothing recognises it as the app's own sentence any more."""
+    lead = {"Open": "is still ", "CLOSED": "is now "}.get(status_word, "is ")
     return [
-        Run(text=f'The finding "{title}" is still ' if status_word == "Open" else f'The finding "{title}" is '),
+        Run(text=f'The finding "{title}" {lead}'),
         Run(text=status_word, bold=True),
         Run(text="."),
     ]

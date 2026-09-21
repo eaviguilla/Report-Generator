@@ -116,7 +116,7 @@
   let activeTextTransaction = null;
   const library = JSON.parse(root.dataset.library || "[]");
   const severity = ["critical", "high", "medium", "low", "informational"];
-  const statuses = [["open_new", "Open (New)"], ["open_previously_discovered", "Open (Previously Discovered)"], ["resolved", "Resolved"]];
+  const statuses = [["open_new", "Open (New)"], ["open_previously_discovered", "Open (Previously Discovered)"], ["open_resolved_on_non_prod", "Open (Resolved on Non-Prod)"], ["resolved", "Resolved"], ["closed", "Closed"]];
   const contentNames = {description:"Description", recommended_remediation:"Recommended Remediation", previous_proof_of_concept:"Previous Proof of Concept", proof_of_concept:"Proof of Concept", in_conclusion:"In Conclusion", additional_information:"Additional Information"};
   const allowed = {description:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], recommended_remediation:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], previous_proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], in_conclusion:["paragraph","note"]};
   // Twin of docx_report.generation_issues; these carry the finding, so none is ever left empty.
@@ -125,12 +125,16 @@
   const RESOLVED_REMEDIATION = "None, the vulnerability has been remediated.";
   // Twin of report_service.status_conclusion_runs and STATUS_CONCLUSION_PATTERN. The builder and the
   // recogniser must stay a pair: relax one and every default on disk freezes at its stored title.
-  const statusConclusionRuns = (title, statusWord) => [
-    {text: `The finding "${title}" is ${statusWord === "Open" ? "still " : ""}`},
-    {text: statusWord, bold: true},
-    {text: "."},
-  ];
-  const STATUS_CONCLUSION_PATTERN = /^The finding "[\s\S]*" is(?: still)? (?:Open|Resolved)\./;
+  const statusConclusionWord = status => status === "resolved" ? "Resolved" : status === "closed" ? "CLOSED" : "Open";
+  const statusConclusionRuns = (title, statusWord) => {
+    const lead = statusWord === "Open" ? "is still " : statusWord === "CLOSED" ? "is now " : "is ";
+    return [
+      {text: `The finding "${title}" ${lead}`},
+      {text: statusWord, bold: true},
+      {text: "."},
+    ];
+  };
+  const STATUS_CONCLUSION_PATTERN = /^The finding "[\s\S]*" is(?: still| now)? (?:Open|Resolved|CLOSED)\./;
   const defaultConclusionSpan = text => {
     const stripped = text.trimEnd();
     const marker = 'The finding "';
@@ -556,6 +560,9 @@
     [...changes].reverse().forEach(change => {
       const useBefore = direction === "undo";
       const present = useBefore ? change.beforePresent : change.afterPresent;
+      // Removing an evidence record here lets the next save prune its file, and a redo restores the
+      // record pointing at a file nothing can bring back. Records are dropped by explicit action.
+      if (!present && change.path[0] === "evidence" && change.path.length === 2) return;
       let parent = target;
       change.path.slice(0, -1).forEach(key => { parent = parent[key]; });
       const key = change.path.at(-1);
@@ -1052,7 +1059,7 @@
   function syncConclusion(vulnerability) {
     const conclusion = vulnerability.contents?.find(content => content.type === "in_conclusion");
     if (!conclusion) return;
-    const status = vulnerability.status === "resolved" ? "Resolved" : "Open";
+    const status = statusConclusionWord(vulnerability.status);
     const paragraphs = conclusion.fragments.filter(fragment => fragment.type === "paragraph");
     const generated = paragraphs.find(fragment => fragment.generated === "status_conclusion");
     // The regex alone decides: the marker outlives the text and overwrote written conclusions.
@@ -1125,7 +1132,7 @@
     if (!conclusion || !contentTypesForStatus(finding.status).includes("in_conclusion")) return false;
     const first = conclusion.fragments.find(fragment => fragment.type === "paragraph");
     if (!first || first.generated || !fragmentHasText(first)) return false;
-    const statusWord = finding.status === "resolved" ? "Resolved" : "Open";
+    const statusWord = statusConclusionWord(finding.status);
     const derived = statusConclusionRuns(finding.title, statusWord).map(run => run.text).join("");
     const before = previousText ?? conclusionText(first);
     // Nothing to announce when there was no sentence: a status change that brings the section back
@@ -1469,7 +1476,8 @@
     const OTHERS_OPTION = "OTHERS";
     // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
     let typingCustomLabel = false;
-    const usernameCharacters = characterRule("Username", /^[A-Za-z0-9._@\\-]$/);
+    // The space sits first inside the class so the trailing hyphen cannot become a range.
+    const usernameCharacters = characterRule("Username", /^[ A-Za-z0-9._@\\-]$/);
     // Twin of report_service.COMPONENT_SCOPE_SYMBOLS. A strict superset of the retired mobile set,
     // so nothing that validated before is rejected now; the backslash and brackets are what make an
     // install path typable. Applied to component channels only -- a URL carries ? and =.
@@ -1494,7 +1502,7 @@
       // Deliberately a subset of the Limitations set: the retest suggestion writes this label into
       // Limitations, and a character legal here but not there would 422 the save that accepts it.
       non_production_label: characterRule("Non-Production name", /^[\p{L}\p{Nd} /\-]$/u),
-      username: {...usernameCharacters, valid:value => !value || value === "N/A" || /^[A-Za-z0-9](?:[A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/.test(value), message:label => `${label} must start and end with a letter or number`},
+      username: {...usernameCharacters, valid:value => !value || value === "N/A" || /^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/.test(value), message:label => `${label} must start and end with a letter or number`},
     };
     const setupNotice = document.querySelector("#setup-validation-note");
     const wireSetupRule = (input, rule, label = rule.label) => {
@@ -2799,15 +2807,80 @@
     browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
     remove: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M9 6V4h6v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
   };
+  // A pasted image goes to the evidence image the tester armed, or nowhere. Module scope because
+  // both the tile and the editor's paste listener need it, and it outlives the pane rebuild that
+  // every caption keystroke triggers -- which is why it holds a frag_id and never an element.
+  let pasteTargetId = null;
+  // Case-insensitive because userAgentData reports "macOS" while the legacy platform says "MacIntel".
+  const pasteShortcut = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? "\u2318V" : "Ctrl+V";
+  const pasteHintText = (filled, armed) => {
+    if (filled) return armed ? `Press ${pasteShortcut} to replace` : "";
+    // No "ready" wording: the ring says that, and the thumbnail column is too narrow to spend a
+    // line on saying it twice.
+    return armed ? `Press ${pasteShortcut} to paste<br><small>or click to browse</small>` : "Click to choose, or drag an image here";
+  };
+  // "paste" is written only where pasting will actually land, so the other images stop advertising
+  // something one of them alone can do.
+  const refreshPasteHints = () => {
+    // A target the pane no longer shows is not a target: another finding selected, the section
+    // collapsed, the image deleted. Clearing here covers every one of those in a single place.
+    if (pasteTargetId && !document.querySelector(`.evidence-tile[data-fragment-id="${pasteTargetId}"]`)) pasteTargetId = null;
+    document.querySelectorAll(".evidence-tile").forEach(tile => {
+      const armed = tile.dataset.fragmentId === pasteTargetId;
+      const filled = tile.classList.contains("has-evidence");
+      tile.classList.toggle("is-paste-target", armed);
+      const hint = tile.querySelector(".evidence-hint");
+      if (hint) hint.innerHTML = pasteHintText(filled, armed);
+      const label = tile.dataset.pasteLabel;
+      if (label) tile.setAttribute("aria-label", armed ? `${label}, ready to paste` : label);
+    });
+  };
+  const armPasteTarget = fragmentId => {
+    if (pasteTargetId === fragmentId) return;
+    pasteTargetId = fragmentId;
+    refreshPasteHints();
+  };
+  let pasteHintTimer;
+  const showPasteNotice = () => {
+    let notice = document.querySelector("#paste-notice");
+    if (!notice) {
+      notice = document.createElement("p");
+      notice.id = "paste-notice";
+      notice.setAttribute("role", "status");
+      document.body.append(notice);
+    }
+    notice.textContent = "Click an evidence image first, then paste.";
+    notice.classList.add("is-visible");
+    clearTimeout(pasteHintTimer);
+    pasteHintTimer = setTimeout(() => notice.classList.remove("is-visible"), 4000);
+  };
   // One screenshot in an evidence set. Order is the fragment order, so the position control writes
   // straight into content.fragments and the report comes out in the order the tiles are shown.
+  // `files` is empty when the source also puts HTML on the clipboard, which OneNote and Word both
+  // do; the image is still there as an item.
+  const clipboardImageFile = clipboard => {
+    if (!clipboard) return null;
+    const dropped = [...(clipboard.files || [])].find(file => file.type.startsWith("image/"));
+    if (dropped) return dropped;
+    for (const item of clipboard.items || []) {
+      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+      const file = item.getAsFile();
+      if (file) return file;
+    }
+    return null;
+  };
   function renderEvidenceTile(fragment, content, rerender, finding, position) {
     const evidence = report.evidence?.[fragment.evidence_id];
     const tile = document.createElement("div");
     tile.className = `evidence-tile${evidence ? " has-evidence" : ""}`;
     tile.dataset.fragmentId = fragment.frag_id;
     tile.tabIndex = 0;
-    tile.setAttribute("aria-label", `${contentNames[content.type]} screenshot ${position}, paste to attach`);
+    tile.dataset.pasteLabel = `${contentNames[content.type]} screenshot ${position}`;
+    tile.setAttribute("aria-label", tile.dataset.pasteLabel);
+    // pointerdown lands before the label activates its file input, so aiming at the thumbnail arms
+    // the card and opens the picker rather than the two competing for the same click.
+    tile.addEventListener("pointerdown", () => armPasteTarget(fragment.frag_id));
+    tile.addEventListener("focusin", () => armPasteTarget(fragment.frag_id));
     const upload = document.createElement("input");
     upload.type = "file";
     upload.accept = "image/*";
@@ -2828,7 +2901,14 @@
         const evidenceRecord = mutation.evidence;
         report.evidence ||= {};
         report.evidence[evidenceRecord.evidence_id] = evidenceRecord;
+        const replacedEvidence = fragment.evidence_id ? new Set([fragment.evidence_id]) : new Set();
         fragment.evidence_id = evidenceRecord.evidence_id;
+        dropUnreferencedEvidence(new Set([...replacedEvidence, evidenceRecord.evidence_id]));
+        // Straight on to the next empty image in this set, so three screenshots take three pastes
+        // rather than three clicks. Nothing empty left disarms, so a fourth paste asks rather than
+        // overwriting what was just placed.
+        const images = content.fragments.filter(item => item.type === "image");
+        pasteTargetId = images.slice(images.indexOf(fragment) + 1).find(item => !item.evidence_id)?.frag_id || null;
         rerender();
         scheduleSave();
         await save();
@@ -2843,7 +2923,7 @@
       uploadImage(selectedFile);
     };
     tile.onpaste = event => {
-      const pasted = [...(event.clipboardData?.files || [])].find(item => item.type.startsWith("image/"));
+      const pasted = clipboardImageFile(event.clipboardData);
       if (!pasted) return;
       event.preventDefault();
       uploadImage(pasted);
@@ -2909,7 +2989,7 @@
       };
     } else {
       thumb.htmlFor = upload.id;
-      thumb.innerHTML = `${EVIDENCE_ICONS.image}<span>Drop, paste<br>or click</span>`;
+      thumb.innerHTML = `${EVIDENCE_ICONS.image}<span class="evidence-hint"></span>`;
     }
 
     const meta = document.createElement("div");
@@ -2971,7 +3051,11 @@
       remove.onclick = () => { content.fragments.splice(content.fragments.indexOf(fragment), 1); rerender(); scheduleSave(); };
     }
     acts.append(replace, remove);
-    facts.append(size, acts);
+    // A filled tile has no room in its thumbnail for the hint, so it sits beside the dimensions and
+    // stays empty until this image is the armed one.
+    const filledHint = document.createElement("small");
+    filledHint.className = "evidence-hint";
+    facts.append(size, ...(evidence ? [filledHint] : []), acts);
     meta.append(caption, facts);
 
     const main = document.createElement("div");
@@ -3356,10 +3440,14 @@
   function continuousEditor() {
     const nav = document.querySelector("#finding-nav");
     const pane = document.querySelector("#finding-editor");
-    // Pasting with nothing focused fills the first empty slot on screen; a card that took the paste itself has already cancelled it.
+    // Images are routed by the armed evidence image, text by focus. Neither can use the other's
+    // destination, so an image is taken even from inside a caption -- honouring focus there would
+    // drop the screenshot into a box that cannot hold it.
     document.addEventListener("paste", event => {
-      if (event.defaultPrevented) return;
-      pane?.querySelector('.content-block:not([data-content-type="previous_proof_of_concept"]) .evidence-tile:not(.has-evidence)')?.onpaste?.(event);
+      if (!clipboardImageFile(event.clipboardData)) return;
+      const target = pasteTargetId && pane?.querySelector(`.evidence-tile[data-fragment-id="${pasteTargetId}"]`);
+      if (!target) { showPasteNotice(); return; }
+      target.onpaste?.(event);
     });
     report.vulnerabilities.forEach(finding => { syncConclusion(finding); syncEvidenceImageSlots(finding); });
     let selectedFindingUid = report.vulnerabilities[0]?.uid;
@@ -3863,7 +3951,7 @@
               const {banner, actions} = buildOffer("content-offer", "The standard closing sentence is missing. Put it back as a starting point; you will still need to replace it with your own wording before generating.");
               banner.dataset.conclusionRestore = "";
               actions.append(offerButton("Put it back", "primary", () => {
-                emptied[emptied.length - 1].runs = statusConclusionRuns(finding.title, finding.status === "resolved" ? "Resolved" : "Open");
+                emptied[emptied.length - 1].runs = statusConclusionRuns(finding.title, statusConclusionWord(finding.status));
                 // Back to boilerplate means the conclusion holds nothing the tester chose, so an
                 // earlier "not that step" no longer describes anything and the offer starts over.
                 finding.conclusion_offer_resolved = [];
@@ -3880,7 +3968,7 @@
               banner.dataset.conclusionSentence = "";
               const target = writtenParagraphs[writtenParagraphs.length - 1];
               const apply = mode => {
-                const sentence = statusConclusionRuns(finding.title, finding.status === "resolved" ? "Resolved" : "Open");
+                const sentence = statusConclusionRuns(finding.title, statusConclusionWord(finding.status));
                 target.runs = mode === "replace" ? sentence : [...(target.runs || []), {text:" "}, ...sentence];
                 if (mode === "replace") finding.conclusion_offer_resolved = [];
                 render();
@@ -4132,6 +4220,7 @@
       });
       updateReadinessPanel();
       showReviewTarget();
+      refreshPasteHints();
       if (focusedFindingUid) {
         requestAnimationFrame(() => { const focusedFinding = document.getElementById(`finding-${focusedFindingUid}`); focusedFinding?.scrollIntoView({behavior:"smooth", block:"start"}); focusedFinding?.focus({preventScroll:true}); });
       } else if (restoreScroll) {

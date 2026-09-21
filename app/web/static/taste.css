@@ -1772,6 +1772,56 @@ button.content-toggle:hover:not(:disabled) small {
   line-height: 1.3;
 }
 
+/* Quieter than the review target's red, and declared before it, so a jumped-to image is never
+   masked by an armed one. Incomplete is automatic and ranks below both. */
+.evidence-tile.is-paste-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.evidence-hint {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.evidence-hint small {
+  display: block;
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.evidence-tile.is-paste-target .evidence-hint {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* Says what to do after a paste that had nowhere to go. The only message this flow shows. */
+#paste-notice {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  z-index: 60;
+  margin: 0;
+  padding: 9px 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+  font-size: 12.5px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  transition: opacity 140ms ease-out, transform 140ms ease-out;
+  pointer-events: none;
+}
+
+#paste-notice.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .evidence-thumb .image-preview {
   /* Overrides the legacy fixed 88x66 thumbnail so the whole screenshot is shown, not a crop of it. */
   width: auto;

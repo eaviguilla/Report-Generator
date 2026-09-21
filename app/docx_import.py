@@ -22,7 +22,7 @@ from docx.text.paragraph import Paragraph
 from PIL import Image, UnidentifiedImageError
 
 from .models import CHANNELS, COMPONENT_CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS
-from .report_service import REPORT_TYPE_LABELS, RESOLVED_REMEDIATION
+from .report_service import REPORT_TYPE_LABELS, RESOLVED_REMEDIATION, content_types_for_status
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
 # renders one of every fragment type and fails if any of these stops identifying it.
@@ -53,10 +53,14 @@ BOILERPLATE = {
 STATUS_BY_LABEL = {
     "Open (New)": "open_new",
     "Open (Previously Discovered)": "open_previously_discovered",
+    "Open (Resolved on Non-Prod)": "open_resolved_on_non_prod",
     "Resolved": "resolved",
+    "Closed": "closed",
 }
 LABEL_BY_STATUS = {status: label for label, status in STATUS_BY_LABEL.items()}
-RETAINED_STATUSES = {"open_new", "open_previously_discovered"}
+# A label this app does not know falls back to this rather than refusing the document, so a report
+# written by an older version or edited by hand still imports.
+FALLBACK_STATUS = "open_previously_discovered"
 IMPORT_MODES = {"editable", "retest"}
 REPORT_TYPE_BY_LABEL = {label: value for value, label in REPORT_TYPE_LABELS.items()}
 FIGURE_PREFIX = re.compile(r"^Figure\s+\d+\s*[.:\-]?\s*")
@@ -652,7 +656,7 @@ def _summary_rows(document) -> list[dict]:
         rows.append({
             "title": cells[0], "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
             "severity": cells[3].lower() or "informational", "display_id": cells[4],
-            "status": STATUS_BY_LABEL.get(cells[5]),
+            "status": STATUS_BY_LABEL.get(cells[5], FALLBACK_STATUS), "status_label": cells[5],
         })
     return rows
 
@@ -775,9 +779,13 @@ def _empty_proof(scope: dict, targets: list[dict]) -> list[dict]:
 def _findings(document, formats, targets, non_production_label, evidence, mode, warnings):
     """Walk each finding's body, from its heading to the next one."""
     summary_rows = _summary_rows(document)
-    unknown = [row["title"] for row in summary_rows if row["status"] is None]
-    if unknown:
-        raise ReportImportError(f'"{unknown[0]}" has an unknown finding status.')
+    # Named rather than refused: the tester can see which findings were assumed and correct them.
+    for row in summary_rows:
+        if row["status_label"] not in STATUS_BY_LABEL:
+            warnings.append(
+                f'"{row["title"]}" had an unrecognised status '
+                f'({row["status_label"] or "blank"}) and was imported as {LABEL_BY_STATUS[FALLBACK_STATUS]}.'
+            )
     body = list(document.element.body.iterchildren())
     summary_table = _find_table(document, "Findings")
     summary_index = body.index(summary_table._tbl)
@@ -883,8 +891,17 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                 "description", "recommended_remediation", "previous_proof_of_concept",
                 "proof_of_concept", "in_conclusion",
             ]
+        # A status this app assumed tells us nothing about the shape, so either is accepted and the
+        # document decides. Without this the structure check refuses before the status ever matters.
+        if row["status_label"] not in STATUS_BY_LABEL and section_order == [
+            "description", "recommended_remediation", "proof_of_concept",
+        ]:
+            expected_sections = section_order
         if section_order != expected_sections:
-            raise ReportImportError(f'"{title}" does not have the expected section structure for {LABEL_BY_STATUS[row["status"]]}.')
+            raise ReportImportError(
+                f'"{title}" does not have the expected section structure for '
+                f'{row["status_label"] or LABEL_BY_STATUS[row["status"]]}.'
+            )
         if detail is None:
             raise ReportImportError(f'"{title}" has no finding detail table.')
         detail_values = {
@@ -895,9 +912,18 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         repeated = {
             "Severity": row["severity"].title(),
             "ID": row["display_id"],
-            "Status": LABEL_BY_STATUS[row["status"]],
         }
         if any(_clean(detail_values.get(label, "")) != _clean(value) for label, value in repeated.items()):
+            raise ReportImportError(f'"{title}" summary and detail values do not match.')
+        # Compared only when both cells name a status this app knows. Either one unrecognised means
+        # the status was assumed, so there is nothing to disagree about and the document still
+        # imports. Two known labels that differ is a real inconsistency, and still refuses.
+        detail_status_label = _clean(detail_values.get("Status", ""))
+        if (
+            row["status_label"] in STATUS_BY_LABEL
+            and detail_status_label in STATUS_BY_LABEL
+            and STATUS_BY_LABEL[detail_status_label] != row["status"]
+        ):
             raise ReportImportError(f'"{title}" summary and detail values do not match.')
 
         local_evidence: dict[str, bytes] = {}
@@ -919,11 +945,19 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         local_warnings = []
         scope = _detail_locations(detail, working_targets, local_warnings, title)
 
-        if mode == "retest" and row["status"] not in RETAINED_STATUSES:
+        if mode == "retest" and row["status"] in ("resolved", "closed"):
             dropped.append(title)
             continue
 
         if mode == "editable":
+            # Provisioning will rebuild this finding to the shape its status implies, and the
+            # projection check refuses the import if what we hand over differs -- in order, not just
+            # in membership. Only a fallback finding can be short here.
+            by_type = {content["type"]: content for content in source_contents}
+            source_contents = [
+                by_type.get(content_type, {"type": content_type, "fragments": []})
+                for content_type in content_types_for_status(row["status"])
+            ]
             contents = source_contents
             status = row["status"]
             if status == "resolved":
@@ -938,8 +972,9 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                     raise ReportImportError(f'"{title}" has edited remediation while Resolved.')
                 fragments[0]["generated"] = "resolved_remediation"
         else:
-            # Every retained finding becomes previously discovered: it is the only status that keeps
-            # a previous proof of concept, and the recovered steps are exactly that.
+            # A retest keeps last year's status, because the distinction it carries is exactly what
+            # this year re-tests. Only Open (New) is meaningless on a retest and becomes previously
+            # discovered; Resolved and Closed never reach here at all.
             if row["status"] == "open_new":
                 rewritten.append(title)
             source_by_type = {content["type"]: content for content in source_contents}
@@ -950,7 +985,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                 {"type": "proof_of_concept", "fragments": []},
                 {"type": "in_conclusion", "fragments": []},
             ]
-            status = "open_previously_discovered"
+            status = "open_previously_discovered" if row["status"] == "open_new" else row["status"]
         targets[:] = working_targets
         warnings.extend(local_warnings)
         used_evidence = {
@@ -1075,7 +1110,7 @@ def parse_report_docx(
     app_name, segment, report_type = "", None, None
     for paragraph in document.paragraphs[:20]:
         parts = [part.strip() for part in re.split(r"\s[\u2013\u2014-]\s", paragraph.text) if part.strip()]
-        if len(parts) >= 3 and parts[0] in ("JH", "GWAM", "Asia"):
+        if len(parts) >= 3 and parts[0] in ("JH", "GWAM", "Asia", "GDT"):
             segment, app_name = parts[0], " - ".join(parts[1:-1])
             label = re.sub(r"\s+\d{4}$", "", parts[-1])
             report_type = REPORT_TYPE_BY_LABEL.get(label)
@@ -1150,6 +1185,8 @@ def parse_report_docx(
         raise ReportImportError("Imported evidence ownership is inconsistent.")
     summary = {
         "retained": len(findings),
+        # Holds Closed findings too. Kept under this name because a half-landed rename fails
+        # silently: the manager reads `summary.dropped_resolved || []` and the notice just vanishes.
         "dropped_resolved": dropped,
         "statuses_rewritten": rewritten,
     }
@@ -1157,7 +1194,7 @@ def parse_report_docx(
         summary.update({
             "status_counts": {
                 status: sum(1 for finding in findings if finding["status"] == status)
-                for status in ("open_new", "open_previously_discovered", "resolved")
+                for status in STATUS_BY_LABEL.values()
             },
             "sections_imported": sum(len(finding["contents"]) for finding in findings),
             "evidence_imported": len(evidence),

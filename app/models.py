@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["critical", "high", "medium", "low", "informational"]
-Status = Literal["open_new", "open_previously_discovered", "resolved"]
+Status = Literal["open_new", "open_previously_discovered", "open_resolved_on_non_prod", "resolved", "closed"]
 Environment = Literal["production", "non_production"]
 Channel = Literal["web", "api", "mobile", "thick_client"]
 # The one canonical app-type order. Lives here because docx_report and report_service both import
@@ -29,7 +29,7 @@ NonProductionLabel = Annotated[str, Field(min_length=1, max_length=40)]
 NON_PRODUCTION_LABEL_PRESETS: tuple[str, ...] = ("NON-PROD", "MOD", "UAT", "STAGE")
 # Retired presets. Still recognised on import so reports generated before the set changed round trip.
 LEGACY_NON_PRODUCTION_LABELS: tuple[str, ...] = ("TEST/MO", "DEV")
-Segment = Literal["JH", "GWAM", "Asia"]
+Segment = Literal["JH", "GWAM", "Asia", "GDT"]
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
 NetworkAccess = Literal["Internal", "External"]
 ContentType = Literal["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]

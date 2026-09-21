@@ -15,6 +15,18 @@ root, so every branch must stay inside `resources/`.
 | no component app type | `MAIN.docx` | `MAIN_ASIA.docx` |
 | Mobile or Thick Client covered | `MAIN_THICK_MOBILE.docx` | `MAIN_THICK_MOBILE_ASIA.docx` |
 
+**Asia is a boolean, not one value among several**, so `JH`, `GWAM` and `GDT`
+all land in the *not Asia* column — GDT by decision rather than by omission. No
+`MAIN_GDT.docx` was authored and none is wanted: the whole document cost of the
+segment is one printed string, `{{segment}}` on the title line, supplied by
+`_metadata` as `engagement.segment or "N/A"`, so a GDT report carries no Section
+table and demands no CVSS pair. The decision lives in the tests rather than in a
+branch — `test_main_template_path_selects_on_both_axes` covers six rows, and
+`test_every_shipped_template_renders_without_unresolved_placeholders` renders
+the same six, so GDT is proved to render with nothing unresolved. Giving GDT its
+own masters later means two Word-authored files and a per-segment suffix lookup
+in place of the boolean.
+
 Each template is a superset of the one above and left of it. The component pair
 adds a Component/Description table; the Asia pair adds a Section table. Tables
 are resolved by their first header cell, never by index, so a template may carry
@@ -144,10 +156,10 @@ never block their report.
 
 Reading a finished report back, `parse_report_docx` pairs this table with finding
 details by title **and occurrence order**, so duplicate titles retain distinct
-rows. Editable mode keeps Resolved rows; retest claims their rows before applying
-its intentional Resolved filter. A non-empty editable score or vector must pass
-the same Unicode-aware character allowlist as an ordinary save or the entire
-import is rejected; it is never silently erased.
+rows. Editable mode keeps Resolved and Closed rows; retest claims their rows
+before applying its intentional Resolved and Closed filter. A non-empty editable
+score or vector must pass the same Unicode-aware character allowlist as an
+ordinary save or the entire import is rejected; it is never silently erased.
 
 ## Import contract
 
@@ -157,6 +169,18 @@ new draft from supported visible document semantics: all known statuses and
 their printed sections, engagement metadata, scope, Additional Information, and
 reachable evidence. It does not recover hidden source-draft state, original IDs,
 or original image upload metadata.
+
+Status round-trips on the printed label, so `STATUS_BY_LABEL` carries all five
+including `"Closed": "closed"` — without it a generated Closed report imports as
+`open_previously_discovered` through `FALLBACK_STATUS`, which succeeds with one
+warning and is therefore easy to miss. A retest drops Closed findings exactly as
+it drops Resolved ones and names them in the same `dropped_resolved` list;
+editable mode keeps Closed as written and is the way back to a dropped finding.
+The title line is parsed against its own segment allowlist — `JH`, `GWAM`,
+`Asia`, `GDT` — which is a fourth copy of the segment set, not derived from
+`Segment`. Segment, application name and report type are assigned from one
+match, so a segment missing from that tuple loses all three together and raises
+nothing.
 
 Web/API tables encode channel and environment. Component rows encode their
 channel but not their environment: a sole positive environment observation is
@@ -216,10 +240,21 @@ finding. `{{findings}}` is the insertion point for the component hierarchy:
 2. `{{finding_title}}` in that severity document is replaced by all findings in
   that category.
 3. `open_new` findings use `resources/finding_types/new_finding.docx`.
-4. `open_previously_discovered` and `resolved` findings use
-  `resources/finding_types/retest_finding.docx`.
+4. `open_previously_discovered`, `open_resolved_on_non_prod`, `resolved` and
+  `closed` findings use `resources/finding_types/retest_finding.docx`.
 5. Finding content anchors are replaced by documents from
   `resources/fragments/`.
+
+`Closed` prints exactly what `Resolved` prints — the same five sections through
+the same component. No third finding component was authored and none is needed,
+because the selection is `new_finding.docx` if `open_new` else
+`retest_finding.docx`, and the importer's `expected_sections` reaches the same
+five-section shape from its own `!= "open_new"` test. Neither side carries a
+`closed` arm, deliberately: adding one to either would make every Closed report
+this app writes a report it cannot read back. `STATUS_LABELS` in
+`app/docx_report.py` is the whole of the status contract on the way out — both
+call sites are bare subscripts, and the status cell is neither recoloured nor
+resized, so a fifth label was all the document needed.
 
 Detail sections are generated dynamically:
 
@@ -232,7 +267,10 @@ Detail sections are generated dynamically:
 - Affected locations render as a real bulleted list cloned from
   `resources/fragments/bulleted_fragment.docx`, forced left-aligned, one bullet
   per location. The bullet glyph comes from the list style, so it is not part of
-  the text and is not counted when wrapping.
+  the text and is not counted when wrapping. An environment the finding does not
+  affect prints a single `N/A` **through the same bullet path**, so the two
+  environment cells read alike; Limitations deliberately goes the other way and
+  strips its bullet.
 - Long values are wrapped so a line cannot widen its column: count to the limit,
   walk back to the first character that is not a letter or digit, break after it
   with a `w:br` inside the run, then start counting again. A stretch offering no
@@ -247,7 +285,8 @@ Detail sections are generated dynamically:
 
 `{{severity-review-tickets}}` lives only in
 `resources/finding_types/retest_finding.docx`, so it prints for
-`open_previously_discovered` and `resolved` findings and never for `open_new` —
+`open_previously_discovered`, `open_resolved_on_non_prod`, `resolved` and
+`closed` findings and never for `open_new` —
 on `new_finding.docx` the replacement is a no-op because there is no such token.
 The static label `Severity Review Ticket (if applicable):` is one paragraph, and
 the token owns the whole of the paragraph below it.

@@ -45,11 +45,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
 # EXTENDED_NAME_FORMAT -- winbase.h
-NAME_UNKNOWN = 0
-NAME_FULLY_QUALIFIED_DN = 1
 NAME_SAM_COMPATIBLE = 2      # "DOMAIN\\username"  -- works off-domain too
 NAME_DISPLAY = 3             # "Viguilla, Elias Angelo"  -- what we want
 
@@ -161,15 +159,9 @@ class TesterPreferences(BaseModel):
     confirmed: bool = False
 
 
-class ReportDefaults(BaseModel):
-    classification: str = "Confidential"
-    template_set: str = "default-v1"
-
-
 class Preferences(BaseModel):
     schema_version: Literal["1.4"] = PREFS_SCHEMA
     tester: TesterPreferences | None = None
-    defaults: ReportDefaults = Field(default_factory=ReportDefaults)
     library_path: str = LIBRARY_PATH
 
     @field_validator("library_path")
@@ -182,8 +174,9 @@ class Preferences(BaseModel):
 
 
 def load_or_bootstrap(prefs_path: Path) -> dict:
-    """Called by run.py at startup. Resolves identity only on first launch;
-    never overwrites a name the tester has confirmed."""
+    """Called by app/main.py at import. Resolves identity only while prefs has no
+    tester, so a stored name is never overwritten. A plain tmp-then-replace write,
+    not app.storage, keeps this module runnable on its own."""
     prefs = Preferences()
     should_write = not prefs_path.exists()
     if prefs_path.exists():

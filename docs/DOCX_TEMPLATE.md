@@ -178,10 +178,12 @@ warning and is therefore easy to miss. A retest drops Closed findings exactly as
 it drops Resolved ones and names them in the same `dropped_resolved` list;
 editable mode keeps Closed as written and is the way back to a dropped finding.
 The title line is parsed against its own segment allowlist — `JH`, `GWAM`,
-`Asia`, `GDT` — which is a fourth copy of the segment set, not derived from
+`Asia`, `GDT`, `GFT` — which is a fourth copy of the segment set, not derived from
 `Segment`. Segment, application name and report type are assigned from one
 match, so a segment missing from that tuple loses all three together and raises
-nothing.
+nothing at import time;
+`test_every_segment_the_model_allows_parses_back_out_of_a_title` in
+`tests/test_docx_import.py` catches that drift instead.
 
 Web/API tables encode channel and environment. Component rows encode their
 channel but not their environment: a sole positive environment observation is
@@ -384,7 +386,7 @@ will then request field updates when opened in Word. Images not followed by a
 Normal app and CLI report generation automatically creates native image-caption
 fields and runs the same Word finalization step. There is no `--skip-word-update`
 equivalent on those paths, so **generating a report requires Windows with
-Microsoft Word installed**; see `docs/PLAN.md` § Platform requirements. The
+Microsoft Word installed**; see `docs/ARCHITECTURE.md` § Platform requirements. The
 existing methodology image in `MAIN.docx` is Figure 1, so generated evidence
 captions continue at Figure 2 in document order.
 

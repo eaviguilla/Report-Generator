@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Latest verification: **2026-09-21**, after adding the `GDT` segment and the `closed` status — two `Literal` members widening the schema every `draft.json` is measured against. Before that, after adding `Engagement.network` — a defaulted two-option Setup dropdown that prints through the `{{network}}` token — and before that byte-authoritative editable/retest DOCX import, in-memory editable preflight, visible scope-recovery warnings, and manager result disclosure.
+> Latest verification: **2026-09-27**, after `safe_name` started sharing `INVALID_FILENAME_CHARACTERS` with `report_service`, so control characters are now stripped from folder names too; existing folders are untouched because the rule only names new ones. Before that, **2026-09-22**, after an audit of `LibraryEntry.contents` for a library-authoring change. Two corrections in §7: the entry's `proof_of_concept` is keyed by all **four** channels, not three — `thick_client` has had a textarea in the library editor since it joined `Channel` — and the section now records the entry's `contents` schema and the two rules `LibraryEntry` does *not* enforce that `Report` does. Before that, **2026-09-21**, after adding the `GDT` segment and the `closed` status — two `Literal` members widening the schema every `draft.json` is measured against. Before that, after adding `Engagement.network` — a defaulted two-option Setup dropdown that prints through the `{{network}}` token — and before that byte-authoritative editable/retest DOCX import, in-memory editable preflight, visible scope-recovery warnings, and manager result disclosure.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent. Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, or the save/navigation paths in `app/web/static/app.js` must update the affected section here in the same change. Line numbers are hints only; function and field names are the durable identifiers.
 >
@@ -58,7 +58,7 @@ generated/                                      finished .docx output
 
 **Folder migration:** both segments are provisional, and `_save_unlocked` renames each independently. A report saved while `app_name` is blank lands in `unnamed/`, and the *first* save after a name is supplied moves it, gated on `app_folder == UNNAMED_APP_FOLDER`. A report saved before a `report_type` is chosen lands in `<YYYY-MM>_Report_<id>`, and the first save after a type is chosen renames it, gated on the folder still matching that provisional shape. Neither migration runs twice: once the folder holds a real value, later edits to `app_name` or `report_type` leave it alone. The move is `existing.parent.replace(target.parent)`, and a vacated app folder is removed when it is left empty. Anything caching the old path across that save is holding a stale path.
 
-**`safe_name`** strips `<>:"/\|?*`, collapses whitespace to `_`, trims to 60 chars, and substitutes a fallback for Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`).
+**`safe_name`** strips `<>:"/\|?*` and control characters (`INVALID_FILENAME_CHARACTERS`, shared with the generated `.docx` filename in `report_service`), collapses whitespace to `_`, trims to 60 chars, and substitutes a fallback for Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`).
 
 ---
 
@@ -217,7 +217,9 @@ The Findings editor snapshots scope before a selected target or typed endpoint c
 
 ### Proof-of-concept steps from the library
 
-A `LibraryEntry` may carry `proof_of_concept`, keyed by `Channel` (`web`, `api`, `mobile`). A missing key means no steps for that app type; an empty list is rejected, so "no steps" has exactly one representation. Of the 12 entries in `resources/vuln_library.json` that define `proof_of_concept`, 12 have `web`, 12 have `api`, and **none have `mobile`**, so a mobile-only finding gets no steps regardless.
+A `LibraryEntry` may carry `proof_of_concept`, keyed by `Channel` — all four of `web`, `api`, `mobile`, `thick_client`, each with its own textarea in the library editor. A missing key means no steps for that app type; an empty list is rejected, so "no steps" has exactly one representation. Of the 12 entries in `resources/vuln_library.json` that define `proof_of_concept`, 12 have `web`, 12 have `api`, and **none have `mobile` or `thick_client`**, so a mobile-only or thick-client-only finding gets no steps regardless.
+
+`LibraryEntry.contents` is the entry's body, and it is **not** a library-specific schema: it is `list[Content]` imported straight from `models`, so what an entry stores is byte-for-byte what a finding stores. `LibraryEntry.validate_fragment_ids` makes `frag_id` unique **within one entry's `contents` only** — not across entries, and not against that entry's `proof_of_concept`, which `validate_proof_of_concept` checks per channel and deliberately not across them. Neither rule reaches a report: `assign_fresh_fragment_ids` (server) and `remintFragments` (browser) replace every copied id, so the report-wide uniqueness in `Report.validate_references` is never the library's to satisfy. Two things the entry model does **not** check, and the report model does: `contents[].type` uniqueness — `provision`'s `existing` dict silently keeps the last of a duplicate pair before validation ever sees it — and which fragment types belong in which section, which has no Python owner at all (the only statement of that rule is `allowed` in `app.js`).
 
 The retired `web_api` token is gone from the type, the library, and the library editor. All 11 of its step lists were word-for-word copies of that entry's `web` list, so removing it lost no content. `LEGACY_TEST_TYPE_CHANNELS` in `models.py` survives as the single migration table that maps the old four tokens onto channel lists; nothing else in the app knows them.
 
@@ -428,7 +430,7 @@ The browser side reuses the Setup machinery, which is why `characterNames`, `dig
 | Segment | Open (New) | Open (Previously Discovered) | Open (Resolved on Non-Prod) | Resolved | Closed |
 |---|---|---|---|---|---|
 | Asia | CVSS pair | all three | all three | all three | all three |
-| JH, GWAM, GDT | **hidden** | tickets only | tickets only | tickets only | tickets only |
+| JH, GWAM, GDT, GFT | **hidden** | tickets only | tickets only | tickets only | tickets only |
 
 `open_resolved_on_non_prod` and `closed` both behave as Previously Discovered here because the rule
 gates on `status !== "open_new"`, not on a list of statuses. The same shape is why neither needed a

@@ -147,3 +147,60 @@ Before the one workspace write, the server runs the same scope reconciliation, f
 and provisioning rules used by an ordinary save and proves that a second pass does not alter the
 imported user content. The manager shows counts, transformations, and warnings before opening Setup
 or revealing the new report in the list.
+
+## Platform requirements
+
+Every code path that produces a finished report ends in Microsoft Word COM automation, and there is
+no opt-out on the web route:
+
+- `finalized_report` in `app/main.py` calls `update_docx_bytes_with_word` unconditionally after
+  `render_report_docx`. `scripts/generate_report.py` does the same.
+- `app/docx_captions.py` raises `RuntimeError("Microsoft Word automation requires the existing pywin32
+  package")` when `pythoncom` / `win32com.client` cannot be imported. The route converts that into
+  HTTP 422.
+
+Word supplies what python-docx cannot: repagination, Table of Contents and Table of Figures rebuild,
+and field refresh. Word calls are serialized by `WORD_AUTOMATION_LOCK`. Only
+`scripts/postprocess_captions.py` accepts `--skip-word-update`, and it operates on an
+already-generated document.
+
+On macOS or Linux the application runs, saves, imports, and exports normally; Generate fails with a
+422. That is expected, not a defect.
+
+## Configuration
+
+Limits are read from the environment at import time through `configured_limit` in `app/main.py`,
+which silently falls back to the default when a value cannot be parsed. Changing one requires a
+restart.
+
+| Variable | Default |
+|---|---|
+| `VULNREPORT_MAX_JSON_BYTES` | 10 MB |
+| `VULNREPORT_MAX_BUNDLE_BYTES` | 100 MB |
+| `VULNREPORT_MAX_EXPANDED_BUNDLE_BYTES` | 250 MB |
+| `VULNREPORT_MAX_BUNDLE_FILES` | 1000 |
+| `VULNREPORT_MAX_IMAGE_BYTES` | 20 MB |
+| `VULNREPORT_MAX_IMAGE_PIXELS` | 40000000 |
+| `VULNREPORT_MAX_REPORT_EVIDENCE_BYTES` | 250 MB |
+| `VULNREPORT_LIBRARY_EDITOR` | unset; set it to mount `/library-editor` |
+
+Two browser-side values are read off `window` rather than the environment:
+`VULNREPORT_AUTOSAVE_IDLE_MS` and its older alias `VULNREPORT_AUTOSAVE_INTERVAL_MS` (default 5000 ms,
+floor 100 ms).
+
+The vulnerability library path comes from `prefs.library_path`. A relative value resolves against the
+project root. When that path is not a file the loader falls back to `resources/vuln_library.json`,
+creating the directory and seeding the file if it is missing.
+
+## Development and tests
+
+```sh
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m playwright install chromium
+.venv/bin/python scripts/relevant_tests.py --run     # the tests the working-tree changes need
+.venv/bin/python -m scripts.generate_report <report_id> [--allow-incomplete]   # Windows + Word only
+```
+
+On Windows use `py -3` in place of `.venv/bin/python`. Tests use temporary workspaces and never touch
+`data/`. Which tests to run for a given change is set out in `.github/copilot-instructions.md`
+under *Running tests in this repo*.

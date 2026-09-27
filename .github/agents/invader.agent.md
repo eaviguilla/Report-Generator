@@ -186,10 +186,8 @@ After a fix, rerun the new regression and only directly affected neighboring tes
 the whole suite only when the user explicitly requests it, and never repeat that full run after it
 passes unless later edits affect its scope.
 
-Two failures are expected on macOS when a broad run is explicitly requested:
-`test_complete_report_saves_generated_docx_to_generated_folder` and
-`test_generate_docx_route_uses_template_and_report_filename`. Both need Microsoft Word through
-`pywin32`.
+The two Word-only tests that always fail on macOS are named in `.github/copilot-instructions.md`
+under *Running tests in this repo*; they are not findings.
 
 ### 3. Prove the test guards the fix
 

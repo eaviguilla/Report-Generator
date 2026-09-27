@@ -123,12 +123,6 @@ body::before {
   content: "";
   pointer-events: none;
 }
-
-::selection {
-  color: var(--ink);
-  background: #bfe1db;
-}
-
 .skip-link {
   position: fixed;
   z-index: 100;
@@ -278,18 +272,8 @@ body > header.app-header {
   font-size: 15px !important;
 }
 
-.brand-mark {
-  width: 27px;
-  height: 27px;
-  border: 1px solid #0c5752;
-  background: var(--accent);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
-  font-family: "Bahnschrift", sans-serif !important;
-  font-size: 13px;
-}
-
-/* The logo is its own artwork, so it drops the lettered tile's fill, border and shadow. */
 img.brand-mark {
+  display: grid;
   width: 26px;
   height: 26px;
   border: 0;
@@ -409,7 +393,6 @@ img.brand-mark {
   color: var(--muted);
   background: transparent;
   font-family: "Cascadia Code", Consolas, monospace !important;
-  font-size: 11px;
 }
 
 .step.active {
@@ -444,7 +427,6 @@ button,
 .primary {
   min-height: 34px;
   border-color: var(--btn-primary-border);
-  border-radius: var(--radius);
   color: #ffffff;
   background: var(--btn-primary);
   box-shadow: none;
@@ -553,9 +535,7 @@ input[data-path*="scope"],
 #scope-grid textarea,
 .location-value,
 .location-preview,
-.finding-id-cell input,
 .finding-id-display,
-.finding-id-value,
 .code-block,
 .report-name small,
 .finding-nav-meta,
@@ -836,7 +816,6 @@ label,
 #library-results,
 .row-library-results {
   border-color: var(--line-strong);
-  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 
@@ -853,7 +832,6 @@ label,
    rows, and the assessment stated in the Content page's own vocabulary. */
 .table-wrap {
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
   background: var(--surface-raised);
 }
 
@@ -1091,34 +1069,28 @@ button.finding-title-display:hover:not(:disabled) span {
 
 #finding-summary b {
   padding: 3px 7px;
-  border-radius: var(--radius-sm);
   font-size: 11px;
 }
 
-.summary-critical,
-.finding-assessment .summary-critical {
+.summary-critical {
   background: var(--critical) !important;
 }
 
-.summary-high,
-.finding-assessment .summary-high {
+.summary-high {
   color: #fff !important;
   background: #b4500f !important;
 }
 
-.summary-medium,
-.finding-assessment .summary-medium {
+.summary-medium {
   color: #fff !important;
   background: #bd7100 !important;
 }
 
-.summary-low,
-.finding-assessment .summary-low {
+.summary-low {
   background: var(--low) !important;
 }
 
-.summary-informational,
-.finding-assessment .summary-informational {
+.summary-informational {
   color: #fff !important;
   background: #5f6d81 !important;
 }
@@ -1146,20 +1118,8 @@ button.finding-title-display:hover:not(:disabled) span {
 }
 
 #finding-nav {
-  padding: 20px 12px;
   border-color: var(--line-strong);
-  background: var(--surface-sunken);
 }
-
-.finding-nav-heading {
-  gap: 4px;
-  padding: 0 8px 16px;
-}
-
-.finding-nav-heading b {
-  font-size: 14px;
-}
-
 .finding-nav-heading small {
   color: var(--muted);
   font-size: 11px;
@@ -1173,7 +1133,6 @@ button.finding-title-display:hover:not(:disabled) span {
   padding: 8px 10px !important;
   border: 0 !important;
   border-left: 3px solid var(--rail) !important;
-  border-radius: 0;
   color: var(--ink) !important;
   background: transparent;
 }
@@ -1184,12 +1143,6 @@ button.finding-title-display:hover:not(:disabled) span {
 .finding-nav.severity-low { --rail: var(--low); }
 
 /* One owner for the severity rail, so no state can drop the colour that encodes it. */
-button.finding-nav,
-button.finding-nav:hover:not(:disabled),
-button.finding-nav.active:not(:disabled) {
-  border: 0;
-  border-left: 3px solid var(--rail);
-}
 
 /* Hover only previews a move, so it stays quieter than the finding actually open. */
 button.finding-nav:hover:not(:disabled) {
@@ -1223,7 +1176,6 @@ button.finding-nav.active:not(:disabled)::after {
   width: 3px;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--accent);
-  content: "";
 }
 
 button.finding-nav.active:not(:disabled) .finding-nav-title {
@@ -1235,24 +1187,14 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta,
 button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   color: var(--accent) !important;
 }
-
-.finding-nav-title {
-  font-size: 12px;
-  font-weight: 400;
-}
-
 .finding-nav-meta {
   display: flex;
   align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 10px;
 }
 
 /* Severity is spelled out in its own colour, so the rail is not the only thing carrying it. */
 .finding-nav-meta em {
   color: var(--rail);
-  font-size: 9px;
   font-style: normal;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1262,81 +1204,19 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 #finding-editor {
   min-height: 0;
   overflow-y: auto;
-  padding: var(--editor-inset) var(--editor-inset) 56px;
-  background: var(--surface-sunken);
 }
-
-.finding-card {
-  /* clip, not hidden: hidden would make the card a scroll container and kill the sticky headers. */
-  overflow: clip;
-  border: 1px solid var(--line-strong);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
-}
-
 .finding-header {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
   border-color: var(--line);
 }
 
-.finding-card .finding-title {
-  min-height: 96px;
-  padding: 20px 22px;
-}
 
-.finding-card .finding-title h1 {
-  font-size: clamp(21px, 2vw, 28px);
-  line-height: 1.12;
-}
 
-.finding-assessment {
-  gap: 8px 12px;
-  padding: 20px 22px;
-}
 
-.finding-assessment span {
-  color: var(--muted);
-  font-size: 11px;
-  text-transform: none;
-}
 
-.finding-assessment {
-  min-width: 0;
-}
 
-.finding-assessment b {
-  padding: 4px 7px;
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-}
 
-.finding-locations {
-  grid-template-columns: 132px minmax(0, 1fr);
-  gap: 14px;
-  padding: 12px 22px;
-  border-color: var(--line);
-  background: var(--accent-faint);
-}
 
-.finding-locations span,
-.finding-assessment span {
-  text-transform: none;
-}
-
-.finding-locations > div {
-  display: grid;
-  gap: 6px;
-}
-
-.finding-locations > div > span {
-  display: grid;
-  grid-template-columns: 94px minmax(0, 1fr);
-}
-
-.finding-locations b {
-  color: var(--ink-soft);
-  font-size: 11px;
-}
 
 /* Every section is its own card, at full width or paired. Grid so inset children all stretch to
    one width instead of each picking their own. */
@@ -1344,37 +1224,17 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   display: grid;
   align-content: start;
   overflow: clip;
-  margin-bottom: 14px;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
 }
 
 .content-block > .content-toggle {
   position: static;
   width: 100%;
-  min-height: 40px;
   margin: 0;
-  padding: 0 13px;
   border-bottom: 1px solid var(--line);
   background: var(--canvas-deep);
   box-shadow: none;
-  font-size: 12px;
 }
-
-.content-block > *:not(.content-toggle) {
-  margin-inline: 13px;
-}
-
-.content-block > .content-toggle + * {
-  margin-top: 11px;
-}
-
-.content-block > :last-child {
-  margin-bottom: 12px;
-}
-
 /* The margins set the width; a percentage would add to them and overshoot the card edge. */
 .content-block > .add-fragment {
   width: auto;
@@ -1391,10 +1251,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 }
 
 .finding-card .finding-header {
-  display: grid;
-  gap: 9px;
   min-height: 0;
-  padding: 0 0 10px;
   border-bottom: 0;
 }
 
@@ -1403,12 +1260,6 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   min-height: 0;
   padding: 0;
 }
-
-.finding-card .finding-title h1 {
-  font-size: clamp(16px, 1.3vw, 19px);
-  line-height: 1.24;
-}
-
 .finding-chips {
   position: relative;
   display: flex;
@@ -1476,14 +1327,10 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 .fchip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 0 9px;
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
   color: var(--muted);
   background: var(--canvas-deep);
-  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1519,15 +1366,6 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 .fchip-sev[data-severity="medium"] { --sev: var(--medium); }
 .fchip-sev[data-severity="low"] { --sev: var(--low); }
 
-.finding-card .finding-locations {
-  grid-template-columns: 116px minmax(0, 1fr);
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-}
 
 /* ---- Fragment chrome recedes until the card is reached for. ---- */
 .fragment-head > .fragment-drag-handle,
@@ -1563,14 +1401,8 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 .content-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
   align-items: start;
 }
-
-.content-row > .content-block {
-  margin-bottom: 14px;
-}
-
 .content-toggle {
   /* Keeps the section name on screen through a long body, until the next section pushes it out.
      Chrome pins against the pane's content box, so the inset is cancelled to sit flush with its top edge.
@@ -1593,7 +1425,6 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 
 .content-toggle small {
   color: var(--muted);
-  font-size: 11px;
 }
 
 button.content-toggle:hover:not(:disabled) {
@@ -1609,30 +1440,14 @@ button.content-toggle:hover:not(:disabled) span {
 button.content-toggle:hover:not(:disabled) small {
   color: #315f59 !important;
 }
-
-.fragment {
-  margin-bottom: 8px;
-  padding: 7px 9px 9px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-}
-
-.fragment:hover {
-  border-color: var(--line-strong);
-  box-shadow: var(--shadow-small);
-}
-
 .fragment-head {
   margin-bottom: 4px;
 }
 
 .tag {
   padding: 1px 6px;
-  border-radius: var(--radius-sm);
   color: var(--ink-soft);
   background: var(--canvas-deep);
-  font-size: 9.5px;
 }
 
 .rich {
@@ -1644,10 +1459,7 @@ button.content-toggle:hover:not(:disabled) small {
 }
 
 .add-fragment {
-  min-height: 42px;
   border-color: var(--line-strong);
-  color: var(--accent-strong);
-  background: var(--accent-faint);
 }
 
 .add-fragment:hover:not(:disabled),
@@ -1666,10 +1478,8 @@ button.content-toggle:hover:not(:disabled) small {
    thing in the row because the caption is the part the tester still has to write. */
 .evidence-tile {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
   background: var(--surface-raised);
   box-shadow: var(--shadow-small);
 }
@@ -1734,17 +1544,14 @@ button.content-toggle:hover:not(:disabled) small {
 
 .evidence-main {
   display: grid;
-  grid-template-columns: 148px minmax(0, 1fr);
   min-width: 0;
 }
 
 .evidence-thumb {
   display: grid;
-  min-height: 100px;
   place-content: center;
   justify-items: center;
   gap: 5px;
-  padding: 10px;
   border: 0;
   border-right: 1px solid var(--line);
   border-radius: 0;
@@ -1827,7 +1634,6 @@ button.content-toggle:hover:not(:disabled) small {
   width: auto;
   height: auto;
   max-width: 100%;
-  max-height: 92px;
   border: 1px solid var(--line-strong);
   border-radius: 2px;
   background: var(--surface-raised);
@@ -1837,9 +1643,7 @@ button.content-toggle:hover:not(:disabled) small {
 .evidence-meta {
   display: grid;
   align-content: center;
-  gap: 6px;
   min-width: 0;
-  padding: 9px 11px;
 }
 
 .evidence-caption,
@@ -1851,7 +1655,6 @@ button.content-toggle:hover:not(:disabled) small {
   border-radius: var(--radius-sm);
   color: var(--ink);
   background: transparent;
-  font-size: 12.5px;
   font-weight: 500;
 }
 
@@ -1886,14 +1689,6 @@ button.content-toggle:hover:not(:disabled) small {
   align-items: center;
   gap: 8px;
 }
-
-.evidence-facts .evidence-environment {
-  min-height: 24px;
-  padding: 1px 6px;
-  font-size: 10.5px;
-  font-weight: 600;
-}
-
 .evidence-size {
   color: var(--muted);
   font-family: "Cascadia Code", Consolas, monospace !important;
@@ -1909,9 +1704,6 @@ button.content-toggle:hover:not(:disabled) small {
 
 .evidence-acts > * {
   display: grid;
-  width: 26px;
-  height: 26px;
-  min-height: 26px;
   place-items: center;
   padding: 0;
   border: 1px solid transparent;
@@ -1929,8 +1721,6 @@ button.content-toggle:hover:not(:disabled) small {
 
 .evidence-acts .danger:hover:not(:disabled) {
   border-color: var(--danger);
-  color: var(--danger);
-  background: var(--danger-soft);
 }
 
 .evidence-acts .danger:disabled {
@@ -1946,7 +1736,6 @@ button.content-toggle:hover:not(:disabled) small {
   justify-content: center;
   gap: 7px;
   border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-sm);
   color: var(--muted);
   background: transparent;
   font-size: 11.5px;
@@ -1998,24 +1787,15 @@ button.content-toggle:hover:not(:disabled) small {
 }
 
 .review-panel {
-  padding: 20px 14px;
   border-color: var(--line-strong);
-  background: var(--surface-bar);
 }
 
 .review-heading {
-  top: -20px;
-  margin: 0 -14px 14px;
-  padding: 20px 14px 13px;
   border-color: var(--line);
-  background: var(--surface-bar);
-  font-size: 12px;
 }
 
 .review-heading b {
-  border-radius: var(--radius-sm);
   background: var(--muted);
-  font-size: 11px;
 }
 
 /* The count sits in the panel heading, tinted rather than filled. */
@@ -2033,14 +1813,6 @@ button.content-toggle:hover:not(:disabled) small {
 }
 
 /* Red is what is still missing, amber is what the library offers: two verdicts, two hues. */
-.review-group {
-  overflow: hidden;
-  margin-bottom: 8px;
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--danger);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-}
 
 .review-group[data-level="error"] {
   border-left: 3px solid var(--danger);
@@ -2052,17 +1824,7 @@ button.content-toggle:hover:not(:disabled) small {
 }
 
 .review-group > summary {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 9px 11px;
-  color: var(--ink);
-  background: var(--surface-quiet);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 700;
-  list-style: none;
 }
 
 .review-group > summary::-webkit-details-marker {
@@ -2071,24 +1833,9 @@ button.content-toggle:hover:not(:disabled) small {
 
 .review-group > summary::after {
   color: var(--muted);
-  content: "\25BE";
   font-size: 9px;
 }
-
-.review-group[open] > summary::after {
-  content: "\25B4";
-}
-
-.review-group-title {
-  overflow: hidden;
-  flex: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .review-group-count {
-  color: var(--muted);
-  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -2174,7 +1921,6 @@ button.content-toggle:hover:not(:disabled) small {
 
 .app-group {
   border-color: var(--line);
-  border-radius: var(--radius-sm);
   background: var(--surface-raised);
 }
 
@@ -2246,9 +1992,6 @@ button.content-toggle:hover:not(:disabled) small {
 
 .step b,
 .finding-nav-meta,
-.finding-assessment span,
-.finding-locations span,
-.finding-locations em,
 .content-toggle small,
 .tag,
 .review-heading b {
@@ -2450,22 +2193,8 @@ body > main {
     padding: 18px;
   }
 
-  .finding-assessment {
-    justify-content: flex-start;
-    padding: 14px 18px;
-    border-top: 1px solid var(--line);
-    text-align: left;
-  }
 
-  .finding-locations {
-    grid-template-columns: 1fr;
-    gap: 6px;
-    padding: 12px 18px;
-  }
 
-  .finding-locations > div > span {
-    grid-template-columns: 82px minmax(0, 1fr);
-  }
 
   .content-block {
     padding: 0 14px 16px;
@@ -2522,7 +2251,7 @@ body > main {
 
 /* GitHub radius scale, applied once at the component layer. Two steps only:
    var(--radius-sm) for controls, chips and inline affordances, var(--radius) for containers.
-   Legacy 2/3/4/5px values scattered through overrides.css are superseded here. */
+   Legacy 2/3/4/5px values scattered through the structure layer in app.css are superseded here. */
 button,
 .primary,
 .back-link,
@@ -2565,9 +2294,7 @@ textarea,
 
 .tag,
 #finding-summary b,
-.finding-assessment b,
 .review-heading b,
-.finding-id-value,
 .image-preview,
 .fragment-drag-handle,
 .fragment-move-up,
@@ -2644,7 +2371,6 @@ textarea,
 .fragment-head .fragment-move-up:disabled,
 .fragment-head .fragment-move-down:disabled {
   color: var(--muted-light);
-  opacity: 1;
 }
 
 .fragment-head .toolbar,
@@ -3083,12 +2809,6 @@ button.finding-nav.active:not(:disabled)::after {
   font-size: 10.5px;
 }
 
-.finding-card .finding-locations {
-  margin-bottom: 13px;
-  padding: 8px 11px;
-  border-radius: var(--radius-sm);
-  font-size: 10.5px;
-}
 
 /* ---- Section cards ---- */
 /* The pair answers to the pane, not the window: the side panels collapse at their own breakpoints,
@@ -3206,9 +2926,6 @@ button.finding-nav.active:not(:disabled)::after {
 }
 
 /* One group at the right edge: formatting, then move, then delete, with no gap between them. */
-.fragment-head > .toolbar {
-  margin-left: auto;
-}
 
 /* Convert joins that group rather than floating between the two auto margins: it starts the group
    when there is no toolbar, and packs against one when there is. */

@@ -214,7 +214,7 @@ def add_native_image_captions(document: DocumentType) -> int:
             sequence_number += existing_fields
             _mark_figure_fields_dirty(paragraph)
             if _is_image_paragraph(paragraph.getprevious()):
-                _center_paragraph(paragraph)
+                center_paragraph(paragraph)
             index += 1
             continue
         if not _is_image_paragraph(paragraph):
@@ -230,7 +230,7 @@ def add_native_image_captions(document: DocumentType) -> int:
         if _has_figure_sequence(caption):
             index += 1
             continue
-        if _paragraph_style_id(caption) not in caption_style_ids and not _is_centered(caption):
+        if paragraph_style_id(caption) not in caption_style_ids and not _is_centered(caption):
             index += 1
             continue
         caption_text = _paragraph_text_with_breaks(caption).strip()
@@ -240,7 +240,7 @@ def add_native_image_captions(document: DocumentType) -> int:
         caption_text = MANUAL_FIGURE_PREFIX.sub("", caption_text)
         sequence_number += 1
         converted += 1
-        _center_paragraph(caption)
+        center_paragraph(caption)
         _replace_with_native_caption(caption, caption_text, sequence_number)
         index += 2
     mark_all_fields_for_update(document)
@@ -398,7 +398,7 @@ def _is_centered(paragraph) -> bool:
     return alignment is not None and alignment.get(qn("w:val")) == "center"
 
 
-def _paragraph_style_id(paragraph) -> str | None:
+def paragraph_style_id(paragraph) -> str | None:
     properties = paragraph.find(qn("w:pPr"))
     style = properties.find(qn("w:pStyle")) if properties is not None else None
     return style.get(qn("w:val")) if style is not None else None
@@ -421,10 +421,6 @@ def center_paragraph(paragraph) -> None:
         alignment = OxmlElement("w:jc")
         properties.append(alignment)
     alignment.set(qn("w:val"), "center")
-
-
-def _center_paragraph(paragraph) -> None:
-    center_paragraph(paragraph)
 
 
 def _has_figure_sequence(paragraph) -> bool:

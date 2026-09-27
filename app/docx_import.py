@@ -21,7 +21,7 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from PIL import Image, UnidentifiedImageError
 
-from .models import CHANNELS, COMPONENT_CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS
+from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS
 from .report_service import REPORT_TYPE_LABELS, RESOLVED_REMEDIATION, content_types_for_status
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
@@ -444,7 +444,7 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
 
 def _find_table(document, header: str):
     for table in document.tables:
-        if table.rows and table.rows[0].cells and table.rows[0].cells[0].text.strip() == header:
+        if table.rows and table.rows[0].cells and table.rows[0].cells[0].text.strip().casefold() == header.casefold():
             return table
     return None
 

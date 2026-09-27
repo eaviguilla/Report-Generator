@@ -14,7 +14,7 @@ from docx.oxml.ns import qn
 from PIL import Image, ImageDraw, ImageFont
 
 from app.docx_captions import update_docx_bytes_with_word
-from app.docx_report import generation_issues, render_report_docx
+from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.library import Library
 from app.models import (
     CodeFragment,
@@ -25,8 +25,6 @@ from app.models import (
     LibraryRef,
     ListFragment,
     ListItem,
-    NoteFragment,
-    ParagraphFragment,
     Report,
     Run,
     Scope,
@@ -42,7 +40,6 @@ from app.workspace import Workspace
 
 
 ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE = ROOT / "resources" / "MAIN.docx"
 LIBRARY = Library(ROOT / "resources" / "vuln_library.json")
 MISSING_HEADER_LIBRARY_IDS = {f"VDB-{source_id:03d}" for source_id in range(36, 45)}
 EXPECTED_FRAGMENT_TYPES = {
@@ -567,7 +564,7 @@ def main() -> int:
 
         output_path = arguments.output_dir / report_export_filename(report, ".docx")
         output_path.unlink(missing_ok=True)
-        contents = render_report_docx(report, TEMPLATE, draft_path.parent)
+        contents = render_report_docx(report, main_template_path(report, ROOT / "resources"), draft_path.parent)
         if not arguments.skip_word:
             contents = update_docx_bytes_with_word(contents)
         _verify_document(contents, report)

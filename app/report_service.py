@@ -125,25 +125,6 @@ def invalid_character_issue(
     return f"{label} contains invalid {noun}: {descriptions}"
 
 
-def _has_allowed_characters(
-    value: str,
-    symbols: str,
-    *,
-    allow_letters: bool = True,
-    allow_numbers: bool = True,
-    allow_spaces: bool = True,
-    allow_line_breaks: bool = False,
-) -> bool:
-    return not _invalid_characters(
-        value,
-        symbols,
-        allow_letters=allow_letters,
-        allow_numbers=allow_numbers,
-        allow_spaces=allow_spaces,
-        allow_line_breaks=allow_line_breaks,
-    )
-
-
 APP_NAME_SYMBOLS = "-:;.()"
 # Twin of componentScopeRule in app.js. A strict superset of the retired mobile set, so every value
 # that validated before still does; the backslash and brackets are what make an install path typable.
@@ -153,10 +134,6 @@ COMPONENT_SCOPE_SYMBOLS = "/,.;:()&'\"-_\\[]"
 TICKET_SYMBOLS = ""
 CVSS_SCORE_SYMBOLS = "."
 CVSS_VECTOR_SYMBOLS = "./:"
-
-
-def valid_application_name(value: str) -> bool:
-    return _has_allowed_characters(value, APP_NAME_SYMBOLS)
 
 
 def setup_input_issues(engagement: Engagement) -> list[str]:
@@ -516,7 +493,10 @@ def status_conclusion_runs(title: str, status_word: str) -> list[Run]:
 
 
 def default_conclusion_span(text: str) -> tuple[int, int] | None:
-    """Return the app-owned sentence's bounds when it remains in the paragraph."""
+    """Return the app-owned sentence's bounds when it remains in the paragraph.
+
+    Scanning right to left and testing a full match at each marker keeps one regex honest for
+    titles that themselves contain a quotation mark."""
     stripped = text.rstrip()
     marker = 'The finding "'
     index = stripped.rfind(marker)
@@ -532,8 +512,7 @@ def default_conclusion_start(text: str) -> int | None:
     """Where the app's own sentence begins, if the paragraph still ends with it.
 
     The quoted proof-of-concept step shares this paragraph and sits in front, so the sentence is a
-    tail rather than the whole text. Scanning right to left and testing a full match on each suffix
-    keeps one regex honest for titles that themselves contain a quotation mark."""
+    tail rather than the whole text. Twin of defaultConclusionStart in app.js."""
     span = default_conclusion_span(text)
     return span[0] if span is not None and span[1] == len(text.rstrip()) else None
 

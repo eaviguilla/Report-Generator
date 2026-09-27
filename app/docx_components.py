@@ -82,35 +82,6 @@ def replace_component_token_runs(elements: list, token: str, runs: list[Run]) ->
             _replace_pattern_with_runs(paragraph, pattern, runs)
 
 
-def replace_component_token_runs_with_proofed_breaks(elements: list, token: str, runs: list[Run]) -> None:
-    """Replace a fragment token and bracket each stored line around a dedicated break run."""
-    pattern = re.compile(r"\{\{\s*" + re.escape(token) + r"\s*\}\}", re.IGNORECASE)
-    multiline = any("\n" in run.text or "\r" in run.text for run in runs)
-    for element in elements:
-        for paragraph in element.iter(qn("w:p")):
-            if not pattern.search("".join(node.text or "" for node in paragraph.iter(qn("w:t")))):
-                continue
-            _replace_pattern_with_runs(paragraph, pattern, runs)
-            if multiline:
-                _proof_fragment_line_breaks(paragraph)
-
-
-def restore_proofed_fragment_breaks(root) -> int:
-    """Restore proof ranges Word removes while retaining signed fragment break runs."""
-    restored = 0
-    for paragraph in root.iter(qn("w:p")):
-        breaks = [
-            run
-            for run in paragraph.iterchildren(qn("w:r"))
-            if _is_fragment_break_run(run)
-        ]
-        if not breaks:
-            continue
-        _proof_fragment_line_breaks(paragraph)
-        restored += len(breaks)
-    return restored
-
-
 def compose_docx_components(
     main_template: Path,
     components: list[DocxComponent],
@@ -148,7 +119,7 @@ def compose_docx_components(
         first_paragraph = next((element for element in body_elements if element.tag == qn("w:p")), None)
         if first_paragraph is None:
             raise ComponentCompositionError(f"Component must begin with paragraph content: {component.path}")
-        _set_page_break_before(first_paragraph)
+        set_page_break_before(first_paragraph)
         for element in body_elements:
             anchor_element.addprevious(element)
 
@@ -559,91 +530,6 @@ def _set_run_text(run, text: str) -> None:
         run.append(text_node)
 
 
-def _proof_fragment_line_breaks(paragraph) -> None:
-    """Shape multiline fragment XML as spellEnd, break run, spellStart."""
-    for run in list(paragraph.iterchildren(qn("w:r"))):
-        if run.find(qn("w:br")) is None:
-            continue
-        replacements = []
-        segment = []
-        for child in run:
-            if child.tag == qn("w:rPr"):
-                continue
-            if child.tag == qn("w:br"):
-                if segment:
-                    replacements.append(_run_with_children(run, segment))
-                    segment = []
-                replacements.append(_bold_break_run())
-            else:
-                segment.append(child)
-        if segment:
-            replacements.append(_run_with_children(run, segment))
-        index = paragraph.index(run)
-        paragraph.remove(run)
-        for offset, replacement in enumerate(replacements):
-            paragraph.insert(index + offset, replacement)
-
-    for marker in list(paragraph.iterchildren(qn("w:proofErr"))):
-        if marker.get(qn("w:type")) in {"spellStart", "spellEnd"}:
-            paragraph.remove(marker)
-    breaks = [
-        run
-        for run in paragraph.iterchildren(qn("w:r"))
-        if run.find(qn("w:br")) is not None
-    ]
-    text_runs = [
-        run
-        for run in paragraph.iterchildren(qn("w:r"))
-        if any(node.text for node in run.iter(qn("w:t")))
-    ]
-    if not breaks or not text_runs:
-        return
-    paragraph.insert(paragraph.index(text_runs[0]), _proof_error("spellStart"))
-    last_index = paragraph.index(text_runs[-1])
-    paragraph.insert(last_index + 1, _proof_error("spellEnd"))
-    for run in breaks:
-        index = paragraph.index(run)
-        paragraph.insert(index, _proof_error("spellEnd"))
-        paragraph.insert(index + 2, _proof_error("spellStart"))
-
-
-def _run_with_children(source, children: list) -> OxmlElement:
-    run = deepcopy(source)
-    for child in list(run):
-        if child.tag != qn("w:rPr"):
-            run.remove(child)
-    for child in children:
-        run.append(deepcopy(child))
-    return run
-
-
-def _bold_break_run() -> OxmlElement:
-    run = OxmlElement("w:r")
-    properties = OxmlElement("w:rPr")
-    properties.append(OxmlElement("w:b"))
-    properties.append(OxmlElement("w:bCs"))
-    run.append(properties)
-    run.append(OxmlElement("w:br"))
-    return run
-
-
-def _is_fragment_break_run(run) -> bool:
-    properties = run.find(qn("w:rPr"))
-    return bool(
-        properties is not None
-        and properties.find(qn("w:b")) is not None
-        and properties.find(qn("w:bCs")) is not None
-        and len(run.findall(qn("w:br"))) == 1
-        and not list(run.iter(qn("w:t")))
-    )
-
-
-def _proof_error(error_type: str) -> OxmlElement:
-    marker = OxmlElement("w:proofErr")
-    marker.set(qn("w:type"), error_type)
-    return marker
-
-
 def _preserve_text_spaces(text_node) -> None:
     text = text_node.text or ""
     if text and (text[0].isspace() or text[-1].isspace()):
@@ -679,7 +565,7 @@ def _tokens(elements: list) -> list[str]:
     return sorted(set(re.findall(r"\{\{\s*(.*?)\s*\}\}", text)))
 
 
-def _set_page_break_before(paragraph) -> None:
+def set_page_break_before(paragraph) -> None:
     properties = paragraph.find(qn("w:pPr"))
     if properties is None:
         properties = OxmlElement("w:pPr")

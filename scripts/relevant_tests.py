@@ -26,15 +26,19 @@ RULES: list[tuple[str, list[str]]] = [
     ("scripts/", []),
     ("app/web/static/", [BROWSER]),
     ("app/web/templates/", [BROWSER]),
-    # These four own rules with JavaScript twins, so the browser contract tests are part of the scope.
+    # These two own rules with JavaScript twins, so the browser contract tests are part of the scope.
     ("app/models.py", [APP, BROWSER]),
     ("app/report_service.py", [APP, BROWSER]),
     ("app/workspace.py", [APP, "tests.test_storage"]),
     ("app/storage.py", [APP, "tests.test_storage"]),
     ("app/docx_", DOCX),
+    ("resources/vuln_library.json", [APP]),
     ("resources/", DOCX),
     ("app/main.py", [APP]),
     ("app/", [APP]),
+    ("run.py", ["tests.test_launcher"]),
+    ("README.md", []),
+    ("CLAUDE.md", []),
 ]
 
 

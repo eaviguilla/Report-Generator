@@ -2,13 +2,7 @@
   const root = document.querySelector("main[data-report]");
   if (!root) return;
   const diagnostics = window.VulnReportDiagnostics;
-  root.tabIndex = -1;
-  document.querySelector(".skip-link")?.addEventListener("click", event => {
-    event.preventDefault();
-    history.replaceState(null, "", event.currentTarget.getAttribute("href"));
-    root.focus({preventScroll:true});
-    root.scrollIntoView({block:"start"});
-  });
+  window.vrPage.bindSkipLink(root);
   const serverReport = JSON.parse(root.dataset.report);
   const unicodeCharacterRanges = serverReport._unicode_character_ranges || {};
   delete serverReport._unicode_character_ranges;
@@ -207,8 +201,7 @@
   let findingFoldDefaulted = false;
   // Creates stable client-side IDs for vulnerabilities, fragments, and evidence records.
   const id = (prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
-  // Escapes text before it is inserted into generated HTML markup.
-  const escape = (value) => String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const escape = window.vrPage.escapeHtml;
   const libraryOptionMarkup = (entry, includePlaceholder = false) => {
     const tags = escape((entry.tags || []).join(", "));
     const warning = includePlaceholder && entry.requires_tester_input ? " | contains placeholder text" : "";
@@ -2173,7 +2166,6 @@
         CHANNELS.filter(channel => report.engagement.tested_channels.includes(channel)).forEach(channel => {
           const group = document.createElement("div");
           group.className = "scope-channel";
-          group.dataset.channel = channel;
           // The two boxes of a component channel are read as a pair, by index, so the grouping
           // element is what lets a validator find a component's own description.
           if (isComponentChannel(channel)) group.dataset.componentChannel = "true";
@@ -3794,10 +3786,8 @@
       navHeading.innerHTML = `<b>Findings</b><span class="nav-count">${findings.length}</span>`;
       nav.append(navHeading);
       findings.forEach(finding => {
-        const findingId = `finding-${finding.uid}`;
         const jump = document.createElement("button");
         jump.className = `finding-nav severity-${finding.severity || "informational"}${finding.uid === selectedFindingUid ? " active" : ""}`;
-        jump.dataset.findingId = findingId;
         jump.innerHTML = `<span class="finding-nav-title">${escape(finding.title || "Untitled finding")}</span><span class="finding-nav-meta"><em>${escape(finding.severity || "informational")}</em><i aria-hidden="true">&middot;</i><span>${escape(finding.display_id || "No ID")}</span></span>`;
         jump.onclick = () => { selectedFindingUid = finding.uid; expandedContentTypes = undefined; render(); };
         nav.append(jump);

@@ -1,6 +1,6 @@
 # VulnReport Route Contract
 
-Companion to [PLAN.md](PLAN.md). Keep this file and `app/main.py` aligned: every
+Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Keep this file and `app/main.py` aligned: every
 live application route appears below, and new routes must be added here in the
 same change.
 
@@ -53,9 +53,16 @@ same change.
 
 The vulnerability library is `resources/vuln_library.json`, resolved from `prefs.library_path`. It is loaded once at import, **before the app object exists**, so `Library.load_or_empty` is used: an unreadable or invalid library leaves search empty and records why in `library.load_error` rather than stopping the app from starting.
 
-A local-only library editor mounts at `/library-editor` when `VULNREPORT_LIBRARY_EDITOR` is set **and** `app/library_editor.py` is present. Both that module and its template are deliberately untracked, so the routes do not exist in a fresh clone and nothing in tracked code links to them. Every write is validated by loading the exact bytes through `Library` in a temporary file before it replaces the real one.
+A local-only library editor mounts when `VULNREPORT_LIBRARY_EDITOR` is set **and** `app/library_editor.py` is present. Both files are tracked, but `scripts/package_release.py` leaves them out of a release, and nothing else links to the editor. Every write is validated by loading the exact bytes through `Library` in a temporary file before it replaces the real one.
 
-DOCX generation uses `resources/MAIN.docx` as the canonical template, then
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/library-editor` | Editor page with every library entry embedded |
+| POST | `/library-editor/entries` | Create an entry |
+| PUT | `/library-editor/entries/{library_id}` | Save an entry |
+
+DOCX generation uses one of the four `resources/MAIN*.docx` masters, chosen by
+`main_template_path` (see `docs/DOCX_TEMPLATE.md`), then
 composes severity-title, finding-type, and fragment documents. A template
 without an exact `{{findings}}` anchor paragraph is rejected; there is no second
 renderer. The route rejects incomplete content or missing environment evidence

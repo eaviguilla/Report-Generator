@@ -5,6 +5,7 @@ from copy import deepcopy
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
+from typing import get_args
 
 from docx import Document
 from docx.document import Document as DocumentType
@@ -27,10 +28,11 @@ from app.models import (
     ParagraphFragment,
     Report,
     Run,
+    Severity,
     TableFragment,
     Vulnerability,
 )
-from .docx_captions import add_native_image_captions, center_paragraph
+from .docx_captions import add_native_image_captions, center_paragraph, paragraph_style_id
 from .docx_import import FINDING_HEADING_STYLE, INSTANCE_PREFIX
 from .docx_components import (
     RATING_FONT_COLORS,
@@ -38,11 +40,12 @@ from .docx_components import (
     replace_component_token,
     replace_component_token_runs,
     replace_pattern_across_text_nodes,
+    set_page_break_before,
 )
 from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS
 from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, setup_issues
 
-SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational"]
+SEVERITY_ORDER = list(get_args(Severity))
 # Targets number from zero within each channel, so channel rank has to come first when ordering them.
 CHANNEL_ORDER = list(CHANNELS)
 STATUS_LABELS = {
@@ -574,12 +577,6 @@ def _normalize_page_numbering(document: DocumentType) -> None:
                 properties.remove(page_numbering)
 
 
-def _paragraph_style_id(element) -> str | None:
-    properties = element.find(qn("w:pPr"))
-    style = properties.find(qn("w:pStyle")) if properties is not None else None
-    return style.get(qn("w:val")) if style is not None else None
-
-
 def _bookmark_paragraph(paragraph, name: str, bookmark_id: int) -> None:
     """Wrap a heading so a REF field elsewhere can quote the number Word gives it."""
     start = OxmlElement("w:bookmarkStart")
@@ -669,7 +666,7 @@ def _populate_component_findings(
                 allow_incomplete,
             )
             title_paragraph = next(
-                (element for element in finding_elements if element.tag == qn("w:p") and _paragraph_style_id(element) == FINDING_HEADING_STYLE),
+                (element for element in finding_elements if element.tag == qn("w:p") and paragraph_style_id(element) == FINDING_HEADING_STYLE),
                 None,
             )
             if title_paragraph is not None:
@@ -682,7 +679,7 @@ def _populate_component_findings(
                     None,
                 )
                 if first_paragraph is not None:
-                    _set_page_break_before(first_paragraph)
+                    set_page_break_before(first_paragraph)
             rendered_findings.extend(finding_elements)
         severity_elements = [
             *severity_elements[:finding_anchor],
@@ -694,7 +691,7 @@ def _populate_component_findings(
             None,
         )
         if heading is not None:
-            _set_page_break_before(heading)
+            set_page_break_before(heading)
         for element in severity_elements:
             anchor.addprevious(element)
     anchor.getparent().remove(anchor)
@@ -1365,15 +1362,6 @@ def _keep_anchor_lead_in(elements: list, token: str) -> None:
         if element.tag != qn("w:p") or not _element_text(element).strip():
             break
         _keep_with_next(element)
-
-
-def _set_page_break_before(paragraph_element) -> None:
-    paragraph_properties = paragraph_element.find(qn("w:pPr"))
-    if paragraph_properties is None:
-        paragraph_properties = OxmlElement("w:pPr")
-        paragraph_element.insert(0, paragraph_properties)
-    if paragraph_properties.find(qn("w:pageBreakBefore")) is None:
-        paragraph_properties.append(OxmlElement("w:pageBreakBefore"))
 
 
 def _keep_lines_together(paragraph_element) -> None:

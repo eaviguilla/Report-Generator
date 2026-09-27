@@ -1,23 +1,16 @@
 (() => {
   const diagnostics = window.VulnReportDiagnostics;
   const main = document.querySelector("main");
-  main?.setAttribute("tabindex", "-1");
-  document.querySelector(".skip-link")?.addEventListener("click", event => {
-    event.preventDefault();
-    history.replaceState(null, "", event.currentTarget.getAttribute("href"));
-    main?.focus({preventScroll:true});
-    main?.scrollIntoView({block:"start"});
-  });
+  window.vrPage.bindSkipLink(main);
   const rows = document.querySelector("#report-rows");
   const legacyReports = document.querySelector("#legacy-reports");
   const status = document.querySelector("#manager-status");
   const importInput = document.querySelector("#import-report");
   const importCommand = document.querySelector("#import-command");
   const appSearch = document.querySelector("#app-search");
-  let openAppFolders = new Set();
+  const openAppFolders = new Set();
   const formatDate = value => new Intl.DateTimeFormat(undefined, {dateStyle:"medium", timeStyle:"short"}).format(new Date(value));
   const setStatus = value => { status.textContent = value; };
-  const responseError = (response, operation, fallback) => diagnostics.fromResponse(response, operation, fallback);
   const showError = (error, operation, fallback) => {
     diagnostics.show(error, operation, {fallback});
     setStatus(fallback);
@@ -53,8 +46,8 @@
   };
   const load = async () => {
     const [response, legacyResponse] = await Promise.all([fetch("/reports"), fetch("/reports/legacy")]);
-    if (!response.ok) throw await responseError(response, "list_reports", "Unable to load reports");
-    if (!legacyResponse.ok) throw await responseError(legacyResponse, "list_legacy_reports", "Unable to load legacy reports");
+    if (!response.ok) throw await diagnostics.fromResponse(response, "list_reports", "Unable to load reports");
+    if (!legacyResponse.ok) throw await diagnostics.fromResponse(legacyResponse, "list_legacy_reports", "Unable to load legacy reports");
     const [reports, legacy] = await Promise.all([response.json(), legacyResponse.json()]);
     const groups = groupReportsByFolder(reports).sort((left, right) => (left[0].app_folder || "Unassigned").localeCompare(right[0].app_folder || "Unassigned"));
     setHeaderCount("#draft-count", reports.length, "draft");
@@ -68,7 +61,7 @@
       if (!await window.vrDialog.confirm({title: "Delete this report?", message: "This also removes its evidence files.", confirmLabel: "Delete the report", cancelLabel: "Keep it", tone: "danger"})) return;
       try {
         const response = await fetch(`/reports/${button.dataset.delete}`, {method:"DELETE"});
-        if (!response.ok) throw await responseError(response, "delete_report", "Unable to delete report");
+        if (!response.ok) throw await diagnostics.fromResponse(response, "delete_report", "Unable to delete report");
         diagnostics.clear();
         await load();
         setStatus("Report deleted.");
@@ -80,7 +73,7 @@
     legacyReports.querySelectorAll("[data-repair]").forEach(button => button.onclick = async () => {
       try {
         const response = await fetch(`/reports/${button.dataset.repair}/repair`, {method:"POST"});
-        if (!response.ok) throw await responseError(response, "repair_report", "Unable to repair this legacy draft");
+        if (!response.ok) throw await diagnostics.fromResponse(response, "repair_report", "Unable to repair this legacy draft");
         diagnostics.clear();
         await load();
         setStatus("Legacy draft repaired.");
@@ -114,7 +107,7 @@
       const appName = article.querySelector(".report-rename-input").value.trim();
       try {
         const response = await fetch(`/reports/${button.dataset.rename}/name`, {method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify({app_name:appName})});
-        if (!response.ok) throw await responseError(response, "rename_report", "Unable to rename report");
+        if (!response.ok) throw await diagnostics.fromResponse(response, "rename_report", "Unable to rename report");
         diagnostics.clear();
         await load();
         setStatus("Report renamed.");
@@ -125,7 +118,7 @@
     rows.querySelectorAll("[data-duplicate]").forEach(button => button.onclick = async () => {
       try {
         const response = await fetch(`/reports/${button.dataset.duplicate}/duplicate`, {method:"POST"});
-        if (!response.ok) throw await responseError(response, "duplicate_report", "Unable to duplicate report");
+        if (!response.ok) throw await diagnostics.fromResponse(response, "duplicate_report", "Unable to duplicate report");
         const {report_id: reportId} = await response.json();
         diagnostics.clear();
         location.href = `/reports/${reportId}/setup`;
@@ -143,13 +136,13 @@
       group.open = Boolean(query && matches);
     });
   };
-  const escapeHtml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const escapeHtml = window.vrPage.escapeHtml;
   const uploadImport = async (file, mode) => {
     const form = new FormData();
     form.append("file", file);
     form.append("docx_mode", mode);
     const response = await fetch("/reports/import", {method:"POST", body:form});
-    if (!response.ok) throw await responseError(response, "import_report", "Import failed");
+    if (!response.ok) throw await diagnostics.fromResponse(response, "import_report", "Import failed");
     return response.json();
   };
   const revealImportedReport = async reportId => {

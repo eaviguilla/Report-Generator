@@ -14,10 +14,9 @@ from typing import Iterator
 from pydantic import ValidationError
 
 from app.models import Engagement, FolderHint, Report, normalise_scope_modes
-from .report_service import REPORT_TYPE_LABELS, RESOLVED_REMEDIATION
+from .report_service import INVALID_FILENAME_CHARACTERS, REPORT_TYPE_LABELS, RESOLVED_REMEDIATION
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 
-INVALID_NAME = re.compile(r'[<>:"/\\|?*]+')
 RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}
 
 
@@ -27,7 +26,7 @@ class StaleReportError(RuntimeError):
 
 def safe_name(value: str, fallback: str) -> str:
     """Convert a user-provided name into a Windows-safe folder-name segment."""
-    cleaned = re.sub(r"\s+", "_", INVALID_NAME.sub("", value).strip(". "))[:60]
+    cleaned = re.sub(r"\s+", "_", INVALID_FILENAME_CHARACTERS.sub("", value).strip(". "))[:60]
     reserved_stem = cleaned.split(".", 1)[0].upper()
     return fallback if not cleaned or reserved_stem in RESERVED else cleaned
 

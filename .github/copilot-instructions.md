@@ -1,3 +1,65 @@
+# What this project is
+
+VulnReport: a local-only pentest-report writer. A tester fills three pages — **Setup** (engagement,
+environments, app types, scope targets), **Findings** (one row per vulnerability), **Content** (each
+finding's description, remediation, proof of concept, screenshots) — and the app produces a Word
+document matching the house template. No database, no frontend framework, no build step.
+
+- **Start:** `py -3 run.py` (on macOS, `python3 run.py`; after the first run `.venv/bin/python run.py` works too). It creates `.venv`, installs
+  `requirements.txt` when its hash changes, and serves `app.main:app` on the first free port 8765–8799.
+- **Server:** `app/main.py` (FastAPI routes) → `app/report_service.py` (provisioning, scope
+  reconciliation, page gates) → `app/workspace.py` (locking, folders, load/save) →
+  `app/storage.py` (atomic JSON writes). Schema is `app/models.py` (Pydantic, schema 1.4).
+- **Browser:** `app/web/templates/*.html` embed the report as JSON; `app/web/static/app.js` is the
+  whole client — `setup()` for Setup/Findings, `continuousEditor()` for Content, plus autosave,
+  undo, and the 409 conflict flow. `manager.js` is the home page.
+- **Word pipeline:** `app/docx_report.py` picks one of four `resources/MAIN*.docx` masters and
+  splices in the small component documents under `resources/`; `app/docx_captions.py` makes real
+  caption fields and drives Word itself (Windows + Word + `pywin32` only);
+  `app/docx_import.py` reads a finished report back into a draft.
+- **Library:** `resources/vuln_library.json`, read by `app/library.py`; the editor at
+  `/library-editor` (`app/library_editor.py`) mounts only when `VULNREPORT_LIBRARY_EDITOR` is set.
+- **Data:** `data/apps/<app>/<month>_<type>_<id>/draft.json` + `draft.bak.json` + `evidence/*.png`.
+  Real drafts — never delete anything under `data/`.
+- **Tests:** `tests/` (unittest; `test_browser.py` is Playwright). Dev deps in `requirements-dev.txt`.
+
+Read before changing these areas:
+
+| Area | Reference |
+|---|---|
+| data shape, saving, locking, rules that exist in both Python and JavaScript | `docs/DATA_MAP.md` (§12 lists the twins) |
+| routes and page gates | `docs/ROUTES.md` |
+| Word templates and tokens | `docs/DOCX_TEMPLATE.md` |
+| plain-language architecture | `docs/ARCHITECTURE.md` |
+| one plan per change, with status | `docs/plans/*.md` |
+
+`docs/FORM_STATE_PLAN.md` is superseded research, not a description of the app.
+
+Specialist agents live in `.github/agents/`: `loremaster` (data layer questions), `scribe` (Word
+pipeline questions), `tactician` (plans a change before code), `invader` (stress-tests new work).
+`.github/prompts/plan-change.prompt.md` runs them together over a handoff file in `docs/plans/`.
+
+Claude Code follows these same files. A local, gitignored `CLAUDE.md` imports this file and the
+data-layer instructions, and `.claude/agents/` and `.claude/commands/` hold thin wrappers that point
+back at `.github/agents/` and `.github/prompts/`. Edit rules here only. When you add an agent or a
+prompt, add its wrapper and list it in `CLAUDE.md`.
+
+## Codebase graph (graphify)
+
+When `graphify-out/graph.json` exists (it is local, not in git), use it before raw searching:
+`graphify query "<question>"` for codebase questions, `graphify path "<A>" "<B>"` for how two things
+connect, `graphify explain "<concept>"` for one concept. They return a small scoped subgraph. Use
+`graphify-out/wiki/index.md` for broad navigation if it exists, and `graphify-out/GRAPH_REPORT.md`
+only for architecture-wide review. After changing code, run `graphify update .`, which is AST-only and costs no API calls.
+
+# Talking to me
+
+- **Open with a recap.** Before any summary, decision point, or question: 2–3 plain sentences on what we were just working on, why, and where it stands now.
+- **Plain language.** No invented codenames, abbreviations, or callbacks like "the earlier fix" or "option B from before" — restate the thing in place, every time.
+- **Self-contained questions.** When asking me to decide something, the question itself must carry everything needed to answer it: the background, the options, the tradeoffs, and your recommendation. Never require scrolling back.
+- **One question at a time.** When a summary or decision point holds several open questions or next steps, say so up front ("three decisions are waiting; here's the first"), then present only the first and wait for the answer before raising the next. Never dump them all at once — it's too much mental load.
+- **Always end with `Next action:`.** Every response ends with a final line naming what I do next. Not a summary — an instruction. Examples: `Next action: none.` / `Next action: review the output above.` / `Next action: consider the output above.` / `Next action: choose from the options above.` / `Next action: execute step 1.` Pick the one that actually fits; invent a better verb when none of those do.
+
 # Changing how the app looks
 
 When a change is visual — layout, spacing, colour, a component's appearance — **do not stop at
@@ -83,11 +145,13 @@ Run the whole suite **only** when explicitly asked for a full or whole-app run.
 
 | Changed | Run |
 |---|---|
-| `app/web/static/*.js`, `app/web/templates/*` | `tests.test_browser` — every browser test loads the page; nothing else does |
-| `app/models.py`, `app/report_service.py`, `app/workspace.py`, `app/storage.py` | the named tests in `tests/test_app.py`, plus `tests.test_browser` only if a rule has a JavaScript twin |
+| `app/web/static/*` (JS and CSS), `app/web/templates/*` | `tests.test_browser` — every browser test loads the page, and CSS can hide an element a test clicks |
+| `app/models.py`, `app/report_service.py` | the named tests in `tests/test_app.py`, plus `tests.test_browser` — both files own rules with JavaScript twins |
+| `app/workspace.py`, `app/storage.py` | the named tests in `tests/test_app.py` and `tests.test_storage` |
 | `app/docx_*.py`, `resources/*.docx` | `tests.test_docx`, `tests.test_docx_components`, `tests.test_docx_captions`, `tests.test_docx_import` |
-| `app/main.py` routes | the named route tests in `tests/test_app.py` |
-| `docs/**`, `*.md`, `.github/**`, comments, CSS | nothing |
+| `resources/vuln_library.json`, `app/main.py` routes, other `app/*.py` | the named tests in `tests/test_app.py` |
+| `run.py` | `tests.test_launcher` |
+| `docs/**`, `*.md`, `.github/**`, `.claude/**`, `scripts/**`, comments | nothing |
 
 Two tests fail on macOS in every run and are not yours:
 `test_complete_report_saves_generated_docx_to_generated_folder` and

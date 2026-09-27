@@ -1,5 +1,6 @@
 // Promise-based replacement for window.confirm, so prompts can offer more than two answers
-// and can be styled with the app's theme. Shared by app.js and manager.js.
+// and can be styled with the app's theme. Loaded by every page, so it also carries the two small
+// page helpers app.js and manager.js share (window.vrPage).
 (() => {
   "use strict";
 
@@ -100,4 +101,18 @@
     ]}).then(key => key === "confirm");
 
   window.vrDialog = {ask, confirm};
+
+  // Escapes text before it is inserted into generated HTML markup. null and undefined become "".
+  const escapeHtml = value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const bindSkipLink = target => {
+    if (!target) return;
+    target.tabIndex = -1;
+    document.querySelector(".skip-link")?.addEventListener("click", event => {
+      event.preventDefault();
+      history.replaceState(null, "", event.currentTarget.getAttribute("href"));
+      target.focus({preventScroll:true});
+      target.scrollIntoView({block:"start"});
+    });
+  };
+  window.vrPage = {escapeHtml, bindSkipLink};
 })();

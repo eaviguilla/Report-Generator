@@ -54,6 +54,7 @@ def register(app, library_path: Path, rebind) -> None:
                 "default_severity": entry.get("default_severity"),
                 "requires_tester_input": entry.get("requires_tester_input", False),
                 "status": entry.get("status", "approved"),
+                "editor_added": entry.get("editor_added", False),
                 "proof_of_concept": {
                     variant: _fragments_to_steps(fragments)
                     for variant, fragments in (entry.get("proof_of_concept") or {}).items()
@@ -119,6 +120,8 @@ def register(app, library_path: Path, rebind) -> None:
             "default_severity": None,
             "requires_tester_input": False,
             "status": "approved",
+            # Ignored by LibraryEntry, so it only ever means "this editor created it" and gates delete.
+            "editor_added": True,
             "contents": [],
             "proof_of_concept": {},
         })
@@ -126,6 +129,20 @@ def register(app, library_path: Path, rebind) -> None:
         document["entry_count"] = len(document["entries"])
         _write_validated(document, library_path, rebind)
         return {"created": library_id}
+
+    @app.delete("/library-editor/entries/{library_id}")
+    def delete_entry(library_id: str):
+        document = _document(library_path)
+        index = next((position for position, entry in enumerate(document["entries"]) if entry["library_id"] == library_id), None)
+        if index is None:
+            raise HTTPException(404, "Library entry not found")
+        # Enforced here, not by hiding the button: the shipped entries are what saved reports cite.
+        if not document["entries"][index].get("editor_added"):
+            raise HTTPException(403, "Only entries created in this editor can be deleted")
+        document["entries"].pop(index)
+        document["entry_count"] = len(document["entries"])
+        _write_validated(document, library_path, rebind)
+        return {"deleted": library_id}
 
 
 def _write_validated(document: dict, library_path: Path, rebind) -> None:

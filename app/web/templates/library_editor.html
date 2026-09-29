@@ -2,78 +2,156 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Library Editor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Report Generator | Vulnerability Library</title>
+<link rel="icon" href="/static/logo-red.png">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/manager.css">
+<link rel="stylesheet" href="/static/taste.css">
+<script>
+  (() => {
+    try {
+      const savedTheme = localStorage.getItem("vr-theme");
+      document.documentElement.dataset.theme = savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    } catch (error) {
+      document.documentElement.dataset.theme = "light";
+    }
+  })();
+</script>
 <style>
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 13px "Inter", "Segoe UI", sans-serif; color: #1f2a33; background: #f4f6f8; }
-  header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; background: #21394d; color: #fff; }
-  header h1 { margin: 0; font-size: 15px; font-weight: 600; }
-  header .warn { margin-left: auto; font-size: 11px; opacity: .85; }
-  main { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; padding: 18px; align-items: start; }
-  .panel { background: #fff; border: 1px solid #dbe2e8; border-radius: 6px; }
-  #list { max-height: calc(100vh - 140px); overflow: auto; }
-  #list button { display: block; width: 100%; padding: 8px 12px; border: 0; border-bottom: 1px solid #eef2f5; background: none; text-align: left; font: inherit; cursor: pointer; }
-  #list button:hover { background: #f2f7fb; }
-  #list button[aria-current="true"] { background: #e6f0f8; font-weight: 600; }
-  #list small { display: block; color: #6b7a88; font-size: 11px; }
-  form { padding: 16px; display: grid; gap: 12px; }
-  label { display: grid; gap: 4px; font-size: 11px; font-weight: 600; color: #48596a; text-transform: uppercase; letter-spacing: .03em; }
-  input, select, textarea { padding: 6px 8px; border: 1px solid #cbd5dd; border-radius: 4px; font: 13px inherit; font-weight: 400; text-transform: none; letter-spacing: 0; }
-  textarea { min-height: 90px; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
-  .row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-  fieldset { margin: 0; padding: 12px; border: 1px solid #dbe2e8; border-radius: 5px; }
-  legend { padding: 0 6px; font-size: 11px; font-weight: 600; color: #48596a; text-transform: uppercase; }
-  .actions { display: flex; gap: 8px; align-items: center; }
-  button.primary { padding: 7px 14px; border: 0; border-radius: 4px; background: #21394d; color: #fff; font: inherit; cursor: pointer; }
-  button.subtle { padding: 7px 12px; border: 1px solid #cbd5dd; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
-  #status { font-size: 12px; }
-  #status.ok { color: #1d6b3f; }
-  #status.bad { color: #a32020; }
-  .hint { margin: 0; font-size: 11px; color: #6b7a88; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  /* This page has no design of its own. The shell copies the Content page's two-pane workspace and
+     the cards copy the Setup page's sections; every number below was read off their computed
+     styles. Change one of those pages and this should follow, not drift. */
+  .library-page .engagement-name { display: inline-flex; align-items: center; gap: 8px; }
+  .library-page #library-count { display: inline-flex; }
+
+  /* Content page shell: full bleed, fixed height, each pane scrolls on its own so the page never does. */
+  #library-editor { width: 100%; max-width: none; padding: 0; }
+  .library-workspace { display: grid; height: calc(100dvh - var(--header-height) - var(--footer-height)); min-height: 0; grid-template-columns: clamp(240px, 21vw, 316px) minmax(0, 1fr); }
+
+  /* align-self overrides app.css's `aside { align-self: start }`, which otherwise lets the rail
+     grow to all 51 entries so #list never clamps and never shows a scrollbar. */
+  #library-nav { display: grid; min-width: 0; height: 100%; min-height: 0; align-self: stretch; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid var(--line); background: var(--surface-raised); }
+  .library-nav-heading { display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px; }
+  .library-nav-heading b { color: var(--ink); font-family: "Bahnschrift", "Aptos Display", sans-serif !important; font-size: 12px; font-weight: 700; }
+  .library-nav-heading small { margin-right: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .library-nav-controls { display: grid; grid-template-columns: minmax(0, 1fr) 112px; align-items: center; gap: 8px; padding: 0 10px 10px; }
+  .library-nav-controls input, .library-nav-controls select { margin: 0; height: 30px; }
+  #list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); }
+
+  /* Entry rows follow .finding-nav on the Content page: severity rail, then the severity spelled out
+     beside the ID so colour is not the only thing carrying it. Named `lib-row` rather than
+     `library-entry` because app.css already owns that class for the report editor's search dropdown. */
+  .lib-row { --rail: #fff; display: grid; width: 100%; gap: 2px; margin: 0; padding: 7px 9px 7px 10px; border: 0; border-left: 3px solid var(--rail); border-radius: 0; color: var(--ink); background: transparent; font-size: 11px; text-align: left; }
+  .lib-row.severity-critical { --rail: var(--critical); }
+  .lib-row.severity-high { --rail: var(--high); }
+  .lib-row.severity-medium { --rail: var(--medium); }
+  .lib-row.severity-low { --rail: var(--low); }
+  .lib-row.severity-informational { --rail: var(--informational); }
+  .lib-row:hover { background: var(--canvas-deep); }
+  .lib-row[aria-current="true"] { background: var(--accent-soft); }
+  .lib-row-title { overflow: hidden; color: var(--ink); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .lib-row[aria-current="true"] .lib-row-title { color: var(--accent-strong); }
+  .lib-row-meta { display: flex; min-width: 0; align-items: baseline; gap: 6px; color: var(--muted); font-size: 11px; }
+  .lib-row-meta span { overflow: hidden; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+  .lib-row-meta em { flex: 0 0 auto; color: var(--rail); font-size: 10px; font-style: normal; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+  .lib-row[aria-current="true"] .lib-row-meta { color: var(--accent); }
+  .library-empty { margin: 0; padding: 20px 10px; color: var(--muted); font-size: 12px; text-align: center; }
+
+  /* Work surface: #finding-editor's scroll box, holding Setup-page section cards. */
+  #editor { width: auto; max-width: none; height: 100%; min-height: 0; margin: 0; padding: 14px 16px; overflow-y: auto; overscroll-behavior: contain; background: var(--canvas); }
+  #editor .section-title { display: flex; justify-content: flex-start; align-items: baseline; gap: 8px; margin: 0 0 14px; padding: 0 0 10px; border-bottom: 1px solid var(--line); }
+  #editor .section-title h1 { min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+  #entry-key { flex: 0 0 auto; color: var(--muted); font-family: "Cascadia Code", Consolas, monospace !important; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  #editor > section { margin: 0 0 14px; padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-raised); }
+  #editor > section > h2 { display: flex; min-height: 44px; align-items: center; margin: 0; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--ink); font-size: 13px; }
+  #editor > section > .muted { margin: 14px 16px 0; font-size: 12px; }
+  #editor > section > .fields { margin: 14px 16px 15px; }
+  #editor .fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 14px; }
+  #editor .fields .span-two { grid-column: span 2; }
+  #editor .poc-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #editor input[readonly] { color: var(--muted); background: var(--surface-sunken); }
+  .hint { margin: 0; color: var(--muted); font-size: 11px; font-weight: 400; }
+  .field-head { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+  .field-head .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Reuses dialog.js's .vr-dialog shell so the one prompt this page owns matches every other one. */
+  .new-entry-fields { display: grid; gap: 14px; margin-top: 14px; }
+  .vr-dialog .new-entry-error { color: var(--danger); }
+
+  .library-page .workflow-footer { gap: 10px; }
+  /* Same box as .workflow-footer .primary in taste.css, so the two footer buttons match. */
+  .library-page .workflow-footer .danger { min-height: 36px; padding: 8px 14px; font-size: 12px; }
+  #status { margin-right: auto; color: var(--muted); font-size: 12px; }
+  #status.ok { color: var(--success); }
+  #status.bad { color: var(--danger); }
+
+  @media (max-width: 1080px) {
+    #editor .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 900px) {
+    .library-workspace { display: block; height: auto; }
+    #library-nav { display: block; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    #list { max-height: 260px; }
+    #editor { height: auto; padding-bottom: 72px; overflow: visible; }
+    #editor .fields, #editor .poc-fields { grid-template-columns: 1fr; }
+    #editor .fields .span-two { grid-column: auto; }
+  }
+  @media (max-width: 680px) {
+    .library-page .engagement-name { display: none; }
+  }
 </style>
 </head>
-<body>
-<header>
-  <h1>Vulnerability Library Editor</h1>
-  <span class="warn">Local tool. Writes resources/vuln_library.json. Reload open report tabs after saving.</span>
+<body class="library-page">
+<a class="skip-link" href="#library-editor">Skip to library editor</a>
+<header class="app-header">
+  <a class="brand" href="/"><img class="brand-mark" src="/static/logo-red.png" alt="" width="26" height="26">Report Generator</a>
+  <span class="engagement-name"><span class="engagement-title">Vulnerability library</span><span class="fchip" id="library-count"></span></span>
+  <button id="theme-toggle" class="theme-toggle" type="button" title="Switch theme"><svg class="theme-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg><svg class="theme-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
 </header>
-<main>
-  <div class="panel" id="list"></div>
-  <div class="panel">
+<main id="library-editor">
+  <div class="library-workspace">
+    <aside id="library-nav" aria-labelledby="library-nav-heading">
+      <div class="library-nav-heading"><b id="library-nav-heading">Entries</b><small id="visible-count"></small><button class="subtle" type="button" id="add">New entry</button></div>
+      <div class="library-nav-controls"><input id="entry-filter" type="search" placeholder="Filter entries" aria-label="Search library entries"><select id="library-sort" aria-label="Sort entries"><option value="title">Title A–Z</option><option value="id">Library ID</option><option value="severity">Severity</option><option value="poc">PoC coverage</option></select></div>
+      <div id="list"></div>
+    </aside>
     <form id="editor">
-      <label>Library ID
-        <input id="library_id" readonly>
-        <p class="hint">Fixed. Saved reports point at this value.</p>
-      </label>
-      <label>Title <input id="title"></label>
-      <label>Tags <input id="tags" placeholder="comma separated"></label>
-      <div class="row">
-        <label>Likelihood <select id="default_likelihood"></select></label>
-        <label>Impact <select id="default_impact"></select></label>
-        <label>Severity <select id="default_severity"></select></label>
-      </div>
-      <div class="row">
-        <label>Status <input id="status_field"></label>
-        <label>Needs tester input
-          <select id="requires_tester_input"><option value="false">No</option><option value="true">Yes</option></select>
-        </label>
-      </div>
-      <fieldset>
-        <legend>Proof of concept steps</legend>
-        <p class="hint">One step per line. Leave a box empty for app types with no saved steps.</p>
-        <label>Web <textarea id="poc_web"></textarea></label>
-        <label>API <textarea id="poc_api"></textarea></label>
-        <label>Mobile <textarea id="poc_mobile"></textarea></label>
-        <label>Thick Client <textarea id="poc_thick_client"></textarea></label>
-      </fieldset>
-      <div class="actions">
-        <button class="primary" type="submit">Save entry</button>
-        <button class="subtle" type="button" id="add">New entry</button>
-        <span id="status"></span>
-      </div>
+      <div class="section-title"><h1 id="entry-title">Entry details</h1><small id="entry-key"></small></div>
+      <section aria-labelledby="identity-heading">
+        <h2 id="identity-heading">Identity</h2>
+        <div class="grid fields">
+          <label><span class="field-head">Library ID<span class="hint">Fixed reference for saved reports.</span></span><input id="library_id" readonly></label>
+          <label>Title<input id="title"></label>
+          <label>Tags<input id="tags" placeholder="Comma separated"></label>
+        </div>
+      </section>
+      <section aria-labelledby="defaults-heading">
+        <h2 id="defaults-heading">Defaults</h2>
+        <div class="grid fields">
+          <label>Likelihood<select id="default_likelihood"></select></label>
+          <label>Impact<select id="default_impact"></select></label>
+          <label>Severity<select id="default_severity"></select></label>
+          <label>Status<input id="status_field"></label>
+          <label>Needs tester input<select id="requires_tester_input"><option value="false">No</option><option value="true">Yes</option></select></label>
+        </div>
+      </section>
+      <section aria-labelledby="poc-heading">
+        <h2 id="poc-heading">Proof of concept steps</h2>
+        <p class="muted">One step per line. Leave an app type empty when it has no saved steps.</p>
+        <div class="grid fields poc-fields">
+          <label>Web<textarea id="poc_web"></textarea></label>
+          <label>API<textarea id="poc_api"></textarea></label>
+          <label>Mobile<textarea id="poc_mobile"></textarea></label>
+          <label>Thick Client<textarea id="poc_thick_client"></textarea></label>
+        </div>
+      </section>
     </form>
   </div>
+  <footer class="workflow-footer"><output id="status" aria-live="polite"></output><button class="danger" type="button" id="delete" hidden>Delete entry</button><button class="primary" type="submit" form="editor">Save entry</button></footer>
 </main>
+<script src="/static/dialog.js"></script>
 <script>
   const entries = __ENTRIES__;
   const severities = ["", "critical", "high", "medium", "low", "informational"];
@@ -88,23 +166,58 @@
     field(name).append(new Option(value || "(none)", value));
   }));
 
+  const savedVariants = entry => variants.filter(variant => (entry.proof_of_concept?.[variant] || []).length);
+  const byTitle = (a, b) => (a.title || a.library_id).localeCompare(b.title || b.library_id);
+  // "" sits at index 0, so fall through to last: unset severity belongs after informational, not before critical.
+  const severityRank = entry => severities.indexOf(entry.default_severity || "") || severities.length;
+
+  const sorters = {
+    title: byTitle,
+    id: (a, b) => a.library_id.localeCompare(b.library_id, undefined, {numeric: true}),
+    severity: (a, b) => severityRank(a) - severityRank(b) || byTitle(a, b),
+    poc: (a, b) => savedVariants(b).length - savedVariants(a).length || byTitle(a, b),
+  };
+
   const renderList = () => {
     const list = document.querySelector("#list");
     list.innerHTML = "";
-    entries.forEach(entry => {
+    const query = field("entry-filter").value.trim().toLocaleLowerCase();
+    const visibleEntries = entries.filter(entry => [entry.title, entry.library_id, ...(entry.tags || [])]
+      .join(" ").toLocaleLowerCase().includes(query))
+      .sort(sorters[field("library-sort").value] || sorters.title);
+    field("visible-count").textContent = query ? `${visibleEntries.length} matching` : `${entries.length} total`;
+    visibleEntries.forEach(entry => {
       const button = document.createElement("button");
       button.type = "button";
+      button.className = `lib-row${entry.default_severity ? ` severity-${entry.default_severity}` : ""}`;
       button.setAttribute("aria-current", String(entry === current));
-      const saved = variants.filter(variant => (entry.proof_of_concept?.[variant] || []).length);
-      button.innerHTML = `${entry.title}<small>${entry.library_id}${saved.length ? ` &middot; PoC: ${saved.join(", ")}` : ""}</small>`;
+      const saved = savedVariants(entry);
+      const title = document.createElement("span");
+      title.className = "lib-row-title";
+      title.textContent = entry.title;
+      const meta = document.createElement("span");
+      meta.className = "lib-row-meta";
+      const id = document.createElement("span");
+      id.textContent = entry.library_id;
+      meta.append(id);
+      if (entry.default_severity) {
+        const severity = document.createElement("em");
+        severity.textContent = entry.default_severity;
+        meta.append(document.createTextNode("\u00b7"), severity);
+      }
+      if (saved.length) meta.append(document.createTextNode(`\u00b7 PoC: ${saved.join(", ")}`));
+      button.append(title, meta);
       button.onclick = () => select(entry);
       list.append(button);
     });
+    if (!visibleEntries.length) list.innerHTML = '<p class="library-empty">No entries match this search.</p>';
   };
 
   const select = entry => {
     current = entry;
     field("library_id").value = entry.library_id;
+    field("entry-title").textContent = entry.title || entry.library_id;
+    field("entry-key").textContent = entry.library_id;
     field("title").value = entry.title || "";
     field("tags").value = (entry.tags || []).join(", ");
     field("default_likelihood").value = entry.default_likelihood || "";
@@ -112,6 +225,7 @@
     field("default_severity").value = entry.default_severity || "";
     field("status_field").value = entry.status || "approved";
     field("requires_tester_input").value = String(Boolean(entry.requires_tester_input));
+    field("delete").hidden = !entry.editor_added;
     variants.forEach(variant => { field(`poc_${variant}`).value = (entry.proof_of_concept?.[variant] || []).join("\n"); });
     status.textContent = "";
     renderList();
@@ -141,18 +255,94 @@
     say("Saved. Reload any open report tabs.", true);
   };
 
-  document.querySelector("#add").onclick = async () => {
-    const library_id = prompt("New library ID (letters, digits, dot, dash, underscore):");
-    if (!library_id) return;
-    const response = await fetch("/library-editor/entries", {
-      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({library_id, title: library_id}),
-    });
-    if (!response.ok) return say((await response.json()).detail || "Create failed.", false);
-    location.reload();
+  document.querySelector("#add").onclick = () => {
+    // A second dialog would stack on the first and trap focus behind it.
+    if (document.querySelector(".vr-dialog-backdrop")) return;
+    const returnFocusTo = document.activeElement;
+    const backdrop = document.createElement("div");
+    backdrop.className = "vr-dialog-backdrop";
+    backdrop.innerHTML = `<form class="vr-dialog" role="dialog" aria-modal="true" aria-labelledby="new-entry-heading" novalidate>
+      <h2 id="new-entry-heading">New library entry</h2>
+      <p>Saved reports point at the library ID, so it cannot be renamed once this entry exists.</p>
+      <div class="new-entry-fields">
+        <label><span class="field-head">Library ID<span class="hint">Letters, digits, dot, dash, underscore.</span></span><input name="library_id" autocomplete="off" spellcheck="false"></label>
+        <label>Title<input name="title" autocomplete="off"></label>
+      </div>
+      <p class="new-entry-error" role="alert" hidden></p>
+      <div class="vr-dialog-actions"><button type="button" class="subtle" data-dialog-action="cancel">Cancel</button><button type="submit" class="primary">Create entry</button></div>
+    </form>`;
+    const form = backdrop.querySelector("form");
+    const error = backdrop.querySelector(".new-entry-error");
+    const submit = form.querySelector('button[type="submit"]');
+    const close = () => {
+      document.removeEventListener("keydown", onKeydown, true);
+      backdrop.remove();
+      if (returnFocusTo?.isConnected) returnFocusTo.focus();
+    };
+    const fail = message => { error.textContent = message; error.hidden = false; submit.disabled = false; };
+    function onKeydown(event) {
+      if (event.key === "Escape") return event.preventDefault(), close();
+      if (event.key !== "Tab") return;
+      // Keep focus inside the dialog while it is the only thing that can be acted on.
+      const stops = [...form.querySelectorAll("input, button")];
+      const edge = event.shiftKey ? stops[0] : stops[stops.length - 1];
+      if (document.activeElement === edge) {
+        event.preventDefault();
+        (event.shiftKey ? stops[stops.length - 1] : stops[0]).focus();
+      }
+    }
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const library_id = form.library_id.value.trim();
+      // Validated here rather than with required/pattern, so the message lands in the dialog
+      // instead of a browser bubble this page cannot style.
+      if (!/^[A-Za-z0-9._-]+$/.test(library_id)) return fail("Use letters, digits, dot, dash or underscore.");
+      if (entries.some(entry => entry.library_id === library_id)) return fail(`${library_id} already exists.`);
+      submit.disabled = true;
+      error.hidden = true;
+      const response = await fetch("/library-editor/entries", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({library_id, title: form.title.value.trim() || library_id}),
+      });
+      if (!response.ok) return fail((await response.json()).detail || "Create failed.");
+      location.reload();
+    };
+    backdrop.onmousedown = event => { if (event.target === backdrop) close(); };
+    form.querySelector('[data-dialog-action="cancel"]').onclick = close;
+    document.addEventListener("keydown", onKeydown, true);
+    document.body.append(backdrop);
+    form.library_id.focus();
   };
 
+  document.querySelector("#delete").onclick = async () => {
+    if (!current?.editor_added) return;
+    const doomed = current;
+    const confirmed = await window.vrDialog.confirm({
+      title: "Delete this entry?",
+      message: `${doomed.title} (${doomed.library_id}) is removed from the library for good. Reports that already pulled it in keep their own copy.`,
+      confirmLabel: "Delete entry",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    const response = await fetch(`/library-editor/entries/${encodeURIComponent(doomed.library_id)}`, {method: "DELETE"});
+    if (!response.ok) return say((await response.json()).detail || "Delete failed.", false);
+    entries.splice(entries.indexOf(doomed), 1);
+    current = null;
+    document.querySelector("#editor").reset();
+    field("entry-title").textContent = "Entry details";
+    field("entry-key").textContent = "";
+    field("delete").hidden = true;
+    field("library-count").textContent = `${entries.length} entries`;
+    renderList();
+    say(`Deleted ${doomed.library_id}.`, true);
+  };
+
+  field("entry-filter").addEventListener("input", renderList);
+  field("library-sort").addEventListener("change", renderList);
+  field("library-count").textContent = `${entries.length} entries`;
   renderList();
   if (entries.length) select(entries[0]);
 </script>
+<script src="/static/theme.js"></script>
 </body>
 </html>

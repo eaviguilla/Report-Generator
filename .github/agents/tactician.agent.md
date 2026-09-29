@@ -67,7 +67,7 @@ Work through this list explicitly. Report each as a real risk, or as checked and
 
 ### 4. Sequence the work
 
-Order steps so the app is never left in a state where a save fails. Migration and legacy repair come before anything that relies on the new shape. Name the test that proves each step, and say where it goes.
+Order steps so the app is never left in a state where a save fails. Migration and legacy repair come before anything that relies on the new shape. Name the test that proves each step and say where it goes: at the lowest layer that owns the rule (`.github/instructions/tests.instructions.md`), and as a case in the contract tests when the rule exists in both Python and JavaScript.
 
 ## Output Format
 

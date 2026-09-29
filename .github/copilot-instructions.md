@@ -109,54 +109,63 @@ Tests: <what you are running> — <why that scope>
 Tests: none — <why nothing needs to run>
 ```
 
-No line, no test run. This is the rule, not a formality: the decision below is easy to skip
-silently, and writing it down is what stops that.
+`scripts/relevant_tests.py` prints this line for you; copy it. No line, no test run.
 
-## Let the script decide
+## Three levels, and the script decides
 
-`scripts/relevant_tests.py` maps the working tree's changed files to unittest targets using the
-scope map below. Prefer it over deciding by hand, because deciding by hand is the step that gets
-skipped:
+`scripts/relevant_tests.py` compares the working tree with the last commit (untracked files
+included) and picks the tests. On Windows use `py -3` in place of `.venv/bin/python`.
+
+| When | Command | Runs |
+|---|---|---|
+| while building a function | `.venv/bin/python scripts/relevant_tests.py --run` | only the test methods you added or changed, plus the tests that call a test helper you changed |
+| once, before calling it done | `.venv/bin/python scripts/relevant_tests.py --affected --run` | every Python test module (about 20 s) and the browser tests for the pages the change can reach |
+| only when the user asks for a full run | `.venv/bin/python scripts/relevant_tests.py --full --run` | everything |
+
+Leave out `--run` to see the selection without running it. Browser tests run in parallel chunks.
+
+So a new function needs its own tests, written with it and picked up automatically while you build,
+and then one `--affected` run. Do not run the full suite "to be safe": `--affected` is the safe run.
+A change to docs, comments or instructions alone needs nothing, and the script says so.
+
+## How --affected picks browser tests
+
+| Changed | Browser tests |
+|---|---|
+| `app.js` inside `setup()` | Setup and Findings page tests |
+| `app.js` inside `continuousEditor()` | Content page tests |
+| any other `app.js` code (save machine, twin rules, renderers) | every report-page test |
+| `manager.js`, `home.html` | home page tests |
+| one page template | that page's tests |
+| CSS, `dialog.js`, `theme.js`, `diagnostics.js`, shared partials, server code in `app/*.py`, `tests/support.py` | every browser test |
+| `app/docx_*.py`, `resources/*.docx` | the import and generate browser tests |
+| `docs/`, `.github/`, `.claude/`, `*.md` | none |
+
+Each browser test's pages are read from the URLs and buttons in its own code, so there are no tags to
+maintain; a test whose pages cannot be read runs for every page. If the script lists a path under
+"No rule for these", decide that one by hand.
+
+## Narrower by hand, while iterating
+
+Name tests, or filter by name with `-k`:
 
 ```sh
-.venv/bin/python scripts/relevant_tests.py          # print the targets
-.venv/bin/python scripts/relevant_tests.py --run    # print and run them
+.venv/bin/python -m unittest tests.test_browser.BrowserWorkflowTests.test_name
+.venv/bin/python -m unittest tests.test_browser -k conclusion
 ```
 
-It prints `Tests: none` when nothing changed that a test asserts on, and lists any path it has no
-rule for so you can decide that one by hand rather than guessing at all of them.
+Always run tests as `tests.<module>` from the project root or through the script: that is what points
+them at a temporary data folder. `discover -s tests` would write into the real `data/`.
 
-## Two gates, in order
+Tests patch out Word's own pass (`main.update_docx_bytes_with_word`), so every test passes on
+macOS. The one check that needs real Word, `test_word_rebuilds_the_table_of_contents_on_generate`,
+skips itself off Windows.
 
-**Gate 1 — should anything run at all?**
+## Guardrails, and how tests are written
 
-Search the tests for what you touched. No hit and no behaviour change means run nothing and say so.
-Editing docs, comments, plan files, prompts, CSS, or markup that no test asserts on needs no suite.
-"I edited a file" is not a trigger. "I changed something a test asserts on" is.
-
-**Gate 2 — if yes, run the narrowest thing that covers it.**
-
-The specific test file, class, or method. The one browser flow touched. Prefer a handful of named
-tests while iterating, and widen once at the end only if the change could affect boot.
-
-Run the whole suite **only** when explicitly asked for a full or whole-app run.
-
-## Scope map
-
-| Changed | Run |
-|---|---|
-| `app/web/static/*` (JS and CSS), `app/web/templates/*` | `tests.test_browser` — every browser test loads the page, and CSS can hide an element a test clicks |
-| `app/models.py`, `app/report_service.py` | the named tests in `tests/test_app.py`, plus `tests.test_browser` — both files own rules with JavaScript twins |
-| `app/workspace.py`, `app/storage.py` | the named tests in `tests/test_app.py` and `tests.test_storage` |
-| `app/docx_*.py`, `resources/*.docx` | `tests.test_docx`, `tests.test_docx_components`, `tests.test_docx_captions`, `tests.test_docx_import` |
-| `resources/vuln_library.json`, `app/main.py` routes, other `app/*.py` | the named tests in `tests/test_app.py` |
-| `run.py` | `tests.test_launcher` |
-| `docs/**`, `*.md`, `.github/**`, `.claude/**`, `scripts/**`, comments | nothing |
-
-Two tests fail on macOS in every run and are not yours:
-`test_complete_report_saves_generated_docx_to_generated_folder` and
-`test_generate_docx_route_uses_template_and_report_filename`. Both need Microsoft Word and
-`pywin32`. Do not investigate them, and do not describe a run as failing because of them.
+Full-suite commands ask for approval before they run: in Claude Code through a local hook, and in
+VS Code through `.vscode/settings.json`, which auto-approves `relevant_tests.py` only without `--full`.
+How to write a test is in `.github/instructions/tests.instructions.md`.
 
 # Pushing changes
 

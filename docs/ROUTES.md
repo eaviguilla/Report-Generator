@@ -60,6 +60,7 @@ A local-only library editor mounts when `VULNREPORT_LIBRARY_EDITOR` is set **and
 | GET | `/library-editor` | Editor page with every library entry embedded |
 | POST | `/library-editor/entries` | Create an entry |
 | PUT | `/library-editor/entries/{library_id}` | Save an entry |
+| DELETE | `/library-editor/entries/{library_id}` | Delete an entry |
 
 DOCX generation uses one of the four `resources/MAIN*.docx` masters, chosen by
 `main_template_path` (see `docs/DOCX_TEMPLATE.md`), then
@@ -160,4 +161,4 @@ Run these after navigation or persistence changes:
    retest rewrites/drops are named.
 10. Export/import a report containing evidence; verify the PNG survives and a
     tampered archive is rejected.
-11. Run `py -3 -m unittest discover -s tests -v`.
+11. Run `py -3 scripts/relevant_tests.py --affected --run` (see "Running tests in this repo" in `.github/copilot-instructions.md`; `discover -s tests` would bypass the temporary data folder and write into the real `data/`).

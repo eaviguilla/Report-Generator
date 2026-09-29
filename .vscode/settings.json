@@ -1,0 +1,8 @@
+{
+  // Copilot agent mode: the test selector runs without asking, except with --full. Every other
+  // terminal command, including a whole-suite run, keeps VS Code's default of asking first.
+  // See "Running tests in this repo" in .github/copilot-instructions.md.
+  "chat.tools.terminal.autoApprove": {
+    "/relevant_tests\\.py(?!.*--full)/": true
+  }
+}

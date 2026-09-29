@@ -5,6 +5,7 @@ import unittest
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from typing import get_args
 from zipfile import ZipFile
 
 from docx import Document
@@ -25,7 +26,8 @@ from app.docx_report import (
 )
 from app.docx_captions import flatten_section_number_fields
 from app.report_service import provision, sync_evidence_image_slots
-from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
+from tests.support import numbering_details, off_border_pixels, png_bytes
+from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, Segment, TableFragment, TestAccount, TestWindow, Vulnerability
 
 
 def _keeps_next(element) -> bool:
@@ -35,6 +37,9 @@ def _keeps_next(element) -> bool:
 
 def _is_blank_paragraph(element) -> bool:
     return element.tag == qn("w:p") and not "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
+
+
+RESOURCES = Path(__file__).resolve().parent.parent / "resources"
 
 
 class DocxReportTests(unittest.TestCase):
@@ -114,7 +119,7 @@ class DocxReportTests(unittest.TestCase):
             previous_image.evidence_id = "ev_prev"
             previous_image.caption = "Original non-production response"
 
-            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
+            template = RESOURCES / "MAIN.docx"
             generated = render_report_docx(report, template, report_folder)
             rendered = Document(BytesIO(generated))
             text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
@@ -144,15 +149,12 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(paragraph_texts.count("UAT:"), 2)
             self.assertEqual(paragraph_texts.count("NON-PROD:"), 0)
 
-            # The component template is the only supported one, so the checks below share this render.
-            component_generated = generated
-            component_document = rendered
-            template_document = Document(Path("resources/MAIN.docx"))
+            template_document = Document(RESOURCES / "MAIN.docx")
             template_revision = next(
                 table for table in template_document.tables if table.cell(0, 0).text == "Version"
             )
             rendered_revision = next(
-                table for table in component_document.tables if table.cell(0, 0).text == "Version"
+                table for table in rendered.tables if table.cell(0, 0).text == "Version"
             )
             self.assertEqual(
                 [child.tag for child in rendered_revision._tbl.iterchildren()],
@@ -177,23 +179,26 @@ class DocxReportTests(unittest.TestCase):
             }
             rendered_header_footer_parts = {
                 str(part.partname): part
-                for part in component_document.part.package.parts
+                for part in rendered.part.package.parts
                 if "/header" in str(part.partname) or "/footer" in str(part.partname)
             }
             self.assertEqual(rendered_header_footer_parts.keys(), template_header_footer_parts.keys())
+            tokenised_parts = 0
             for part_name, template_part in template_header_footer_parts.items():
                 template_text = "".join(node.text or "" for node in template_part._element.iter(qn("w:t")))
                 if "{{" not in template_text:
                     continue
+                tokenised_parts += 1
                 rendered_text = "".join(
                     node.text or ""
                     for node in rendered_header_footer_parts[part_name]._element.iter(qn("w:t"))
                 )
                 self.assertNotIn("{{", rendered_text)
                 self.assertIn("Northstar Banking", rendered_text)
+            self.assertGreater(tokenised_parts, 0, "no header or footer carried a token, so nothing was checked")
             page_number_starts = [
                 page_numbering.get(qn("w:start")) if page_numbering is not None else None
-                for section_properties in component_document.element.body.iter(qn("w:sectPr"))
+                for section_properties in rendered.element.body.iter(qn("w:sectPr"))
                 if not any(
                     ancestor.tag == qn("w:sectPrChange")
                     for ancestor in section_properties.iterancestors()
@@ -204,20 +209,12 @@ class DocxReportTests(unittest.TestCase):
                 page_number_starts,
                 [None, "1", "1", None, None, None, None, None, None, None],
             )
-            component_text = "\n".join(
-                [
-                    *(paragraph.text for paragraph in component_document.paragraphs),
-                    *(cell.text for table in component_document.tables for row in table.rows for cell in row.cells),
-                ]
-            )
-            self.assertNotIn("{{", component_text)
-            self.assertEqual(sum(paragraph.text == "High Findings" for paragraph in component_document.paragraphs), 1)
-            self.assertEqual(sum(paragraph.text == "Previous Proof of Concept: " for paragraph in component_document.paragraphs), 1)
-            self.assertEqual(sum(paragraph.text == "In Conclusion: " for paragraph in component_document.paragraphs), 1)
-            self.assertEqual(len(component_document.inline_shapes), 5)
-            self._assert_image_fragment_format(component_document)
-            web_scope = next(table for table in component_document.tables if table.cell(0, 0).text == "URL(s) in Scope")
-            api_scope = next(table for table in component_document.tables if table.cell(0, 0).text == "API Routes")
+            self.assertEqual(sum(paragraph.text == "High Findings" for paragraph in rendered.paragraphs), 1)
+            self.assertEqual(sum(paragraph.text == "Previous Proof of Concept: " for paragraph in rendered.paragraphs), 1)
+            self.assertEqual(sum(paragraph.text == "In Conclusion: " for paragraph in rendered.paragraphs), 1)
+            self._assert_image_fragment_format(rendered)
+            web_scope = next(table for table in rendered.tables if table.cell(0, 0).text == "URL(s) in Scope")
+            api_scope = next(table for table in rendered.tables if table.cell(0, 0).text == "API Routes")
             expected_scope_lines = [
                 (web_scope.cell(2, 0), ["https://prod.example.test", "https://admin.example.test"]),
                 (web_scope.cell(4, 0), ["https://uat.example.test", "https://staging.example.test"]),
@@ -230,7 +227,7 @@ class DocxReportTests(unittest.TestCase):
             for vulnerability_id in ("001", "002"):
                 details = next(
                     table
-                    for table in component_document.tables
+                    for table in rendered.tables
                     if len(table.rows) >= 5
                     and table.cell(0, 0).text == "Severity"
                     and table.cell(1, 1).text == vulnerability_id
@@ -251,8 +248,10 @@ class DocxReportTests(unittest.TestCase):
                 "In Conclusion:",
                 "Severity Review Ticket (if applicable):",
             }
-            for paragraph in component_document.paragraphs:
+            titles_seen = 0
+            for paragraph in rendered.paragraphs:
                 if paragraph.text.strip() in section_titles:
+                    titles_seen += 1
                     previous = paragraph._p.getprevious()
                     blank_count = 0
                     while (
@@ -263,17 +262,13 @@ class DocxReportTests(unittest.TestCase):
                         blank_count += 1
                         previous = previous.getprevious()
                     self.assertLessEqual(blank_count, 1)
-            description = next(paragraph for paragraph in component_document.paragraphs if paragraph.text == "A complete description.")
+            self.assertGreaterEqual(titles_seen, 3, "the section titles were not found, so the spacing went unchecked")
+            description = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "A complete description.")
             following = description._p.getnext()
             self.assertEqual(following.tag, qn("w:p"))
             self.assertEqual("".join(node.text or "" for node in following.iter(qn("w:t"))), "")
-            component_summary = next(table for table in component_document.tables if table.cell(0, 0).text == "Findings")
-            for row in component_summary.rows[1:]:
-                for index in (1, 2, 3):
-                    rating_run = next(run for run in row.cells[index].paragraphs[0].runs if run.text)
-                    self.assertEqual(rating_run.font.size, Pt(12))
-            self.assertTrue(any(paragraph.text == "Request" and paragraph.style.name == "Figures and Tables" for paragraph in component_document.paragraphs))
-            image_caption = next(paragraph for paragraph in component_document.paragraphs if paragraph.text.endswith("Production response"))
+            self.assertTrue(any(paragraph.text == "Request" and paragraph.style.name == "Figures and Tables" for paragraph in rendered.paragraphs))
+            image_caption = next(paragraph for paragraph in rendered.paragraphs if paragraph.text.endswith("Production response"))
             self.assertEqual(image_caption.style.name, "Normal")
             self.assertEqual(image_caption._p.find(qn("w:pPr")).find(qn("w:jc")).get(qn("w:val")), "center")
             self.assertTrue(image_caption._p.getprevious().xpath(".//w:drawing"))
@@ -282,13 +277,13 @@ class DocxReportTests(unittest.TestCase):
                 [node.text for node in image_caption._p.iter(qn("w:instrText"))],
                 [r" SEQ Figure \* ARABIC "],
             )
-            component_code = next(paragraph for paragraph in component_document.paragraphs if paragraph.text == "GET /accounts/123")
+            component_code = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "GET /accounts/123")
             self.assertEqual(component_code.runs[0].font.name, "Consolas")
-            note = next(paragraph for paragraph in component_document.paragraphs if paragraph.text == "Note: Validate the result independently.")
+            note = next(paragraph for paragraph in rendered.paragraphs if paragraph.text == "Note: Validate the result independently.")
             self.assertTrue(all(run.italic for run in note.runs if run.text))
-            generated_table = next(table for table in component_document.tables if table.cell(0, 0).text == "Generated Header")
+            generated_table = next(table for table in rendered.tables if table.cell(0, 0).text == "Generated Header")
             self.assertEqual(sum(int(column.get(qn("w:w"))) for column in generated_table._tbl.tblGrid.iterchildren(qn("w:gridCol"))), 9994)
-            with ZipFile(BytesIO(component_generated)) as archive:
+            with ZipFile(BytesIO(generated)) as archive:
                 self.assertIn("word/document.xml", archive.namelist())
 
     def test_template_without_the_findings_anchor_is_rejected(self) -> None:
@@ -300,7 +295,7 @@ class DocxReportTests(unittest.TestCase):
                 saved_at=datetime.now().astimezone(),
                 engagement=Engagement(app_name="Northstar Banking"),
             )
-            template = Path(__file__).resolve().parent.parent / "resources" / "fixtures" / "report-name.docx"
+            template = RESOURCES / "fixtures" / "report-name.docx"
             with self.assertRaises(ReportGenerationError) as raised:
                 render_report_docx(report, template, report_folder, allow_incomplete=True)
             self.assertIn("{{findings}}", str(raised.exception))
@@ -310,10 +305,9 @@ class DocxReportTests(unittest.TestCase):
             report_folder = Path(temporary_directory)
             evidence_folder = report_folder / "evidence"
             evidence_folder.mkdir()
-            buffer = BytesIO()
-            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+            buffer = png_bytes(40, 20)
             for evidence_id in ("ev_prod", "ev_stale"):
-                (evidence_folder / f"{evidence_id}.png").write_bytes(buffer.getvalue())
+                (evidence_folder / f"{evidence_id}.png").write_bytes(buffer)
             now = datetime.now().astimezone()
             report = Report(
                 report_id="r_stale_image",
@@ -351,7 +345,7 @@ class DocxReportTests(unittest.TestCase):
             ]
             self.assertEqual(generation_issues(report), [])
 
-            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
+            template = RESOURCES / "MAIN.docx"
             rendered = Document(BytesIO(render_report_docx(report, template, report_folder)))
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("PROD:"), 1)
@@ -363,10 +357,9 @@ class DocxReportTests(unittest.TestCase):
         """A production-only finding in an engagement that also tested non-production."""
         evidence_folder = report_folder / "evidence"
         evidence_folder.mkdir()
-        buffer = BytesIO()
-        Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
+        buffer = png_bytes(40, 20)
         for evidence_id in evidence_ids:
-            (evidence_folder / f"{evidence_id}.png").write_bytes(buffer.getvalue())
+            (evidence_folder / f"{evidence_id}.png").write_bytes(buffer)
         now = datetime.now().astimezone()
         return Report(
             report_id="r_retest",
@@ -426,7 +419,7 @@ class DocxReportTests(unittest.TestCase):
             self.assertEqual(history.environment, "non_production", "a carried image keeps the environment it was found in")
             self.assertEqual(generation_issues(report), [])
 
-            template = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
+            template = RESOURCES / "MAIN.docx"
             rendered = Document(BytesIO(render_report_docx(report, template, report_folder)))
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("UAT:"), 1, "the carried non-production image must still be labelled and rendered")
@@ -446,9 +439,8 @@ class DocxReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)
             (report_folder / "evidence").mkdir()
-            buffer = BytesIO()
-            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
-            (report_folder / "evidence" / "ev_wrap.png").write_bytes(buffer.getvalue())
+            buffer = png_bytes(40, 20)
+            (report_folder / "evidence" / "ev_wrap.png").write_bytes(buffer)
             now = datetime.now().astimezone()
             web_target = "https://prod.example.test/accounts/123/details/extra/settings/preferences/alerts/email"
             api_target = "https://api.example.test/v2/customers/profile/settings/advanced/notifications/preferences"
@@ -468,7 +460,7 @@ class DocxReportTests(unittest.TestCase):
             report.vulnerabilities = [self._finding("v_wrap", "Authorization bypass", "high", "001", ["t_web", "t_api"], [
                 ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_wrap", caption="Production response"),
             ])]
-            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder)))
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
 
             locations = next(
                 cell
@@ -500,9 +492,8 @@ class DocxReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)
             (report_folder / "evidence").mkdir()
-            buffer = BytesIO()
-            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
-            (report_folder / "evidence" / "ev_na.png").write_bytes(buffer.getvalue())
+            buffer = png_bytes(40, 20)
+            (report_folder / "evidence" / "ev_na.png").write_bytes(buffer)
             now = datetime.now().astimezone()
             report = Report(
                 report_id="r_na", app_id="CI-DOCX", saved_at=now,
@@ -525,7 +516,7 @@ class DocxReportTests(unittest.TestCase):
             report.vulnerabilities = [self._finding("v_na", "Authorization bypass", "high", "001", ["t_prod"], [
                 ImageFragment(frag_id="f_img", type="image", environment="production", evidence_id="ev_na", caption="Production response"),
             ])]
-            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder)))
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
 
             cell = next(
                 cell
@@ -583,9 +574,8 @@ class DocxReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)
             (report_folder / "evidence").mkdir()
-            buffer = BytesIO()
-            Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
-            (report_folder / "evidence" / "ev_blank.png").write_bytes(buffer.getvalue())
+            buffer = png_bytes(40, 20)
+            (report_folder / "evidence" / "ev_blank.png").write_bytes(buffer)
             now = datetime.now().astimezone()
             report = Report(
                 report_id="r_blank", app_id="CI-DOCX", saved_at=now,
@@ -602,7 +592,7 @@ class DocxReportTests(unittest.TestCase):
                 self._finding("v_numbered", "Numbered finding", "high", "042", ["t_web"], image(1)),
                 self._finding("v_unnumbered", "Unnumbered finding", "low", None, ["t_web"], image(2)),
             ]
-            rendered = Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder)))
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
 
             summary = next(table for table in rendered.tables if table.cell(0, 0).text == "Findings")
             numbers = {row.cells[0].text: row.cells[4].text for row in summary.rows[1:]}
@@ -618,25 +608,6 @@ class DocxReportTests(unittest.TestCase):
 
             everything = "\n".join([*(p.text for p in rendered.paragraphs), *(c.text for t in rendered.tables for r in t.rows for c in r.cells)])
             self.assertNotIn("v_unnumbered", everything)
-
-    @staticmethod
-    def _numbering_details(document, paragraph) -> tuple[str, str | None, int | None]:
-        """The numId, nsid and level-0 startOverride behind one list paragraph."""
-        numbering = document.part.numbering_part.element
-        numbering_id = str(paragraph._p.pPr.numPr.numId.val)
-        number = next(element for element in numbering.iterchildren(qn("w:num")) if element.get(qn("w:numId")) == numbering_id)
-        abstract_id = number.find(qn("w:abstractNumId")).get(qn("w:val"))
-        abstract = next(element for element in numbering.iterchildren(qn("w:abstractNum")) if element.get(qn("w:abstractNumId")) == abstract_id)
-        nsid = abstract.find(qn("w:nsid"))
-        override = next(
-            (level.find(qn("w:startOverride")) for level in number.iterchildren(qn("w:lvlOverride")) if level.get(qn("w:ilvl")) == "0"),
-            None,
-        )
-        return (
-            numbering_id,
-            nsid.get(qn("w:val")) if nsid is not None else None,
-            int(override.get(qn("w:val"))) if override is not None else None,
-        )
 
     def _numbered_sections(self, report_folder: Path, *, continue_second: bool):
         """A proof of concept holding two numbered lists either side of an image, plus one in the
@@ -660,7 +631,7 @@ class DocxReportTests(unittest.TestCase):
         ]
         document = self._layout_document(report_folder, contents)
         listed = [paragraph for paragraph in document.paragraphs if paragraph._p.pPr is not None and paragraph._p.pPr.numPr is not None]
-        by_text = {paragraph.text: self._numbering_details(document, paragraph) for paragraph in listed}
+        by_text = {paragraph.text: numbering_details(document, paragraph) for paragraph in listed}
         return by_text
 
     def test_a_continued_numbered_list_shares_one_numbering_with_the_list_above_it(self) -> None:
@@ -820,9 +791,8 @@ class DocxReportTests(unittest.TestCase):
         """Render one finding through the shipped template, for page-layout assertions."""
         evidence_folder = report_folder / "evidence"
         evidence_folder.mkdir(exist_ok=True)
-        buffer = BytesIO()
-        Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
-        (evidence_folder / "ev_layout.png").write_bytes(buffer.getvalue())
+        buffer = png_bytes(40, 20)
+        (evidence_folder / "ev_layout.png").write_bytes(buffer)
         now = datetime.now().astimezone()
         report = Report(
             report_id="r_layout", app_id="CI-DOCX", saved_at=now,
@@ -840,7 +810,7 @@ class DocxReportTests(unittest.TestCase):
             scope=Scope(mode="custom", target_ids=["t_web"]), contents=contents,
             severity_review_tickets=tickets,
         )]
-        return Document(BytesIO(render_report_docx(report, Path("resources/MAIN.docx"), report_folder, allow_incomplete=True)))
+        return Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder, allow_incomplete=True)))
 
     @staticmethod
     def _table(suffix: str) -> TableFragment:
@@ -898,12 +868,15 @@ class DocxReportTests(unittest.TestCase):
                 Content(type="in_conclusion", fragments=paragraph("conclusion")),
             ], status="open_previously_discovered")
 
+            blanks_checked = 0
             for title in ("Description:", "Recommended Remediation:", "Previous Proof of Concept:", "Proof of Concept:", "In Conclusion:", "The following demonstrates the vulnerability:"):
                 heading = next(item for item in document.paragraphs if item.text.strip() == title)
                 self.assertTrue(_keeps_next(heading._p), f"{title!r} must be kept with its content")
                 previous = heading._p.getprevious()
                 if previous is not None and _is_blank_paragraph(previous):
+                    blanks_checked += 1
                     self.assertFalse(_keeps_next(previous), f"the walk above {title!r} must stop at the blank")
+            self.assertGreater(blanks_checked, 0, "no heading had a blank above it, so the walk's stop went unchecked")
 
             # Filled by token replacement rather than an anchor, so the walk cannot reach it. Pinned
             # so the gap stays visible instead of being mistaken for coverage.
@@ -1042,11 +1015,7 @@ class DocxReportTests(unittest.TestCase):
             self.assertIsNone(line)
             relationship_id = shape._inline.graphic.graphicData.pic.blipFill.blip.get(qn("r:embed"))
             image = Image.open(BytesIO(document.part.related_parts[relationship_id].blob)).convert("RGB")
-            width, height = image.size
-            self.assertTrue(all(image.getpixel((x, 0)) == (0, 0, 0) for x in range(width)))
-            self.assertTrue(all(image.getpixel((x, height - 1)) == (0, 0, 0) for x in range(width)))
-            self.assertTrue(all(image.getpixel((0, y)) == (0, 0, 0) for y in range(height)))
-            self.assertTrue(all(image.getpixel((width - 1, y)) == (0, 0, 0) for y in range(height)))
+            self.assertEqual(off_border_pixels(image), [], "the screenshot lost its black border")
             paragraph = next(shape._inline.iterancestors(qn("w:p")))
             alignment = paragraph.find(qn("w:pPr") + "/" + qn("w:jc"))
             self.assertIsNotNone(alignment)
@@ -1056,9 +1025,8 @@ class DocxReportTests(unittest.TestCase):
         """A complete single-finding report covering one component app type."""
         evidence_folder = report_folder / "evidence"
         evidence_folder.mkdir(exist_ok=True)
-        buffer = BytesIO()
-        Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
-        (evidence_folder / "ev_prod.png").write_bytes(buffer.getvalue())
+        buffer = png_bytes(40, 20)
+        (evidence_folder / "ev_prod.png").write_bytes(buffer)
         now = datetime.now().astimezone()
         report = Report(
             report_id="r_component",
@@ -1090,7 +1058,8 @@ class DocxReportTests(unittest.TestCase):
         return report
 
     def test_main_template_path_selects_on_both_axes(self) -> None:
-        resources = Path(__file__).resolve().parent.parent / "resources"
+        resources = RESOURCES
+        covered = set()
         with tempfile.TemporaryDirectory() as temporary_directory:
             for channel, segment, expected in (
                 ("web", "JH", "MAIN.docx"),
@@ -1103,7 +1072,10 @@ class DocxReportTests(unittest.TestCase):
                 ("thick_client", "GDT", "MAIN_THICK_MOBILE.docx"),
                 ("web", "GFT", "MAIN.docx"),
                 ("thick_client", "GFT", "MAIN_THICK_MOBILE.docx"),
+                ("web", "GWAM", "MAIN.docx"),
+                ("mobile", "GWAM", "MAIN_THICK_MOBILE.docx"),
             ):
+                covered.add(segment)
                 report = self._component_report(Path(temporary_directory), channel, segment, [
                     ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
                 ])
@@ -1112,6 +1084,8 @@ class DocxReportTests(unittest.TestCase):
                 # The parent doubles as the component fragment root, so every branch must stay in resources.
                 self.assertEqual(chosen.parent, resources)
                 self.assertTrue(chosen.is_file())
+        # Written out by hand on purpose, so a new segment must be added here rather than guessed.
+        self.assertEqual(covered, set(get_args(Segment)), "a segment has no row in the template table")
 
     def test_network_metadata_defaults_to_internal_and_carries_the_selection(self) -> None:
         """The templates carry no {{network}} token yet, so this assertion is the only thing
@@ -1125,7 +1099,7 @@ class DocxReportTests(unittest.TestCase):
     def test_every_shipped_template_renders_without_unresolved_placeholders(self) -> None:
         """None of the four has been through this renderer before. Each carries its own anchors,
         table headers and tokens, and every one of them is a hard precondition."""
-        resources = Path(__file__).resolve().parent.parent / "resources"
+        resources = RESOURCES
         for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia"), ("web", "GDT"), ("thick_client", "GDT"), ("web", "GFT"), ("thick_client", "GFT")):
             with self.subTest(channel=channel, segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
                 report_folder = Path(temporary_directory)
@@ -1136,7 +1110,7 @@ class DocxReportTests(unittest.TestCase):
                 render_report_docx(report, main_template_path(report, resources), report_folder)
 
     def test_component_scope_fills_the_binaries_table_production_first(self) -> None:
-        resources = Path(__file__).resolve().parent.parent / "resources"
+        resources = RESOURCES
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)
             report = self._component_report(report_folder, "thick_client", "JH", [
@@ -1160,7 +1134,7 @@ class DocxReportTests(unittest.TestCase):
     def test_an_empty_component_list_leaves_one_placeholder_row_not_the_prototype(self) -> None:
         """An untouched {{binaries}} row would fail the unresolved-placeholder check at the very end
         of generation, which is the least useful place to discover an empty scope."""
-        resources = Path(__file__).resolve().parent.parent / "resources"
+        resources = RESOURCES
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)
             report = self._component_report(report_folder, "mobile", "JH", [
@@ -1190,7 +1164,7 @@ class DocxReportTests(unittest.TestCase):
             finding.cvss_score = score
             finding.cvss_vector = vector
             report.vulnerabilities.append(finding)
-        resources = Path(__file__).resolve().parent.parent / "resources"
+        resources = RESOURCES
         return Document(BytesIO(render_report_docx(report, main_template_path(report, resources), report_folder)))
 
     def test_asia_section_column_references_each_findings_own_heading(self) -> None:
@@ -1279,7 +1253,7 @@ class DocxReportTests(unittest.TestCase):
             report = self._component_report(report_folder, "thick_client", "Asia", [
                 ScopeTarget(target_id="t_prod", environment="production", channel="thick_client", value="Acme.exe", description="Main client"),
             ])
-            resources = Path(__file__).resolve().parent.parent / "resources"
+            resources = RESOURCES
             contents = render_report_docx(report, main_template_path(report, resources), report_folder)
             rendered = Document(BytesIO(contents))
 

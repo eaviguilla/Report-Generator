@@ -183,6 +183,7 @@ restart.
 | `VULNREPORT_MAX_IMAGE_PIXELS` | 40000000 |
 | `VULNREPORT_MAX_REPORT_EVIDENCE_BYTES` | 250 MB |
 | `VULNREPORT_LIBRARY_EDITOR` | unset; set it to mount `/library-editor` |
+| `VULNREPORT_DATA_DIR` | unset, meaning `data/` in the project; the tests point it at a temporary folder |
 
 Two browser-side values are read off `window` rather than the environment:
 `VULNREPORT_AUTOSAVE_IDLE_MS` and its older alias `VULNREPORT_AUTOSAVE_INTERVAL_MS` (default 5000 ms,
@@ -197,10 +198,13 @@ creating the directory and seeding the file if it is missing.
 ```sh
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m playwright install chromium
-.venv/bin/python scripts/relevant_tests.py --run     # the tests the working-tree changes need
+.venv/bin/python scripts/relevant_tests.py --run              # the tests you added or changed
+.venv/bin/python scripts/relevant_tests.py --affected --run   # before calling a change done
 .venv/bin/python -m scripts.generate_report <report_id> [--allow-incomplete]   # Windows + Word only
 ```
 
-On Windows use `py -3` in place of `.venv/bin/python`. Tests use temporary workspaces and never touch
-`data/`. Which tests to run for a given change is set out in `.github/copilot-instructions.md`
-under *Running tests in this repo*.
+On Windows use `py -3` in place of `.venv/bin/python`. Tests run against a temporary data folder
+(`tests/__init__.py`) and never touch `data/` or `generated/`; browser tests share one server and one
+Chromium per run and run in parallel chunks. Which tests to run for a given change, and how tests are
+written, are set out in `.github/copilot-instructions.md` (*Running tests in this repo*) and
+`.github/instructions/tests.instructions.md`.

@@ -11,6 +11,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from lxml import etree
 
+from tests.support import numbering_details
 from app.docx_components import DocxComponent, compose_docx_components, compose_docx_template
 
 
@@ -47,9 +48,8 @@ class DocxComponentTests(unittest.TestCase):
         positions = []
         for heading, title in expected:
             heading_paragraph = next(paragraph for paragraph in document.paragraphs if paragraph.text == heading)
-            title_paragraph = next(paragraph for paragraph in document.paragraphs if paragraph.text == title)
             self.assertEqual(heading_paragraph.style.name, "Report Heading 1")
-            self.assertTrue(heading_paragraph._p.pPr.pageBreakBefore is not None)
+            self.assertIsNotNone(heading_paragraph._p.pPr.pageBreakBefore)
             positions.extend([texts.index(heading), texts.index(title)])
         self.assertEqual(positions, sorted(positions))
 
@@ -132,7 +132,7 @@ class DocxComponentTests(unittest.TestCase):
         )
         numbering_groups = [
             [
-                self._numbering_details(
+                numbering_details(
                     document,
                     next(paragraph for paragraph in document.paragraphs if paragraph.text == text),
                 )
@@ -261,28 +261,6 @@ class DocxComponentTests(unittest.TestCase):
         return (
             etree.tostring(number, method="c14n", exclusive=True).decode(),
             etree.tostring(abstract, method="c14n", exclusive=True).decode(),
-        )
-
-    @staticmethod
-    def _numbering_details(document, paragraph) -> tuple[str, str | None, int | None]:
-        numbering = document.part.numbering_part.element
-        numbering_id = str(paragraph._p.pPr.numPr.numId.val)
-        number = next(element for element in numbering.iterchildren(qn("w:num")) if element.get(qn("w:numId")) == numbering_id)
-        abstract_id = number.find(qn("w:abstractNumId")).get(qn("w:val"))
-        abstract = next(element for element in numbering.iterchildren(qn("w:abstractNum")) if element.get(qn("w:abstractNumId")) == abstract_id)
-        nsid = abstract.find(qn("w:nsid"))
-        override = next(
-            (
-                level.find(qn("w:startOverride"))
-                for level in number.iterchildren(qn("w:lvlOverride"))
-                if level.get(qn("w:ilvl")) == "0"
-            ),
-            None,
-        )
-        return (
-            numbering_id,
-            nsid.get(qn("w:val")) if nsid is not None else None,
-            int(override.get(qn("w:val"))) if override is not None else None,
         )
 
 

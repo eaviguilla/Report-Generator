@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import re
-import tempfile
+import sys
 import threading
 import unittest
 import zipfile
@@ -25,25 +25,21 @@ from starlette.requests import ClientDisconnect
 
 from app import main
 from app import docx_import, docx_report, models, report_service
+from app import library as library_module, storage as storage_module, workspace as workspace_module
 from app.docx_report import _finding_locations, _metadata, generation_issues
 from app.library import Library
 from app.report_service import affected_channels, affected_environments, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
+from tests.support import off_border_pixels, png_bytes, use_temp_workspace
 from app.models import Content, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TestWindow, Vulnerability, resolve_tested_channels
 from app.tester_identity import Identity, load_or_bootstrap
 
 
 class ReportApiTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.original_workspace = main.workspace
-        main.workspace = Workspace(Path(self.temp_dir.name), "QA Tester")
+        self.root = use_temp_workspace(self, "QA Tester")
         self.client = TestClient(main.app)
-
-    def tearDown(self) -> None:
-        main.workspace = self.original_workspace
-        self.temp_dir.cleanup()
 
     def new_report(self) -> str:
         response = self.client.get("/new", follow_redirects=False)
@@ -330,24 +326,31 @@ class ReportApiTests(unittest.TestCase):
             "sha256": "0" * 64,
             "uploaded_at": report["saved_at"],
         }
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "evidence file must be a PNG directly under evidence/"):
             Report.model_validate(report)
 
     def test_report_rejects_unsafe_and_duplicate_identifiers(self) -> None:
-        report = main.workspace.create_report().model_dump(mode="json", by_alias=True)
-        report["vulnerabilities"] = [{"uid": 'v_unsafe" onclick="alert(1)'}, {"uid": "v_duplicate"}, {"uid": "v_duplicate"}]
-        with self.assertRaises(ValueError):
-            Report.model_validate(report)
+        """One rule per case, each on an otherwise valid report, so no case can pass on another's error."""
+        def with_findings(findings):
+            return {"vulnerabilities": findings}
 
-        report = main.workspace.create_report().model_dump(mode="json", by_alias=True)
-        report["engagement"]["test_windows"] = {"production": {"start_date": "2026-01-02", "end_date": "2026-01-01"}}
-        with self.assertRaises(ValueError):
-            Report.model_validate(report)
-
-        report["evidence"] = {}
-        report["vulnerabilities"] = [{"uid": "v_image", "contents": [{"type": "description", "fragments": [{"frag_id": "f_image", "type": "image", "evidence_id": "ev_missing"}]}]}]
-        with self.assertRaises(ValueError):
-            Report.model_validate(report)
+        cases = [
+            ("unsafe id", with_findings([{"uid": 'v_unsafe" onclick="alert(1)'}]), "String should match pattern"),
+            ("duplicate id", with_findings([{"uid": "v_duplicate"}, {"uid": "v_duplicate"}]), "duplicate vulnerability id"),
+            ("reversed window", {"engagement": {"test_windows": {"production": {"start_date": "2026-01-02", "end_date": "2026-01-01"}}}}, "end date cannot precede its start date"),
+            ("missing evidence", with_findings([{"uid": "v_image", "contents": [{"type": "description", "fragments": [{"frag_id": "f_image", "type": "image", "evidence_id": "ev_missing"}]}]}]), "references missing evidence"),
+        ]
+        for name, change, message in cases:
+            with self.subTest(case=name):
+                report = main.workspace.create_report().model_dump(mode="json", by_alias=True)
+                self.assertIsInstance(Report.model_validate(report), Report)
+                for key, value in change.items():
+                    if isinstance(value, dict):
+                        report[key].update(value)
+                    else:
+                        report[key] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    Report.model_validate(report)
 
     def test_legacy_duplicate_fragment_repair(self) -> None:
         report_id = self.new_report()
@@ -672,72 +675,43 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual([fragment.type for fragment in remediation.fragments], ["paragraph"])
         self.assertEqual(remediation.fragments[0].runs, [], "the resolved boilerplate outlived the resolved status")
 
-    def test_the_fourth_status_saves_and_prints_what_previously_discovered_prints(self) -> None:
-        """Every section rule is written as "is it new" or "is it resolved", so a fourth status
-        inherits the retest shape without a rule of its own. The point is that it saves at all:
-        widening the enum is what lets a draft hold it."""
-        finding = Vulnerability(uid="v_non_prod", title="Fixed in the lower region", status="open_resolved_on_non_prod")
-        provision(finding)
-        self.assertEqual(
-            [content.type for content in finding.contents],
-            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
-        )
-        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
-        self.assertNotEqual(
-            [run.text for run in remediation.fragments[0].runs],
-            ["None, the vulnerability has been remediated."],
-            "an open finding must not claim it was remediated",
-        )
+    def test_the_fourth_and_fifth_statuses_save_with_the_retest_sections(self) -> None:
+        """Every section rule is written as "is it new" or "is it resolved", so both later statuses
+        inherit the retest shape without rules of their own. Neither may claim a remediation happened
+        or rewrite one the tester typed, and both must survive a save: widening the enum is what lets
+        a draft hold them."""
+        for status in ("open_resolved_on_non_prod", "closed"):
+            with self.subTest(status=status):
+                finding = Vulnerability(uid="v_status", title="Later status", status=status)
+                provision(finding)
+                self.assertEqual(
+                    [content.type for content in finding.contents],
+                    ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+                )
+                remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
+                self.assertNotEqual(
+                    [run.text for run in remediation.fragments[0].runs],
+                    [report_service.RESOLVED_REMEDIATION],
+                    "only Resolved may claim a remediation happened",
+                )
+                remediation.fragments[0].runs = [Run(text="Accepted by the business owner.")]
+                provision(finding)
+                self.assertEqual(
+                    [run.text for run in remediation.fragments[0].runs],
+                    ["Accepted by the business owner."],
+                    "provisioning rewrote a remediation the tester typed",
+                )
 
-        report_id = self.new_report()
-        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["vulnerabilities"] = [{
-            "uid": "v_non_prod", "title": "Fixed in the lower region", "likelihood": "low", "impact": "low",
-            "severity": "low", "status": "open_resolved_on_non_prod",
-            "scope": {"mode": "custom", "custom_locations": {"production": {"web": ["https://prod.example.test"]}}},
-        }]
-        response = self.client.put(f"/reports/{report_id}", json=report)
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(
-            main.workspace.load(report_id).vulnerabilities[0].status,
-            "open_resolved_on_non_prod",
-            "the status did not survive the round trip",
-        )
-
-    def test_the_fifth_status_saves_and_keeps_the_remediation_the_tester_wrote(self) -> None:
-        """Closed borrows only the retest drop from Resolved. The app must not write its remediation,
-        must not remove one, and must give it the same five sections Resolved prints."""
-        finding = Vulnerability(uid="v_shut", title="Shut without a fix", status="closed")
-        provision(finding)
-        self.assertEqual(
-            [content.type for content in finding.contents],
-            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
-        )
-        remediation = next(content for content in finding.contents if content.type == "recommended_remediation")
-        self.assertNotEqual(
-            [run.text for run in remediation.fragments[0].runs],
-            [report_service.RESOLVED_REMEDIATION],
-            "Closed is not Resolved and must not claim a remediation happened",
-        )
-
-        remediation.fragments[0].runs = [Run(text="Accepted by the business owner.")]
-        provision(finding)
-        self.assertEqual(
-            [run.text for run in remediation.fragments[0].runs],
-            ["Accepted by the business owner."],
-            "provisioning rewrote a remediation the tester typed",
-        )
-
-        report_id = self.new_report()
-        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["vulnerabilities"] = [{
-            "uid": "v_shut", "title": "Shut without a fix", "likelihood": "low", "impact": "low",
-            "severity": "low", "status": "closed",
-            "scope": {"mode": "custom", "custom_locations": {"production": {"web": ["https://prod.example.test"]}}},
-        }]
-        response = self.client.put(f"/reports/{report_id}", json=report)
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].status, "closed")
+                report_id = self.new_report()
+                report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+                report["vulnerabilities"] = [{
+                    "uid": "v_status", "title": "Later status", "likelihood": "low", "impact": "low",
+                    "severity": "low", "status": status,
+                    "scope": {"mode": "custom", "custom_locations": {"production": {"web": ["https://prod.example.test"]}}},
+                }]
+                response = self.client.put(f"/reports/{report_id}", json=report)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].status, status, "the status did not survive the round trip")
 
     def test_a_closed_finding_loses_unmarked_remediated_boilerplate_on_load(self) -> None:
         """Deliberate, and the one place the app does touch a Closed remediation. The load repair
@@ -843,9 +817,11 @@ class ReportApiTests(unittest.TestCase):
                 content.fragments = [fragment for fragment in content.fragments if fragment.type != "numbered_list"]
 
         provision(finding)
-        for content in finding.contents:
-            if content.type.endswith("proof_of_concept"):
-                self.assertEqual(content.fragments[0].type, "numbered_list", f"{content.type} was left with no steps")
+        proofs = [content for content in finding.contents if content.type.endswith("proof_of_concept")]
+        # Both sections exist for this status; without the count an empty list would pass the loop.
+        self.assertEqual({content.type for content in proofs}, {"proof_of_concept", "previous_proof_of_concept"})
+        for content in proofs:
+            self.assertEqual(content.fragments[0].type, "numbered_list", f"{content.type} was left with no steps")
 
         apply_poc_variant(finding, [ParagraphFragment(frag_id="f_prose", type="paragraph", runs=[Run(text="Prose only")])], ["web"])
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
@@ -1327,9 +1303,8 @@ class ReportApiTests(unittest.TestCase):
         report["scope_text"] = {"production": {"web": "https://prod.example.test"}, "non_production": {"web": "https://uat.example.test"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
 
-        buffer = BytesIO()
-        Image.new("RGB", (16, 16), "red").save(buffer, format="PNG")
-        upload = self.client.post(f"/reports/{report_id}/evidence", files={"file": ("shot.png", buffer.getvalue(), "image/png")})
+        buffer = png_bytes(16, 16, "red")
+        upload = self.client.post(f"/reports/{report_id}/evidence", files={"file": ("shot.png", buffer, "image/png")})
         self.assertEqual(upload.status_code, 200)
         evidence_id = upload.json()["evidence"]["evidence_id"]
 
@@ -1452,7 +1427,12 @@ class ReportApiTests(unittest.TestCase):
 
         saved = main.workspace.load(report_id)
         self.assertIn("previous_proof_of_concept", [content.type for content in saved.vulnerabilities[0].contents])
-        self.assertNotIn("Carry finding: previous_proof_of_concept text is required", generation_issues(saved))
+        message = "Carry finding: previous_proof_of_concept text is required"
+        self.assertNotIn(message, generation_issues(saved))
+        # The same blank note is flagged once the status prints the section, which proves the message
+        # checked above is the one this rule really writes.
+        saved.vulnerabilities[0].status = "open_previously_discovered"
+        self.assertIn(message, generation_issues(saved))
 
     def test_the_previous_proof_slot_is_born_with_an_environment(self) -> None:
         """Provisioning creates this slot, so provisioning owes it the environment that generation
@@ -1475,10 +1455,12 @@ class ReportApiTests(unittest.TestCase):
         slots = [fragment for fragment in previous.fragments if isinstance(fragment, ImageFragment)]
         self.assertTrue(slots, "provisioning creates a previous-proof image slot")
         self.assertTrue(all(fragment.environment for fragment in slots), "an app-created slot must not be born without an environment")
-        self.assertNotIn(
-            "Previously discovered: environment/image/caption required for image fragment",
-            generation_issues(saved),
-        )
+        message = "Previously discovered: environment/image/caption required for image fragment"
+        self.assertNotIn(message, generation_issues(saved))
+        # Without the environment the same slot does produce that message, so the check above is live.
+        for fragment in slots:
+            fragment.environment = None
+        self.assertIn(message, generation_issues(saved))
 
     def test_generator_locations_use_typed_endpoints_grouped_by_channel(self) -> None:
         """custom_locations is keyed by channel, so a flat read would print "web" and "api"
@@ -1557,26 +1539,24 @@ class ReportApiTests(unittest.TestCase):
             ["https://main.example.test", "https://main.example.test/admin"],
         )
 
-    def _report_with_one_target(self, name: str, channels=("web",), environments=("production",)) -> tuple[str, str]:
+    def _report_with_one_target(self, name: str) -> str:
+        """A web-only, production-only report whose one scope target is https://web.production.test."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
             "app_name": name, "ci_number": "CI-LOC", "segment": "JH", "report_type": "annual_pentest",
-            "tester": "QA Tester", "tested_channels": list(channels), "tested_environments": list(environments),
-            "test_windows": {environment: {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"} for environment in environments},
+            "tester": "QA Tester", "tested_channels": ["web"], "tested_environments": ["production"],
+            "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"}},
         })
-        report["scope_text"] = {
-            environment: {channel: f"https://{channel}.{environment}.test" for channel in channels}
-            for environment in environments
-        }
+        report["scope_text"] = {"production": {"web": "https://web.production.test"}}
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
-        return report_id, main.workspace.load(report_id).scope_targets[0].target_id
+        return report_id
 
-    def _located_finding(self, custom=None, target_ids=None) -> dict:
+    def _located_finding(self, custom=None) -> dict:
         return {
             "uid": "v_loc", "title": "Located finding", "likelihood": "low", "impact": "low", "severity": "low",
             "status": "open_new",
-            "scope": {"mode": "custom", "target_ids": target_ids or [], "location_values": {}, "custom_locations": custom or {}},
+            "scope": {"mode": "custom", "target_ids": [], "location_values": {}, "custom_locations": custom or {}},
             "contents": [
                 {"type": "description", "fragments": [{"frag_id": "f_d", "type": "paragraph", "runs": [{"text": "d"}]}]},
                 {"type": "recommended_remediation", "fragments": [{"frag_id": "f_r", "type": "paragraph", "runs": [{"text": "r"}]}]},
@@ -1587,7 +1567,7 @@ class ReportApiTests(unittest.TestCase):
     def test_a_commented_additional_location_is_a_note_not_a_location(self) -> None:
         """The scope textarea treats a "#" line as a note. The additional-locations box is the same
         box to a tester, so a note there must not stand in for an affected location or print as one."""
-        report_id, _ = self._report_with_one_target("Noted")
+        report_id = self._report_with_one_target("Noted")
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["vulnerabilities"] = [self._located_finding(custom={"production": {"web": ["# ask the app owner which host"]}})]
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
@@ -1607,7 +1587,7 @@ class ReportApiTests(unittest.TestCase):
     def test_additional_locations_collapse_repeats_and_stray_spacing(self) -> None:
         """Scope targets already dedupe and trim. The same place typed twice in the other box would
         otherwise print twice in the document."""
-        report_id, _ = self._report_with_one_target("Repeats")
+        report_id = self._report_with_one_target("Repeats")
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["vulnerabilities"] = [self._located_finding(
             custom={"production": {"web": ["https://dupe.test", "https://dupe.test", "  https://dupe.test  ", ""]}})]
@@ -1619,7 +1599,7 @@ class ReportApiTests(unittest.TestCase):
     def test_an_additional_location_outside_the_coverage_is_not_a_location(self) -> None:
         """Only Setup decides what was tested. A line left under an environment or app type the
         engagement no longer covers must not carry a finding into the Content page."""
-        report_id, _ = self._report_with_one_target("Uncovered")
+        report_id = self._report_with_one_target("Uncovered")
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["vulnerabilities"] = [self._located_finding(custom={"non_production": {"web": ["https://uat.example.test"]}})]
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
@@ -1633,7 +1613,7 @@ class ReportApiTests(unittest.TestCase):
     def test_an_additional_location_alone_opens_the_content_page(self) -> None:
         """The counterpart to the three above: a typed endpoint really is an affected location, and
         a finding that has only one must not be held back."""
-        report_id, _ = self._report_with_one_target("Typed only")
+        report_id = self._report_with_one_target("Typed only")
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["vulnerabilities"] = [self._located_finding(custom={"production": {"web": ["https://web.production.test/admin"]}})]
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
@@ -1699,7 +1679,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.create_report()
         expected_saved_at = report.saved_at
         copies = [report.model_copy(deep=True), report.model_copy(deep=True)]
-        workspaces = [Workspace(Path(self.temp_dir.name), "QA Tester"), Workspace(Path(self.temp_dir.name), "QA Tester")]
+        workspaces = [Workspace(self.root, "QA Tester"), Workspace(self.root, "QA Tester")]
         barrier = threading.Barrier(3)
         outcomes = []
 
@@ -1737,9 +1717,8 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(len(fragment_ids), len(set(fragment_ids)))
         self.assertEqual(self.client.post(f"/reports/{report_id}/library/not-found").status_code, 404)
 
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
-        uploaded = self.client.post(f"/reports/{report_id}/evidence", files={"file": ("../proof.png", image_data.getvalue(), "image/png")})
+        image_data = png_bytes(2, 2)
+        uploaded = self.client.post(f"/reports/{report_id}/evidence", files={"file": ("../proof.png", image_data, "image/png")})
         self.assertEqual(uploaded.status_code, 200)
         self.assertIn("saved_at", uploaded.json())
         self.assertEqual(uploaded.json()["evidence"]["original_name"], "proof.png")
@@ -1792,7 +1771,7 @@ class ReportApiTests(unittest.TestCase):
                 1024,
             )
 
-        self.assertEqual(list(Path(self.temp_dir.name).glob(f"apps/**/{relative_file}")), [])
+        self.assertEqual(list(self.root.glob(f"apps/**/{relative_file}")), [])
 
     def test_library_content_does_not_gain_empty_starter_fragments(self) -> None:
         report_id = self.new_report()
@@ -1935,7 +1914,7 @@ class ReportApiTests(unittest.TestCase):
         empty.scope_targets = []
         self.assertIn("production scope target", report_service.setup_issues(empty))
 
-    def test_generate_docx_route_uses_template_and_report_filename(self) -> None:
+    def _generatable_report(self) -> str:
         report_id = self.new_report()
         incomplete = self.client.get(f"/reports/{report_id}/generate")
         self.assertEqual(incomplete.status_code, 422)
@@ -1963,9 +1942,8 @@ class ReportApiTests(unittest.TestCase):
         saved = self.client.put(f"/reports/{report_id}", json=report)
         self.assertEqual(saved.status_code, 200)
 
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
-        uploaded = self.client.post(f"/reports/{report_id}/evidence", files={"file": ("proof.png", image_data.getvalue(), "image/png")})
+        image_data = png_bytes(2, 2)
+        uploaded = self.client.post(f"/reports/{report_id}/evidence", files={"file": ("proof.png", image_data, "image/png")})
         self.assertEqual(uploaded.status_code, 200)
         evidence_id = uploaded.json()["evidence"]["evidence_id"]
         report = main.workspace.load(report_id)
@@ -1978,7 +1956,30 @@ class ReportApiTests(unittest.TestCase):
         image.evidence_id = evidence_id
         image.caption = "Production proof"
         main.workspace.save_if_current(report, report.saved_at)
+        return report_id
 
+    @unittest.skipUnless(sys.platform == "win32", "rebuilding the table of contents needs Microsoft Word")
+    def test_word_rebuilds_the_table_of_contents_on_generate(self) -> None:
+        report_id = self._generatable_report()
+        generated = self.client.get(f"/reports/{report_id}/generate")
+        self.assertEqual(generated.status_code, 200)
+        rendered = Document(BytesIO(generated.content))
+        toc_entries = []
+        for paragraph in rendered.element.body.iter(qn("w:p")):
+            style = paragraph.find("./" + qn("w:pPr") + "/" + qn("w:pStyle"))
+            if style is not None and style.get(qn("w:val"), "").startswith("TOC"):
+                entry = "".join(node.text or "" for node in paragraph.iter(qn("w:t"))).strip()
+                if entry:
+                    toc_entries.append(entry)
+        self.assertTrue(any("Generated finding" in entry for entry in toc_entries), toc_entries)
+
+    def test_generate_docx_route_uses_template_and_report_filename(self) -> None:
+        """Word's own pass is patched out, so this runs on every platform; the one assertion that needs
+        real Word lives in test_word_rebuilds_the_table_of_contents_on_generate."""
+        report_id = self._generatable_report()
+        word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
+        word.start()
+        self.addCleanup(word.stop)
         generated = self.client.get(f"/reports/{report_id}/generate")
         self.assertEqual(generated.status_code, 200)
         self.assertEqual(generated.headers["content-type"], "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -1987,14 +1988,6 @@ class ReportApiTests(unittest.TestCase):
         text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
         self.assertIn("Generated finding", text)
         self.assertNotIn("{{", text)
-        toc_entries = []
-        for paragraph in rendered.element.body.iter(qn("w:p")):
-            style = paragraph.find("./" + qn("w:pPr") + "/" + qn("w:pStyle"))
-            if style is not None and style.get(qn("w:val"), "").startswith("TOC"):
-                entry = "".join(node.text or "" for node in paragraph.iter(qn("w:t"))).strip()
-                if entry:
-                    toc_entries.append(entry)
-        self.assertTrue(any("Generated finding" in entry for entry in toc_entries))
         caption = next(paragraph for paragraph in rendered.paragraphs if paragraph.text.endswith("Production proof"))
         self.assertEqual(caption.text, "Figure 2. Production proof")
         self.assertEqual(
@@ -2005,16 +1998,11 @@ class ReportApiTests(unittest.TestCase):
         self.assertIsNone(shape._inline.graphic.graphicData.pic.spPr.find(qn("a:ln")))
         relationship_id = shape._inline.graphic.graphicData.pic.blipFill.blip.get(qn("r:embed"))
         bordered_image = Image.open(BytesIO(rendered.part.related_parts[relationship_id].blob)).convert("RGB")
-        width, height = bordered_image.size
-        self.assertTrue(all(bordered_image.getpixel((x, 0)) == (0, 0, 0) for x in range(width)))
-        self.assertTrue(all(bordered_image.getpixel((x, height - 1)) == (0, 0, 0) for x in range(width)))
-        self.assertTrue(all(bordered_image.getpixel((0, y)) == (0, 0, 0) for y in range(height)))
-        self.assertTrue(all(bordered_image.getpixel((width - 1, y)) == (0, 0, 0) for y in range(height)))
+        self.assertEqual(off_border_pixels(bordered_image), [], "the screenshot lost its black border")
         image_paragraph = next(shape._inline.iterancestors(qn("w:p")))
         self.assertEqual(image_paragraph.find(qn("w:pPr") + "/" + qn("w:jc")).get(qn("w:val")), "center")
 
-        with patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents):
-            saved = self.client.post(f"/reports/{report_id}/generate")
+        saved = self.client.post(f"/reports/{report_id}/generate")
         self.assertEqual(saved.status_code, 200)
         # Generated reports land in one shared folder at the project root.
         output_path = main.GENERATED / "JH - Generated Report - Annual Pentest 2026.docx"
@@ -2027,23 +2015,20 @@ class ReportApiTests(unittest.TestCase):
         self.assertTrue(output_path.read_bytes().startswith(b"PK"))
 
         # Regenerating keeps the earlier export instead of overwriting it.
-        with patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents):
-            again = self.client.post(f"/reports/{report_id}/generate")
+        again = self.client.post(f"/reports/{report_id}/generate")
         second_path = main.GENERATED / "JH - Generated Report - Annual Pentest 2026 (2).docx"
         self.assertEqual(again.json()["filename"], second_path.name)
         self.assertTrue(second_path.is_file())
         self.assertTrue(output_path.is_file())
-        output_path.unlink()
-        second_path.unlink()
 
     def test_library_rejects_invalid_documents(self) -> None:
-        path = Path(self.temp_dir.name) / "invalid-library.json"
+        path = self.root / "invalid-library.json"
         path.write_text('{"schema_version":"1.4","entry_count":1,"entries":[]}', encoding="utf-8")
         with self.assertRaises(ValueError):
             Library(path)
 
     def test_an_unreadable_library_does_not_stop_the_app_from_starting(self) -> None:
-        path = Path(self.temp_dir.name) / "broken-library.json"
+        path = self.root / "broken-library.json"
         path.write_text('{"schema_version":"1.4","entry_count":9,"entries":[]}', encoding="utf-8")
         recovered = Library.load_or_empty(path)
         self.assertEqual(recovered.entries, [])
@@ -2061,7 +2046,7 @@ class ReportApiTests(unittest.TestCase):
         step = {"frag_id": "f_step1", "type": "numbered_list", "items": [{"runs": [{"text": "Intercept the request"}]}]}
         entry = {"library_id": "VDB-900", "source_id": 900, "title": "Sample", "contents": [], "proof_of_concept": {"web": [step]}}
         document = {"schema_version": "1.4", "entry_count": 1, "entries": [entry]}
-        path = Path(self.temp_dir.name) / "poc-library.json"
+        path = self.root / "poc-library.json"
 
         def write(value: dict) -> Library:
             path.write_text(json.dumps(value), encoding="utf-8")
@@ -2087,7 +2072,7 @@ class ReportApiTests(unittest.TestCase):
             Library(path)
 
     def test_preferences_recover_from_invalid_json_shape(self) -> None:
-        path = Path(self.temp_dir.name) / "prefs.json"
+        path = self.root / "prefs.json"
         path.write_text('{"schema_version":"1.4","tester":"invalid"}', encoding="utf-8")
         identity = Identity("QA Tester", "QA Tester", "test")
         with patch("app.tester_identity.resolve_identity", return_value=identity):
@@ -2343,45 +2328,29 @@ class ReportApiTests(unittest.TestCase):
         self.assertIs(by_id["f_old"]["continue_numbering"], False, "a fragment without the key did not gain the default")
         self.assertIs(by_id["f_set"]["continue_numbering"], True, "an explicit value did not survive the round trip")
 
-    def test_the_conclusion_offer_memory_round_trips_and_refuses_null(self) -> None:
-        report_id = self.new_report()
-        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["vulnerabilities"] = [{
-            "uid": "v_offer", "title": "Offer memory", "status": "open_previously_discovered",
-            "likelihood": "low", "impact": "low", "severity": "low",
-            "conclusion_offer_resolved": ["Observe the balance of another user."],
-        }]
-        stored = self.client.put(f"/reports/{report_id}", json=report)
-        self.assertEqual(stored.status_code, 200)
-        self.assertEqual(
-            stored.json()["report"]["vulnerabilities"][0]["conclusion_offer_resolved"],
-            ["Observe the balance of another user."],
-            "the server did not echo the offer memory back",
-        )
+    def test_offer_memory_fields_round_trip_and_refuse_null(self) -> None:
+        """Each offer remembers its answer in a field of its own; both must survive a save as sent,
+        and neither may be nulled, because null would read as "never asked" and ask again."""
+        cases = [
+            ("conclusion_offer_resolved", "open_previously_discovered", ["Observe the balance of another user."]),
+            ("content_offer_dismissed", "open_new", {"description": "412-1a2b3c4d"}),
+        ]
+        for field_name, status, value in cases:
+            with self.subTest(field=field_name):
+                report_id = self.new_report()
+                report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+                report["vulnerabilities"] = [{
+                    "uid": "v_offer", "title": "Offer memory", "status": status,
+                    "likelihood": "low", "impact": "low", "severity": "low",
+                    field_name: value,
+                }]
+                stored = self.client.put(f"/reports/{report_id}", json=report)
+                self.assertEqual(stored.status_code, 200)
+                self.assertEqual(stored.json()["report"]["vulnerabilities"][0][field_name], value, "the server did not echo it back")
 
-        report["vulnerabilities"][0]["conclusion_offer_resolved"] = None
-        report["saved_at"] = stored.json()["report"]["saved_at"]
-        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 422, "null must not validate")
-
-    def test_the_content_offer_fingerprint_round_trips_and_refuses_null(self) -> None:
-        report_id = self.new_report()
-        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["vulnerabilities"] = [{
-            "uid": "v_fingerprint", "title": "Fingerprinted", "status": "open_new",
-            "likelihood": "low", "impact": "low", "severity": "low",
-            "content_offer_dismissed": {"description": "412-1a2b3c4d"},
-        }]
-        stored = self.client.put(f"/reports/{report_id}", json=report)
-        self.assertEqual(stored.status_code, 200)
-        self.assertEqual(
-            stored.json()["report"]["vulnerabilities"][0]["content_offer_dismissed"],
-            {"description": "412-1a2b3c4d"},
-            "the server did not echo the dismissal fingerprint back",
-        )
-
-        report["vulnerabilities"][0]["content_offer_dismissed"] = None
-        report["saved_at"] = stored.json()["report"]["saved_at"]
-        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 422, "null must not validate")
+                report["vulnerabilities"][0][field_name] = None
+                report["saved_at"] = stored.json()["report"]["saved_at"]
+                self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 422, "null must not validate")
 
     def test_a_status_change_leaves_the_content_offer_memory_untouched(self) -> None:
         """The offer records the tester's answer. provision runs on both sides on every save, so if
@@ -2458,13 +2427,33 @@ class TwinRuleTests(unittest.TestCase):
         data_map = (Path(__file__).resolve().parent.parent / "docs" / "DATA_MAP.md").read_text(encoding="utf-8")
         section = data_map.split("## 12. Rules that exist twice", 1)[1].split("## 13.", 1)[0]
         # Only the Python column is checkable from here; the JavaScript half has no importable names.
-        rows = [line for line in section.splitlines() if line.startswith("| `") or line.startswith("| ")]
+        rows = [line for line in section.splitlines() if line.startswith("| ") and not line.startswith(("| Rule", "|---"))]
         self.assertGreaterEqual(len(rows), 20, "the twin table in DATA_MAP.md has shrunk unexpectedly")
-        missing = []
+        modules = {**self.MODULES, "main": main, "docx_import": docx_import, "workspace": workspace_module, "library": library_module, "storage": storage_module}
+        literals = {value for alias in (models.Status, models.Segment, models.Channel) for value in get_args(alias)}
+        # Backticked words in that column that are deliberately not symbols.
+        not_symbols = {"asia": "a local flag in main_template_path", "Section": "a table heading in the template", "_ASIA": "a template file-name suffix"}
+
+        def resolves(name: str) -> bool:
+            owner, _, attribute = name.rpartition(".")
+            if owner:
+                # `content.fragments` names the field through a variable, so try the model class too.
+                candidates = (owner, owner[:1].upper() + owner[1:])
+                target = modules.get(owner) or next((getattr(module, name) for name in candidates for module in modules.values() if hasattr(module, name)), None)
+                return target is not None and (hasattr(target, attribute) or attribute in getattr(target, "model_fields", {}))
+            return name in modules or name in literals or name in not_symbols or any(hasattr(module, name) for module in modules.values())
+
+        checked, missing = 0, []
         for row in rows:
-            for module_name, symbol in self.named_symbols(row):
-                if not hasattr(self.MODULES[module_name], symbol):
-                    missing.append(f"{module_name}.{symbol}")
+            python_column = row.strip("|").split("|")[1]
+            for name in re.findall(r"`([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)`", python_column):
+                if name.split(".")[-1] in self.FILE_SUFFIXES | {"docx"}:
+                    continue
+                checked += 1
+                if not resolves(name):
+                    missing.append(name)
+        # A floor, so a reformatted table cannot turn this green by matching nothing.
+        self.assertGreaterEqual(checked, 40, "the twin table's Python column named almost nothing checkable")
         self.assertEqual(missing, [], f"DATA_MAP section 12 names Python symbols that no longer exist: {missing}")
 
 

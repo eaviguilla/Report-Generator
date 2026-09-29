@@ -4,54 +4,123 @@ import base64
 import json
 import socket
 import hashlib
-import tempfile
 import threading
+import time
 import unittest
 from datetime import date, datetime as RealDateTime
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
-from urllib.error import URLError
-from urllib.request import urlopen
 
 import uvicorn
 import app.workspace as workspace_module
 from docx import Document
 from PIL import Image
-from playwright.sync_api import sync_playwright
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import Error as PlaywrightError
 
 from app import main
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import finding_input_issues, status_conclusion_runs
+from app.report_service import COMPONENT_SCOPE_SYMBOLS, finding_input_issues, invalid_character_issue, setup_input_issues, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
-from app.workspace import Workspace
-from app.models import CodeFragment, Content, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestWindow, Vulnerability
+from tests.support import png_bytes, use_temp_workspace
+from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
+
+
+# Tests wait for "Saved" constantly, and the app autosaves after 5 s idle, so most of that wait was the
+# idle timer. This shortens it for every test, but yields to a value a test sets itself, whichever of
+# the two init scripts runs first (Playwright does not define their order), and to the legacy alias.
+AUTOSAVE_TEST_DEFAULT = """(() => {
+    let explicit = window.VULNREPORT_AUTOSAVE_IDLE_MS;
+    Object.defineProperty(window, "VULNREPORT_AUTOSAVE_IDLE_MS", {
+        configurable: true,
+        get: () => explicit ?? (window.VULNREPORT_AUTOSAVE_INTERVAL_MS === undefined ? 500 : undefined),
+        set: value => { explicit = value; },
+    });
+})()"""
+
+
+def setup_issue(field_name: str, value: str) -> str:
+    """The server's message for one invalid Setup value, which the browser must show word for word."""
+    windows = {environment: TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2)) for environment in ("production", "non_production")}
+    engagement = Engagement(tested_environments=["production", "non_production"], test_windows=windows, test_accounts=[TestAccount(user_role="N/A", username="N/A")])
+    target = windows["production"] if field_name == "test_time" else engagement.test_accounts[0] if field_name in ("user_role", "username") else engagement
+    setattr(target, field_name, value)
+    [issue] = setup_input_issues(engagement)
+    return issue
 
 
 class BrowserWorkflowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # One server, Playwright and Chromium per class; starting them per test was most of the run.
+        # Class cleanups run last-in-first-out: browser, Playwright, then the server.
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        cls.addClassCleanup(sock.close)
+        cls.base_url = f"http://127.0.0.1:{sock.getsockname()[1]}"
+        cls.server = uvicorn.Server(uvicorn.Config(main.app, log_level="error"))
+        server_thread = threading.Thread(target=cls.server.run, kwargs={"sockets": [sock]}, daemon=True)
+        server_thread.start()
+        cls.addClassCleanup(server_thread.join, 5)
+        cls.addClassCleanup(setattr, cls.server, "should_exit", True)
+        deadline = time.monotonic() + 10
+        while not cls.server.started:
+            if not server_thread.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError("Browser test server did not start")
+            time.sleep(0.01)
+        cls.playwright = sync_playwright().start()
+        cls.addClassCleanup(cls.playwright.stop)
+        cls.browser = cls.playwright.chromium.launch()
+        cls.addClassCleanup(cls.browser.close)
+
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.original_workspace = main.workspace
-        main.workspace = Workspace(Path(self.temp_dir.name), "Browser QA")
-        with socket.socket() as port_socket:
-            port_socket.bind(("127.0.0.1", 0))
-            self.port = port_socket.getsockname()[1]
-        self.server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=self.port, log_level="error"))
-        self.server_thread = threading.Thread(target=self.server.run, daemon=True)
-        self.server_thread.start()
-        for _ in range(40):
-            try:
-                urlopen(f"http://127.0.0.1:{self.port}/", timeout=0.2).close()
-                break
-            except URLError:
-                threading.Event().wait(0.05)
-        else:
-            self.fail("Browser test server did not start")
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch()
-        self.page = self.browser.new_page()
-        self.base_url = f"http://127.0.0.1:{self.port}"
+        # Registered first, so it is undone last: the context closes before the workspace goes back.
+        self.root = use_temp_workspace(self, "Browser QA")
+        # A fresh context per test: same origin every time, so localStorage would otherwise leak.
+        self.context = self.browser.new_context()
+        self.addCleanup(self.context.close)
+        self.context.add_init_script(AUTOSAVE_TEST_DEFAULT)
+        self.page = self.context.new_page()
+
+    def other_profile_page(self):
+        """A page in its own browser context, i.e. a second browser profile rather than a second tab."""
+        page = self.browser.new_page()
+        self.addCleanup(lambda: page.is_closed() or page.close())
+        return page
+
+    def _next_report_change(self, action) -> None:
+        """Run an edit and wait for the reportchange event it causes (app.js fires one 100 ms after an
+        edit, and redraws its offers on it), so a test can then check what did not happen without a sleep."""
+        self.page.evaluate("() => { window.reportChanges = 0; document.addEventListener('reportchange', () => { window.reportChanges += 1; }); }")
+        action()
+        self.page.wait_for_function("window.reportChanges > 0", timeout=5_000)
+
+    def plant_recovery_draft(self, report: dict, page_path: str, tab_id: str) -> None:
+        """Leave `report` in localStorage as another tab's unsaved draft, then reload the page so it
+        finds the draft and offers to restore it."""
+        report_id = report["report_id"]
+        envelope = {
+            "schemaVersion": 1, "reportId": report_id, "tabId": tab_id, "baseSavedAt": report["saved_at"],
+            "capturedAt": report["saved_at"], "editRevision": 1, "report": report,
+        }
+        self.page.goto(f"{self.base_url}/reports/{report_id}/{page_path}")
+        self.page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [f"vulnreport-pending:{report_id}:{tab_id}", envelope])
+        self.page.reload()
+
+    def restore_recovery_draft(self) -> None:
+        """Take the recovery offer. Restoring reloads the page, so wait for that navigation itself:
+        wait_for_load_state() alone returns at once while the old page still counts as loaded."""
+        with self.page.expect_navigation():
+            self.page.get_by_role("button", name="Restore", exact=True).click()
+
+    @staticmethod
+    def _count_or_zero(locator) -> int:
+        """A locator count that reads 0 while the page is mid-navigation instead of raising."""
+        try:
+            return locator.count()
+        except PlaywrightError:
+            return 0
 
     def ready_report(self, include_finding: bool = False) -> str:
         report = main.workspace.create_report()
@@ -110,43 +179,34 @@ class BrowserWorkflowTests(unittest.TestCase):
             allow_incomplete=True,
         )
 
-    def tearDown(self) -> None:
-        self.browser.close()
-        self.playwright.stop()
-        self.server.should_exit = True
-        self.server_thread.join(timeout=3)
-        main.workspace = self.original_workspace
-        self.temp_dir.cleanup()
-
     def test_setup_inputs_report_character_and_date_errors_before_save(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
 
+        # The browser must show exactly the server's wording, so each expected message is taken from
+        # setup_input_issues rather than typed out a second time.
         field_cases = [
-            ("Application Name", "Bad/App", "Portal-2: (Web)", 'Application name contains invalid character: "/" (slash)'),
-            ("CI Number", "CI_123", "CI-123", 'CI number contains invalid character: "_" (underscore)'),
-            ("BSN Number", "BSN.123", "BSN-123", 'BSN number contains invalid character: "." (period)'),
-            ("Application Owner", "Owner 2", "Anne-Marie Owner", 'Application owner contains invalid character: "2" (digit two)'),
-            ("Tester", "QA_Tester", "QA Tester", 'Tester contains invalid character: "_" (underscore)'),
-            ("Production time", "08:00_17:00", "08:00-17:00", 'Production time contains invalid character: "_" (underscore)'),
-            ("User role 1", "Admin_2", "Admin-2 / QA", 'User role 1 contains invalid character: "_" (underscore)'),
-            ("Username 1", "bad/user", "DOMAIN\\qa user@example", 'Username 1 contains invalid character: "/" (slash)'),
-            ("Limitations", "No testing @ production", "No API - version 2. (Read only) & 'approved' / \"reviewed\"; see scope: prod only.", 'Limitations contains invalid character: "@" (at sign)'),
+            ("Application Name", "app_name", "Bad/App", "Portal-2: (Web)"),
+            ("CI Number", "ci_number", "CI_123", "CI-123"),
+            ("BSN Number", "bsn_number", "BSN.123", "BSN-123"),
+            ("Application Owner", "app_owner", "Owner 2", "Anne-Marie Owner"),
+            ("Tester", "tester", "QA_Tester", "QA Tester"),
+            ("Production time", "test_time", "08:00_17:00", "08:00-17:00"),
+            ("User role 1", "user_role", "Admin_2", "Admin-2 / QA"),
+            ("Username 1", "username", "bad/user", "DOMAIN\\qa user@example"),
+            ("Limitations", "limitations", "No testing @ production", "No API - version 2. (Read only) & 'approved' / \"reviewed\"; see scope: prod only."),
         ]
-        for label, invalid_value, valid_value, expected_message in field_cases:
+        for label, field_name, invalid_value, valid_value in field_cases:
             with self.subTest(label=label):
                 field = page.get_by_label(label, exact=True)
                 field.fill(invalid_value)
-                self.assertEqual(field.evaluate("input => input.validationMessage"), expected_message)
+                self.assertEqual(field.evaluate("input => input.validationMessage"), setup_issue(field_name, invalid_value))
                 field.fill(valid_value)
                 self.assertEqual(field.evaluate("input => input.validationMessage"), "")
 
             application_name = page.get_by_label("Application Name")
             application_name.fill("Bad/_App/")
-            self.assertEqual(
-                application_name.evaluate("input => input.validationMessage"),
-                'Application name contains invalid characters: "/" (slash), "_" (underscore)',
-            )
+            self.assertEqual(application_name.evaluate("input => input.validationMessage"), setup_issue("app_name", "Bad/_App/"))
 
         production_start = page.get_by_label("Production start date", exact=True)
         production_end = page.get_by_label("Production end date", exact=True)
@@ -307,19 +367,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["app_owner"] = "Recover me"
         draft_key = f"vulnreport-pending:{report_id}:orphan"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "orphan",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
         page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
+        self.plant_recovery_draft(report, "setup", "orphan")
 
         page.evaluate(
             """() => {
@@ -511,7 +560,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         mobile.fill("Mobile App!")
         self.assertEqual(
             mobile.evaluate("input => input.validationMessage"),
-            'Production Mobile scope contains invalid character: "!" (exclamation mark)',
+            invalid_character_issue("Production Mobile scope", "Mobile App!", COMPONENT_SCOPE_SYMBOLS),
         )
         self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
 
@@ -543,20 +592,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["tested_channels"] = ["mobile"]
         report["scope_text"] = {"production": {"mobile": "Stale wallet app"}, "non_production": {"mobile": ""}}
-        draft_key = f"vulnreport-pending:{report_id}:orphan"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "orphan",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
         page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
+        self.plant_recovery_draft(report, "setup", "orphan")
         page.get_by_role("button", name="Restore", exact=True).click()
 
         mobile = page.get_by_role("textbox", name="Mobile Component", exact=True).first
@@ -582,22 +619,10 @@ class BrowserWorkflowTests(unittest.TestCase):
             "production": {"mobile": {"component": "Wallet app", "description": "Production build"}},
             "non_production": {"mobile": {"component": None, "description": ["stale cached value"]}},
         }
-        draft_key = f"vulnreport-pending:{report_id}:nullable"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "nullable",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
         requests = []
         page = self.page
         page.on("request", lambda request: requests.append(json.loads(request.post_data)) if request.method == "PUT" and request.post_data else None)
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
+        self.plant_recovery_draft(report, "setup", "nullable")
         page.get_by_role("button", name="Restore", exact=True).click()
         page.locator("#save-button").click()
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
@@ -610,21 +635,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         report["engagement"]["tested_channels"] = ["mobile"]
         report["scope_targets"] = []
         report["scope_text"] = {"production": [], "non_production": "stale"}
-        draft_key = f"vulnreport-pending:{report_id}:environment-shape"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "environment-shape",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
 
         page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
+        self.plant_recovery_draft(report, "setup", "environment-shape")
         page.get_by_role("button", name="Restore", exact=True).click()
         production = page.locator("#scope-grid .scope-panel.production")
         production.get_by_role("textbox", name="Mobile Component", exact=True).fill("Wallet app")
@@ -642,21 +655,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         report["engagement"]["test_windows"]["production"] = []
         report["scope_targets"] = []
         report["scope_text"] = {"production": {"mobile": {"component": "Wallet app", "description": "Production build"}}}
-        draft_key = f"vulnreport-pending:{report_id}:window-shape"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "window-shape",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
 
         page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
+        self.plant_recovery_draft(report, "setup", "window-shape")
         page.get_by_role("button", name="Restore", exact=True).click()
         page.get_by_label("Production start date", exact=True).fill("2026-02-01")
         page.get_by_label("Production end date", exact=True).fill("2026-02-02")
@@ -671,25 +672,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         report_id = self.ready_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["test_accounts"] = {}
-        draft_key = f"vulnreport-pending:{report_id}:account-shape"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "account-shape",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
 
         page = self.page
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
-        page.get_by_role("button", name="Restore", exact=True).click()
-        page.wait_for_load_state()
+        self.plant_recovery_draft(report, "setup", "account-shape")
+        self.restore_recovery_draft()
 
         self.assertEqual(errors, [])
         self.assertEqual(page.get_by_label("User role 1").input_value(), "N/A")
@@ -705,25 +693,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         report["engagement"]["tested_channels"] = "mobile"
         report["scope_targets"] = []
         report["scope_text"] = {"production": {"mobile": {"component": "Wallet app", "description": "Production build"}}}
-        draft_key = f"vulnreport-pending:{report_id}:coverage-shape"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "coverage-shape",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
 
         page = self.page
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
-        page.get_by_role("button", name="Restore", exact=True).click()
-        page.wait_for_load_state()
+        self.plant_recovery_draft(report, "setup", "coverage-shape")
+        self.restore_recovery_draft()
 
         self.assertEqual(errors, [])
         self.assertTrue(page.get_by_label("Test Mobile").is_checked())
@@ -739,25 +714,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["app_owner"] = "Recovered owner"
         report["scope_targets"] = {}
-        draft_key = f"vulnreport-pending:{report_id}:target-shape"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "target-shape",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
 
         page = self.page
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
-        page.get_by_role("button", name="Restore", exact=True).click()
-        page.wait_for_load_state()
+        self.plant_recovery_draft(report, "setup", "target-shape")
+        self.restore_recovery_draft()
 
         self.assertEqual(errors, [])
         self.assertEqual(page.get_by_role("textbox", name="Web", exact=True).input_value(), "https://prod.example.test")
@@ -772,25 +734,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["app_owner"] = "Recovered owner"
         report["vulnerabilities"] = {}
-        draft_key = f"vulnreport-pending:{report_id}:finding-shape"
-        envelope = {
-            "schemaVersion": 1,
-            "reportId": report_id,
-            "tabId": "finding-shape",
-            "baseSavedAt": report["saved_at"],
-            "capturedAt": report["saved_at"],
-            "editRevision": 1,
-            "report": report,
-        }
 
         page = self.page
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        page.evaluate("([key, draft]) => localStorage.setItem(key, JSON.stringify(draft))", [draft_key, envelope])
-        page.reload()
-        page.get_by_role("button", name="Restore", exact=True).click()
-        page.wait_for_load_state()
+        self.plant_recovery_draft(report, "findings", "finding-shape")
+        self.restore_recovery_draft()
 
         self.assertEqual(errors, [])
         self.assertEqual(page.locator("#findings > tr:not(.finding-location-row)").count(), 1)
@@ -867,7 +816,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
         self.assertEqual(page.locator("#app-diagnostics").count(), 0)
 
-    def test_cancelling_component_removal_cannot_save_the_proposed_deletion(self) -> None:
+    def _two_thick_client_components(self) -> str:
+        """A thick-client report with two components, both referenced by its one finding."""
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
         report.engagement.tested_channels = ["thick_client"]
@@ -877,6 +827,18 @@ class BrowserWorkflowTests(unittest.TestCase):
         ]
         report.vulnerabilities[0].scope.target_ids = ["tgt_main", "tgt_updater"]
         main.workspace.save(report)
+        return report_id
+
+    def _assert_both_components_kept(self, report_id: str) -> None:
+        saved = main.workspace.load(report_id)
+        self.assertEqual(
+            [(target.target_id, target.value) for target in saved.scope_targets],
+            [("tgt_main", "Acme.exe"), ("tgt_updater", "Updater.exe")],
+        )
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_main", "tgt_updater"])
+
+    def test_cancelling_component_removal_cannot_save_the_proposed_deletion(self) -> None:
+        report_id = self._two_thick_client_components()
 
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
@@ -887,23 +849,10 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
         page.get_by_role("button", name="Keep the current targets").click()
 
-        saved = main.workspace.load(report_id)
-        self.assertEqual(
-            [(target.target_id, target.value) for target in saved.scope_targets],
-            [("tgt_main", "Acme.exe"), ("tgt_updater", "Updater.exe")],
-        )
-        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_main", "tgt_updater"])
+        self._assert_both_components_kept(report_id)
 
     def test_cancelling_component_rename_preserves_target_identity_and_references(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        report = main.workspace.load(report_id)
-        report.engagement.tested_channels = ["thick_client"]
-        report.scope_targets = [
-            ScopeTarget(target_id="tgt_main", environment="production", channel="thick_client", value="Acme.exe", description="Main client", order=0),
-            ScopeTarget(target_id="tgt_updater", environment="production", channel="thick_client", value="Updater.exe", description="Updater", order=1),
-        ]
-        report.vulnerabilities[0].scope.target_ids = ["tgt_main", "tgt_updater"]
-        main.workspace.save(report)
+        report_id = self._two_thick_client_components()
 
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
@@ -913,21 +862,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator(".vr-dialog").wait_for()
         page.evaluate("document.querySelector('#save-button').click()")
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
-        during_prompt = main.workspace.load(report_id)
-        self.assertEqual(
-            [(target.target_id, target.value) for target in during_prompt.scope_targets],
-            [("tgt_main", "Acme.exe"), ("tgt_updater", "Updater.exe")],
-        )
+        self._assert_both_components_kept(report_id)
         page.get_by_role("button", name="Keep the current targets").click()
         page.locator("#save-button").click()
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
 
-        saved = main.workspace.load(report_id)
-        self.assertEqual(
-            [(target.target_id, target.value) for target in saved.scope_targets],
-            [("tgt_main", "Acme.exe"), ("tgt_updater", "Updater.exe")],
-        )
-        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_main", "tgt_updater"])
+        self._assert_both_components_kept(report_id)
 
     def test_a_component_needs_a_description_before_setup_will_let_you_leave(self) -> None:
         """A description-only entry would pass an unnarrowed textarea count and 422 server-side.
@@ -967,7 +907,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         description.fill("Crashes on start!")
         self.assertEqual(
             description.evaluate("input => input.validationMessage"),
-            'Production Thick Client scope description contains invalid character: "!" (exclamation mark)',
+            invalid_character_issue("Production Thick Client scope description", "Crashes on start!", COMPONENT_SCOPE_SYMBOLS),
         )
 
         description.fill("Main desktop client")
@@ -1355,9 +1295,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".evidence-environment-value").first.text_content(), "Production")
         description = page.locator(".content-block").filter(has_text="Description").locator(".rich").first
         description.fill("Unsaved description")
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
-        page.locator('input[type="file"]').first.set_input_files({"name": "proof.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
+        image_data = png_bytes(2, 2)
+        page.locator('input[type="file"]').first.set_input_files({"name": "proof.png", "mimeType": "image/png", "buffer": image_data})
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
 
         page.reload()
@@ -1366,8 +1305,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def paste_png(self, selector: str | None = None) -> None:
         """Dispatch a genuine paste event carrying a PNG, on one card or on the page itself."""
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         self.page.evaluate(
             """([selector, encoded]) => {
                 const transfer = new DataTransfer();
@@ -1375,7 +1313,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 const target = selector ? document.querySelector(selector) : document.body;
                 target.dispatchEvent(new ClipboardEvent("paste", {clipboardData: transfer, bubbles: true, cancelable: true}));
             }""",
-            [selector, base64.b64encode(image_data.getvalue()).decode()],
+            [selector, base64.b64encode(image_data).decode()],
         )
 
     def paste_png_as_item_only(self, selector: str | None = None) -> None:
@@ -1384,8 +1322,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         OneNote and Word put HTML on the clipboard beside the picture, and the browser then leaves
         `files` empty. A real DataTransfer always fills both, so the shape has to be faked.
         """
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         self.page.evaluate(
             """([selector, encoded]) => {
                 const file = new File([Uint8Array.from(atob(encoded), character => character.charCodeAt(0))], "pasted.png", {type: "image/png"});
@@ -1400,7 +1337,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 const target = selector ? document.querySelector(selector) : document.body;
                 target.dispatchEvent(event);
             }""",
-            [selector, base64.b64encode(image_data.getvalue()).decode()],
+            [selector, base64.b64encode(image_data).decode()],
         )
 
     def arm_evidence(self, fragment_id: str) -> None:
@@ -1420,36 +1357,26 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
     def test_pasting_a_screenshot_attaches_it_as_evidence(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
-        # An unarmed image must not offer a paste that would not reach it.
-        self.assertNotIn("paste", page.locator(".evidence-thumb").first.inner_text().lower())
-        self.arm_evidence(self.evidence_ids()[0])
-        self.assertIn("paste", page.locator(".evidence-thumb").first.inner_text().lower(), "the armed image must say how to paste")
-        self.paste_png(".evidence-tile")
-        page.locator(".image-preview").first.wait_for(timeout=5_000)
-        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        """Both clipboard shapes must attach. OneNote and Word put HTML on the clipboard beside the
+        picture, which leaves `clipboardData.files` empty; reading only that list dropped the paste
+        with no message."""
+        for clipboard, paste in (("file list", self.paste_png), ("item only", self.paste_png_as_item_only)):
+            with self.subTest(clipboard=clipboard):
+                report_id = self.ready_report(include_finding=True)
+                page = self.page
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.locator(".evidence-tile").first.wait_for(timeout=5_000)
+                # An unarmed image must not offer a paste that would not reach it.
+                self.assertNotIn("paste", page.locator(".evidence-thumb").first.inner_text().lower())
+                self.arm_evidence(self.evidence_ids()[0])
+                self.assertIn("paste", page.locator(".evidence-thumb").first.inner_text().lower(), "the armed image must say how to paste")
+                paste(".evidence-tile")
+                page.locator(".image-preview").first.wait_for(timeout=5_000)
+                page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
 
-        page.reload()
-        self.assertEqual(page.locator(".image-preview").count(), 1)
-        self.assertEqual(page.locator(".evidence-thumb span").count(), 0, "the prompt stayed on a filled image")
-
-    def test_pasting_a_screenshot_whose_clipboard_carries_no_file_list_still_attaches(self) -> None:
-        """OneNote and Word put HTML on the clipboard beside the picture, which leaves
-        `clipboardData.files` empty. Reading only that list dropped the paste with no message."""
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        page.locator(".evidence-tile").first.wait_for(timeout=5_000)
-        self.arm_evidence(self.evidence_ids()[0])
-        self.paste_png_as_item_only(".evidence-tile")
-        page.locator(".image-preview").first.wait_for(timeout=5_000)
-        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
-
-        page.reload()
-        self.assertEqual(page.locator(".image-preview").count(), 1)
+                page.reload()
+                self.assertEqual(page.locator(".image-preview").count(), 1)
+                self.assertEqual(page.locator(".evidence-thumb span").count(), 0, "the prompt stayed on a filled image")
 
     def test_pasting_an_image_from_a_focused_editor_uses_the_armed_evidence_slot(self) -> None:
         """Text focus must not steal an image paste from the evidence image the tester armed, and
@@ -1611,6 +1538,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.paste_png()
         page.wait_for_selector("#paste-notice.is-visible", timeout=5_000)
         self.assertIn("evidence image", page.locator("#paste-notice").inner_text())
+        # Deliberately a pause: this checks an upload did NOT happen, and one would only start after
+        # an asynchronous file read, so there is no event to wait for instead.
         page.wait_for_timeout(800)
         self.assertEqual(page.locator(".image-preview").count(), 0)
         # The draft is the assertion, not the screen: an image that reached the report without a
@@ -1662,16 +1591,22 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.paste_png()
         page.locator(f'.evidence-tile[data-fragment-id="{target}"] .image-preview').wait_for(timeout=8_000)
         page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+        first = self._stored_fragment(report_id, target)["evidence_id"]
 
         self.arm_evidence(target)
-        self.paste_png()
-        page.wait_for_timeout(1_500)
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.request.method == "POST"):
+            self.paste_png()
         page.get_by_role("button", name="Saved").wait_for(timeout=8_000)
+        second = self._stored_fragment(report_id, target)["evidence_id"]
+        self.assertNotEqual(first, second, "the second paste did not replace the screenshot")
 
-        page.locator("#undo-button").click()
-        page.wait_for_timeout(1_500)
-        page.locator("#redo-button").click()
-        page.wait_for_timeout(1_500)
+        # Undo and redo each save first and then reload the page (restoreHistory in app.js).
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        self.assertEqual(self._stored_fragment(report_id, target)["evidence_id"], first, "undo did not bring the first screenshot back")
+        with page.expect_navigation():
+            page.locator("#redo-button").click()
+        self.assertEqual(self._stored_fragment(report_id, target)["evidence_id"], second, "redo did not bring the replacement back")
 
         stored = main.workspace.load(report_id)
         folder = main.workspace.find_path(report_id).parent
@@ -1689,20 +1624,22 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.locator(".evidence-tile").first.wait_for(timeout=8_000)
-        # Holds the upload open so Previous is clicked while the POST is still in flight.
+        # Holds the upload open until the test releases it, so Previous is clicked while the POST is
+        # still in flight however fast or slow the machine is.
         page.evaluate(
             """() => {
-                const original = window.fetch;
-                window.fetch = (url, options) => String(url).endsWith("/evidence") && options?.method === "POST"
-                    ? new Promise(resolve => setTimeout(() => resolve(original(url, options)), 1500))
+                const original = window.fetch.bind(window);
+                window.releaseUpload = null;
+                window.fetch = (url, options = {}) => String(url).endsWith("/evidence") && options.method === "POST"
+                    ? new Promise(resolve => { window.releaseUpload = () => original(url, options).then(resolve); })
                     : original(url, options);
             }"""
         )
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
-        page.locator('input[type="file"]').first.set_input_files({"name": "proof.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
-        page.wait_for_selector("#save-button[data-save-state='saving']", timeout=5_000)
+        image_data = png_bytes(2, 2)
+        page.locator('input[type="file"]').first.set_input_files({"name": "proof.png", "mimeType": "image/png", "buffer": image_data})
+        page.wait_for_function("window.releaseUpload !== null")
         page.get_by_role("button", name="Previous: Findings").click()
+        page.evaluate("window.releaseUpload()")
         page.wait_for_url(f"{self.base_url}/reports/{report_id}/findings", timeout=10_000)
 
         saved = main.workspace.load(report_id)
@@ -1820,17 +1757,16 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(page.get_by_text("Production evidence image required", exact=True).is_visible())
         self.assertTrue(page.get_by_text("Non-Production evidence image required", exact=True).is_visible())
 
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         image_cards.nth(0).locator(".evidence-caption").fill("Production transaction response")
-        image_cards.nth(0).locator('input[type="file"]').set_input_files({"name": "prod.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
+        image_cards.nth(0).locator('input[type="file"]').set_input_files({"name": "prod.png", "mimeType": "image/png", "buffer": image_data})
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
         self.assertEqual(page.get_by_text("Production evidence image required", exact=True).count(), 0)
         self.assertTrue(page.get_by_text("Non-Production evidence image required", exact=True).is_visible())
 
         image_cards = proof.locator(".evidence-tile")
         image_cards.nth(1).locator(".evidence-caption").fill("Non-Production transaction response")
-        image_cards.nth(1).locator('input[type="file"]').set_input_files({"name": "uat.png", "mimeType": "image/png", "buffer": image_data.getvalue()})
+        image_cards.nth(1).locator('input[type="file"]').set_input_files({"name": "uat.png", "mimeType": "image/png", "buffer": image_data})
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
         self.assertEqual(page.get_by_text("Non-Production evidence image required", exact=True).count(), 0)
 
@@ -1842,7 +1778,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_stale_save_keeps_local_recovery_until_confirmed(self) -> None:
         report_id = self.ready_report()
         first_page = self.page
-        stale_page = self.browser.new_page()
+        stale_page = self.other_profile_page()
         first_page.goto(f"{self.base_url}/reports/{report_id}/setup")
         stale_page.goto(f"{self.base_url}/reports/{report_id}/setup")
 
@@ -1892,7 +1828,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report_id = self.page.url.split("/reports/")[1].split("/")[0]
 
         first_page = self.page
-        stale_page = self.browser.new_page()
+        stale_page = self.other_profile_page()
         stale_page.goto(f"{self.base_url}/reports/{report_id}/setup")
 
         first_page.get_by_label("Application Owner").fill("First tab after import")
@@ -1909,10 +1845,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         stale_page.close()
 
     def test_editable_import_content_page_matches_server_readiness_verdict(self) -> None:
-        """importable_docx's fixture carries a code block, a table, an instance title and a note
-        alongside the ordinary fragments -- richer content than any other browser test drives
-        through a real import. Confirm the Content page for the freshly-imported finding agrees
-        with the server about whether the report is ready to generate."""
+        """An imported draft that still has gaps: the Content page must agree with the server that it
+        is not ready. test_editable_import_of_an_asia_cvss_finding_reaches_ready_state covers the
+        ready side of the same agreement."""
         document = self.importable_docx()
         self.page.goto(f"{self.base_url}/")
         self.page.locator("#import-report").set_input_files({
@@ -1928,6 +1863,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
 
         server_issues = generation_issues(main.workspace.load(imported_id))
+        self.assertTrue(server_issues, "the fixture must still have gaps, or this only repeats the ready-side test")
         self.page.goto(f"{self.base_url}/reports/{imported_id}/edit")
         self.page.wait_for_selector("#issue-count")
         browser_state = self.page.locator("#issue-count").get_attribute("data-state")
@@ -1981,7 +1917,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_upload_attempt_during_conflict_keeps_the_resolution_state(self) -> None:
         report_id = self.ready_report(include_finding=True)
         stale_page = self.page
-        current_page = self.browser.new_page()
+        current_page = self.other_profile_page()
         stale_page.goto(f"{self.base_url}/reports/{report_id}/edit")
         current_page.goto(f"{self.base_url}/reports/{report_id}/edit")
 
@@ -2131,7 +2067,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_saving_one_tab_keeps_the_other_tabs_recovery_snapshot(self) -> None:
         report_id = self.ready_report()
         first_page = self.page
-        second_page = self.browser.new_page()
+        second_page = self.other_profile_page()
         first_page.goto(f"{self.base_url}/reports/{report_id}/setup")
         second_page.goto(f"{self.base_url}/reports/{report_id}/setup")
         first_tab_id = first_page.evaluate("sessionStorage.getItem('vulnreport-tab-id')")
@@ -2314,15 +2250,14 @@ class BrowserWorkflowTests(unittest.TestCase):
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Complete proof step")]
         image = next(fragment for fragment in proof.fragments if fragment.type == "image")
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         evidence_id = "ev_previous_navigation"
         image.evidence_id = evidence_id
         image.caption = "Production proof"
-        report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name="proof.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
+        report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name="proof.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data).hexdigest(), uploaded_at=report.saved_at)
         evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
-        evidence_path.write_bytes(image_data.getvalue())
+        evidence_path.write_bytes(image_data)
         main.workspace.save(report)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -2337,7 +2272,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         page.route(f"**/reports/{report_id}", interrupt_put)
         page.get_by_role("button", name="Previous: Findings").click()
-        page.wait_for_timeout(250)
+        page.wait_for_selector('#save-button[data-save-state="failed"]', timeout=5_000)
         self.assertTrue(page.url.endswith(f"/reports/{report_id}/edit"))
         page.unroute(f"**/reports/{report_id}", interrupt_put)
 
@@ -2371,7 +2306,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         endpoints = page.locator("[data-custom-location]").first
         endpoints.fill("# ask the app owner which host")
         page.locator("#next").click()
-        page.wait_for_timeout(300)
+        page.wait_for_selector('#findings[data-validation-attempted="true"]', timeout=5_000)
         self.assertTrue(page.url.endswith("/findings"), "a note is not an affected location")
 
         endpoints.fill("# ask the app owner which host\nhttps://typed.example.test/admin")
@@ -2395,16 +2330,14 @@ class BrowserWorkflowTests(unittest.TestCase):
         previous = page.get_by_role("button", name="Previous: Setup")
         self.assertIsNone(previous.get_attribute("href"))
         previous.click(button="middle")
-        page.wait_for_timeout(200)
         self.assertTrue(page.url.endswith(f"/reports/{findings_report_id}/findings"))
         # Both Back controls share one handler, so the stepper only has to still be wired.
         self.assertEqual(page.locator("nav.stepper .back-link").count(), 1)
 
         # The forward gate is what refuses, and what reveals the incomplete fields.
         page.get_by_role("button", name="Next: Content", exact=False).click()
-        page.wait_for_timeout(200)
+        page.locator("#finding-validation-note").wait_for(state="visible", timeout=5_000)
         self.assertTrue(page.url.endswith(f"/reports/{findings_report_id}/findings"))
-        self.assertFalse(page.locator("#finding-validation-note").is_hidden())
 
         previous.click()
         page.wait_for_url(f"**/reports/{findings_report_id}/setup")
@@ -2466,77 +2399,39 @@ class BrowserWorkflowTests(unittest.TestCase):
         description = next(content for content in finding.contents if content.type == "description")
         self.assertEqual([fragment.type for fragment in description.fragments], ["paragraph"], "content is untouched by the title match")
 
-    def test_using_the_library_remediation_offer_does_not_gain_empty_paragraph(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        # A title match only applies metadata now; content offers live on the Content page.
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+    def test_library_remediation_offers_add_no_empty_starter_paragraph(self) -> None:
+        """Whichever offer the tester takes, the section ends up holding only the library's own
+        fragments: no stray empty paragraph appended, and no blank starter left above them."""
         title = "Session Token Remains Valid after Session Expiry Message"
-        page.get_by_role("button", name="Edit finding name").click()
-        search = page.get_by_role("combobox", name="Finding Name")
-        search.fill(title)
-        page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
-        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        for button in ("Fill from library", "Add below"):
+            with self.subTest(button=button):
+                report_id = self.ready_report(include_finding=True)
+                page = self.page
+                # A title match only applies metadata now; content offers live on the Content page.
+                page.goto(f"{self.base_url}/reports/{report_id}/findings")
+                page.get_by_role("button", name="Edit finding name").click()
+                page.get_by_role("combobox", name="Finding Name").fill(title)
+                page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
+                page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
-        # VDB-047 carries no default ratings, so restore them before Content so /edit doesn't
-        # redirect on an incomplete finding; the offer under test is unrelated to this rating.
-        report = main.workspace.load(report_id)
-        report.vulnerabilities[0].likelihood = "low"
-        report.vulnerabilities[0].impact = "low"
-        report.vulnerabilities[0].severity = "low"
-        main.workspace.save(report)
+                # VDB-047 carries no default ratings, so restore them before Content so /edit doesn't
+                # redirect on an incomplete finding; the offer under test is unrelated to this rating.
+                report = main.workspace.load(report_id)
+                finding = report.vulnerabilities[0]
+                finding.likelihood = finding.impact = finding.severity = "low"
+                main.workspace.save(report)
 
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
-        remediation_block.get_by_role("button", name="Fill from library").click()
-        # The autosave is debounced, so wait for it to leave and re-enter "saved" before asserting.
-        page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
-        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.locator(".content-block").filter(has_text="Recommended Remediation").get_by_role("button", name=button).click()
+                # The autosave is debounced, so wait for it to leave and re-enter "saved" before asserting.
+                page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
+                page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
-        # "Use library version" copies only the library's own fragments, with no stray empty paragraph appended.
-        report = main.workspace.load(report_id)
-        remediation = next(
-            content
-            for content in report.vulnerabilities[0].contents
-            if content.type == "recommended_remediation"
-        )
-        self.assertEqual(
-            [fragment.type for fragment in remediation.fragments],
-            ["bulleted_list", "note"],
-        )
-
-    def test_adding_library_remediation_below_drops_blank_starter(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        title = "Session Token Remains Valid after Session Expiry Message"
-        page.get_by_role("button", name="Edit finding name").click()
-        search = page.get_by_role("combobox", name="Finding Name")
-        search.fill(title)
-        page.locator('.row-library-results [role="option"]').filter(has_text=title).click()
-        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
-
-        report = main.workspace.load(report_id)
-        finding = report.vulnerabilities[0]
-        finding.likelihood = finding.impact = finding.severity = "low"
-        main.workspace.save(report)
-
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
-        remediation_block.get_by_role("button", name="Add below").click()
-        page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
-        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
-        page.reload()
-
-        remediation = next(
-            content
-            for content in main.workspace.load(report_id).vulnerabilities[0].contents
-            if content.type == "recommended_remediation"
-        )
-        self.assertEqual(
-            [fragment.type for fragment in remediation.fragments],
-            ["bulleted_list", "note"],
-        )
+                remediation = next(
+                    content for content in main.workspace.load(report_id).vulnerabilities[0].contents
+                    if content.type == "recommended_remediation"
+                )
+                self.assertEqual([fragment.type for fragment in remediation.fragments], ["bulleted_list", "note"])
 
     def test_adding_library_content_below_retains_unfinished_fragments(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -2635,8 +2530,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(conclusion.locator("[data-conclusion-restore]").count(), 1, "an empty conclusion was not offered the standard sentence")
 
         conclusion.get_by_role("button", name="Put it back").click()
-        page.wait_for_timeout(300)
-        self.assertEqual(conclusion.locator(".rich").first.text_content(), 'The finding "Browser finding" is still Open.')
+        expect(conclusion.locator(".rich").first).to_have_text('The finding "Browser finding" is still Open.')
         self.assertEqual(conclusion.locator(".fragment").count(), 1, "accepting the offer added a fragment")
 
         conclusion.locator(".rich").first.fill("Testing confirmed that compensating controls reduce the exposure. The issue remains open pending remediation.")
@@ -2716,7 +2610,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         typed.fill("MY@LAB")
         self.assertEqual(
             typed.evaluate("input => input.validationMessage"),
-            'Non-Production name contains invalid character: "@" (at sign)',
+            setup_issue("non_production_label", "MY@LAB"),
         )
         typed.fill("MY LAB/2")
         self.assertEqual(typed.evaluate("input => input.validationMessage"), "")
@@ -2740,7 +2634,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self._setup_page(report_id)
         self.assertEqual(page.locator(".coverage-name").input_value(), "OTHERS")
         self.assertEqual(page.locator(".coverage-name-custom").input_value(), "TEST/MO")
-        page.wait_for_timeout(400)
+        # A rewrite on open would mark the page unsaved at once, and autosave it moments later.
+        self.assertNotEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved", "opening Setup changed the report")
         self.assertEqual(self._saved_engagement(report_id).non_production_label, "TEST/MO")
 
     def _retest_setup(self, report_id: str, environments: list[str], label: str = "NON-PROD"):
@@ -2788,8 +2683,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         report = main.workspace.load(report_id)
         report.engagement.limitations = "Tester wrote this."
         main.workspace.save(report)
+        # The banner is drawn while the page loads, and goto waits for load, so its state is final here.
         page = self._setup_page(report_id)
-        page.wait_for_timeout(300)
         self.assertEqual(page.locator("#limitations-offer").count(), 0)
 
     def test_a_dismissed_limitation_offer_does_not_come_back_while_the_page_is_open(self) -> None:
@@ -2800,7 +2695,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         page.get_by_label("Limitations").click()
         page.get_by_label("Limitations").blur()
-        page.wait_for_timeout(300)
+        self._next_report_change(lambda: page.get_by_label("Application Owner").fill("Somebody else"))
         self.assertEqual(page.locator("#limitations-offer").count(), 0, "a dismissed offer returned on the next report change")
 
     def test_the_offer_follows_the_label_when_it_changes(self) -> None:
@@ -2873,13 +2768,10 @@ class BrowserWorkflowTests(unittest.TestCase):
         report_id, page = self._non_production_retest("UAT")
         page.locator("#limitations-offer").wait_for()
         prose = "Retested UAT only, production was out of scope this cycle."
-        page.get_by_label("Limitations").fill(prose)
-        page.get_by_label("Limitations").blur()
-        page.wait_for_timeout(300)
+        self._next_report_change(lambda: (page.get_by_label("Limitations").fill(prose), page.get_by_label("Limitations").blur()))
         self.assertEqual(page.locator("#limitations-offer").count(), 0)
 
-        page.locator(".coverage-name").select_option("STAGE")
-        page.wait_for_timeout(500)
+        self._next_report_change(lambda: page.locator(".coverage-name").select_option("STAGE"))
         self.assertEqual(page.locator("#limitations-offer").count(), 0, "a rename offered to rewrite the tester's own wording")
         self.assertEqual(page.get_by_label("Limitations").input_value(), prose)
 
@@ -3080,7 +2972,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         first.click()
         page.keyboard.press("End")
         page.keyboard.type("\nInserted step")
-        page.wait_for_timeout(300)
+        expect(second.locator("xpath=..").locator(".list-marker"), "editing the list above did not repaint the one continuing it").to_have_text(["4."])
         self.assertEqual(
             second.locator("xpath=..").locator(".list-marker").all_text_contents(), ["4."],
             "editing the list above did not repaint the one continuing it",
@@ -3195,16 +3087,15 @@ class BrowserWorkflowTests(unittest.TestCase):
         next(content for content in finding.contents if content.type == "recommended_remediation").fragments[0].runs = [Run(text="Complete remediation")]
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Complete proof step")]
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         evidence_id = "ev_contract"
         image = next(fragment for fragment in proof.fragments if fragment.type == "image")
         image.evidence_id = evidence_id
         image.caption = "Production proof"
-        report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name="proof.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
+        report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name="proof.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data).hexdigest(), uploaded_at=report.saved_at)
         evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
-        evidence_path.write_bytes(image_data.getvalue())
+        evidence_path.write_bytes(image_data)
         return report, finding
 
     def _fill_retest_history(self, report, finding):
@@ -3325,53 +3216,30 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#issue-count")
         self.assertEqual(page.locator(".poc-offer").count(), 0, "the finding no longer touches api, so its steps are not offered")
 
-    def test_the_fourth_status_is_offered_and_prints_the_retest_sections(self) -> None:
-        """The dropdown is the last thing to learn a status, because until the server, the document
-        and the importer all know it, offering it hands the tester a value that loses work."""
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        page.wait_for_selector("#findings tr")
-        status = page.locator("#findings tr").first.locator("select").last
-        self.assertIn(
-            "Open (Resolved on Non-Prod)",
-            status.evaluate("select => [...select.options].map(option => option.textContent)"),
-        )
+    def test_the_later_statuses_are_offered_and_save_with_the_retest_sections(self) -> None:
+        """The dropdown is the last thing to learn a status, because until the server, the document,
+        the importer, the recogniser and the builder all know it, offering it hands the tester a
+        value that loses work. Saving here is the first moment a draft on disk can hold one."""
+        for value, label in (("open_resolved_on_non_prod", "Open (Resolved on Non-Prod)"), ("closed", "Closed")):
+            with self.subTest(status=value):
+                report_id = self.ready_report(include_finding=True)
+                page = self.page
+                page.goto(f"{self.base_url}/reports/{report_id}/findings")
+                page.wait_for_selector("#findings tr")
+                status = page.locator("#findings tr").first.locator("select").last
+                self.assertIn(label, status.evaluate("select => [...select.options].map(option => option.textContent)"))
 
-        saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
-        with page.expect_response(saved_put):
-            status.select_option("open_resolved_on_non_prod")
-        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+                saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
+                with page.expect_response(saved_put):
+                    status.select_option(value)
+                page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
-        stored = main.workspace.load(report_id).vulnerabilities[0]
-        self.assertEqual(stored.status, "open_resolved_on_non_prod", "the client offered a status the server refused")
-        self.assertEqual(
-            [content.type for content in stored.contents],
-            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
-        )
-
-    def test_the_fifth_status_is_offered_and_saves_as_closed(self) -> None:
-        """Same rule as the fourth: the dropdown learns a status last, once the server, the document,
-        the importer, the recogniser and the builder already know it. This is the first moment a
-        draft on disk can hold `closed`."""
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        page.wait_for_selector("#findings tr")
-        status = page.locator("#findings tr").first.locator("select").last
-        self.assertIn("Closed", status.evaluate("select => [...select.options].map(option => option.textContent)"))
-
-        saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
-        with page.expect_response(saved_put):
-            status.select_option("closed")
-        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
-
-        stored = main.workspace.load(report_id).vulnerabilities[0]
-        self.assertEqual(stored.status, "closed", "the client offered a status the server refused")
-        self.assertEqual(
-            [content.type for content in stored.contents],
-            ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
-        )
+                stored = main.workspace.load(report_id).vulnerabilities[0]
+                self.assertEqual(stored.status, value, "the client offered a status the server refused")
+                self.assertEqual(
+                    [content.type for content in stored.contents],
+                    ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
+                )
 
     def test_switching_from_resolved_to_closed_removes_only_generated_remediation(self) -> None:
         """Closed shares Resolved's five sections but must not carry the app-generated claim that
@@ -3499,11 +3367,11 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#findings tr")
         status = page.locator("#findings tr").first.locator("select").last
         status.select_option("open_new")
-        # A modal would swallow this click, so arriving at the editor is itself the assertion that
-        # no dialog stood in the way.
+        # The confirmation is added to the page inside the change handler, so it would be here already;
+        # checked on this page, because after Next the editor could never show it.
+        self.assertEqual(page.locator("[data-dialog]").count(), 0, "nothing was written, so nothing needed confirming")
         page.locator("#next").click()
         page.wait_for_url("**/edit", timeout=10_000)
-        self.assertEqual(page.locator('[data-dialog-action="confirm"]').count(), 0, "nothing was written, so nothing needed confirming")
         self.assertEqual(read_json(main.workspace.find_path(report_id))["vulnerabilities"][0]["status"], "open_new")
 
     def test_the_fragments_provisioning_guarantees_cannot_be_deleted(self) -> None:
@@ -3515,14 +3383,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         main.provision(finding)
         previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
         next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Original step")]
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         history = next(fragment for fragment in previous.fragments if fragment.type == "image")
         history.environment = "production"
         history.evidence_id = "ev_history"
         history.caption = "Original response"
-        report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
-        (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data.getvalue())
+        report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data).hexdigest(), uploaded_at=report.saved_at)
+        (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data)
         main.provision_report(report)
         main.workspace.save(report)
 
@@ -3625,14 +3492,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         main.provision(finding)
         previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
         next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Original reproduction step")]
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         history = next(fragment for fragment in previous.fragments if fragment.type == "image")
         history.environment = "non_production"
         history.evidence_id = "ev_history"
         history.caption = "Original non-production response"
-        report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
-        (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data.getvalue())
+        report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data).hexdigest(), uploaded_at=report.saved_at)
+        (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data)
         main.provision_report(report)
         main.workspace.save(report)
         self.assertEqual(
@@ -3796,8 +3662,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         # Dismiss has to work for this sitting, or a standing offer would redraw itself unanswered.
         conclusion.get_by_role("button", name="Dismiss").click()
-        page.wait_for_timeout(300)
-        self.assertEqual(conclusion.locator("[data-conclusion-step]").count(), 0, "dismissing the step offer did nothing")
+        expect(conclusion.locator("[data-conclusion-step]"), "dismissing the step offer did nothing").to_have_count(0)
 
         # But the conclusion is still boilerplate, so reopening the report asks once more.
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -3833,12 +3698,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         # One textarea holds every item as a line, so the first line has to be carried along.
         steps.fill("Log in as a standard user.\nWithdraw from the other user's account.")
         steps.blur()
-        page.wait_for_timeout(600)
-        self.assertIn(
-            "Withdraw from the other user's account.",
-            conclusion.locator("[data-conclusion-step]").inner_text(),
-            "the offer still quotes the step the tester replaced",
-        )
+        expect(conclusion.locator("[data-conclusion-step]"), "the offer still quotes the step the tester replaced").to_contain_text("Withdraw from the other user's account.")
 
     def test_deleting_the_last_proof_step_moves_the_conclusion_offer_to_the_one_above(self) -> None:
         _report_id, page = self._conclusion_step_report()
@@ -3849,12 +3709,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         # Drops the second line only; the list still has a step, so the offer should move up to it.
         steps.fill("Log in as a standard user.")
         steps.blur()
-        page.wait_for_timeout(600)
-        self.assertIn(
-            "Log in as a standard user.",
-            conclusion.locator("[data-conclusion-step]").inner_text(),
-            "emptying the quoted step left the offer pointing at text that is gone",
-        )
+        expect(conclusion.locator("[data-conclusion-step]"), "emptying the quoted step left the offer pointing at text that is gone").to_contain_text("Log in as a standard user.")
 
     def test_the_conclusion_offer_follows_the_proof_step_while_it_is_still_being_typed(self) -> None:
         """Blurring first is what the other tests do, and it hid this: the refresh used to skip every
@@ -3863,7 +3718,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
         steps = page.locator('.content-block[data-content-type="proof_of_concept"] .list-textarea').last
         steps.fill("Log in as a standard user.\nWithdraw from the other user's account.")
-        page.wait_for_timeout(600)
+        expect(conclusion.locator("[data-conclusion-step]"), "the offer only caught up after the field lost focus").to_contain_text("Withdraw from the other user's account.")
 
         self.assertEqual(steps.evaluate("el => document.activeElement === el"), True, "the caret left the field, so this proves nothing")
         self.assertIn(
@@ -3912,79 +3767,43 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(conclusion_block.locator("[data-conclusion-restore]").count(), 1, "an empty conclusion was not offered the standard sentence")
 
         conclusion_block.get_by_role("button", name="Put it back").click()
-        page.wait_for_timeout(400)
-        self.assertEqual(conclusion_block.locator(".rich").first.text_content(), 'The finding "Browser finding" is still Open.')
+        expect(conclusion_block.locator(".rich").first).to_have_text('The finding "Browser finding" is still Open.')
         self.assertEqual(conclusion_block.locator("[data-conclusion-restore]").count(), 0, "the restore offer stayed after being accepted")
         self.assertEqual(conclusion_block.locator("[data-conclusion-step]").count(), 1, "the last proof step was not offered once the default was in place")
 
-    def test_a_quoted_step_discharges_the_default_conclusion(self) -> None:
-        """The step is the tester's own words, so the paragraph is no longer nothing but boilerplate."""
-        report_id = self.ready_report(include_finding=True)
-        report, finding = self._complete_finding(report_id)
-        finding.status = "open_previously_discovered"
-        conclusion = self._fill_retest_history(report, finding)
-        conclusion.fragments[0].runs = [Run(text="Observe the balance of another user. "), *conclusion.fragments[0].runs]
-        main.provision_report(report)
-        main.workspace.save(report)
+    def test_what_surrounds_the_default_conclusion_decides_whether_it_still_counts(self) -> None:
+        """The app's own sentence is only boilerplate while it stands alone in its paragraph. A quoted
+        step or appended prose is the tester's own words; trailing whitespace is not."""
+        cases = [
+            # name, how the paragraph's runs change, still just the default, page-load timeout
+            ("quoted step in front", lambda runs: [Run(text="Observe the balance of another user. "), *runs], False, 30_000),
+            # Short, so a pattern that backtracks on trailing whitespace fails fast instead of hanging.
+            ("trailing whitespace", lambda runs: [*runs, Run(text="  \n")], True, 2_000),
+            ("appended prose", lambda runs: [*runs, Run(text=" Additional tester prose.")], False, 30_000),
+        ]
+        for name, change, still_default, timeout in cases:
+            with self.subTest(case=name):
+                report_id = self.ready_report(include_finding=True)
+                report, finding = self._complete_finding(report_id)
+                finding.status = "open_previously_discovered"
+                conclusion = self._fill_retest_history(report, finding)
+                conclusion.fragments[0].runs = change(conclusion.fragments[0].runs)
+                main.provision_report(report)
+                main.workspace.save(report)
 
-        expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
-        server_has_issue = expected_issue in generation_issues(main.workspace.load(report_id))
-        self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        self.page.wait_for_selector("#issue-count")
-        conclusion_rows = self.page.locator(".review-row", has_text="In Conclusion").count()
-        self.assertEqual(
-            (
-                server_has_issue,
-                self.page.locator("#issue-count").get_attribute("data-state"),
-                self.page.locator("#generate-report").is_disabled(),
-                conclusion_rows,
-            ),
-            (False, "ready", False, 0),
-        )
-
-    def test_trailing_whitespace_cannot_hang_or_disguise_the_default_conclusion(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        report, finding = self._complete_finding(report_id)
-        finding.status = "open_previously_discovered"
-        conclusion = self._fill_retest_history(report, finding)
-        conclusion.fragments[0].runs.append(Run(text="  \n"))
-        main.provision_report(report)
-        main.workspace.save(report)
-
-        expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
-        server_has_issue = expected_issue in generation_issues(main.workspace.load(report_id))
-        self.page.goto(f"{self.base_url}/reports/{report_id}/edit", timeout=2_000)
-        self.page.wait_for_selector("#issue-count")
-        self.assertEqual(
-            (
-                server_has_issue,
-                self.page.locator("#issue-count").get_attribute("data-state"),
-                self.page.locator("#generate-report").is_disabled(),
-            ),
-            (True, "issues", True),
-        )
-
-    def test_appended_prose_discharges_the_default_conclusion(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        report, finding = self._complete_finding(report_id)
-        finding.status = "open_previously_discovered"
-        conclusion = self._fill_retest_history(report, finding)
-        conclusion.fragments[0].runs.append(Run(text=" Additional tester prose."))
-        main.provision_report(report)
-        main.workspace.save(report)
-
-        expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
-        server_has_issue = expected_issue in generation_issues(main.workspace.load(report_id))
-        self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        self.page.wait_for_selector("#issue-count")
-        self.assertEqual(
-            (
-                server_has_issue,
-                self.page.locator("#issue-count").get_attribute("data-state"),
-                self.page.locator("#generate-report").is_disabled(),
-            ),
-            (False, "ready", False),
-        )
+                expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
+                server_has_issue = expected_issue in generation_issues(main.workspace.load(report_id))
+                self.page.goto(f"{self.base_url}/reports/{report_id}/edit", timeout=timeout)
+                self.page.wait_for_selector("#issue-count")
+                self.assertEqual(
+                    (
+                        server_has_issue,
+                        self.page.locator("#issue-count").get_attribute("data-state"),
+                        self.page.locator("#generate-report").is_disabled(),
+                        self.page.locator(".review-row", has_text="In Conclusion").count() > 0,
+                    ),
+                    (still_default, "issues" if still_default else "ready", still_default, still_default),
+                )
 
     def test_a_table_edit_on_screen_survives_adding_a_row(self) -> None:
         """Add row redraws from the model, so a keystroke that has not reached it yet must be flushed first."""
@@ -4128,9 +3947,10 @@ class BrowserWorkflowTests(unittest.TestCase):
         main.workspace.save(report)
         return report, finding
 
-    def test_editing_a_library_section_offers_it_back(self) -> None:
-        """The offer now keys off the content itself, so a section that no longer matches its entry
-        is offerable however it got that way -- edited, emptied, or left behind by a reopen."""
+    def test_an_edited_library_section_is_offered_back_once_the_field_is_left(self) -> None:
+        """The offer keys off the content itself, so a section that no longer matches its entry is
+        offerable however it got that way. Typing never redraws the pane -- it would destroy the
+        caret -- so the banner waits for the field to be left, but not for a reload."""
         report_id = self.ready_report(include_finding=True)
         self._library_finding(report_id)
 
@@ -4142,27 +3962,10 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         block.locator(".rich").first.click()
         page.keyboard.type("Changed. ")
-        page.locator("body").click(position={"x": 5, "y": 5})
-        page.wait_for_timeout(400)
-        self.assertEqual(block.locator("[data-content-offer]").count(), 1, "an edited section was not offered the library version")
-
-    def test_the_offer_appears_without_a_reload_once_the_field_is_left(self) -> None:
-        """Typing never redraws the pane -- it would destroy the caret -- so before this the banner
-        waited for a section toggle or a page reload."""
-        report_id = self.ready_report(include_finding=True)
-        self._library_finding(report_id)
-
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        page.wait_for_selector("#issue-count")
-        block = page.locator('.content-block[data-content-type="description"]')
-        block.locator(".rich").first.click()
-        page.keyboard.type("Changed. ")
         self.assertEqual(block.locator("[data-content-offer]").count(), 0, "the banner moved while the caret was in the field")
 
         page.locator("body").click(position={"x": 5, "y": 5})
-        page.wait_for_timeout(400)
-        self.assertEqual(block.locator("[data-content-offer]").count(), 1, "the banner still needs a reload to appear")
+        expect(block.locator("[data-content-offer]"), "an edited section was not offered the library version").to_have_count(1)
 
     def test_dismissing_an_offer_keeps_it_hidden_until_the_section_changes_again(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -4175,7 +3978,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         block.locator(".rich").first.click()
         page.keyboard.type("Changed. ")
         page.locator("body").click(position={"x": 5, "y": 5})
-        page.wait_for_timeout(400)
+        block.locator("[data-content-offer]").wait_for()
         block.get_by_role("button", name="Keep mine").click()
         page.locator("#save-button").click()
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
@@ -4189,8 +3992,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         block.locator(".rich").first.click()
         page.keyboard.type("More. ")
         page.locator("body").click(position={"x": 5, "y": 5})
-        page.wait_for_timeout(400)
-        self.assertEqual(block.locator("[data-content-offer]").count(), 1, "editing a dismissed section did not offer it again")
+        expect(block.locator("[data-content-offer]"), "editing a dismissed section did not offer it again").to_have_count(1)
 
     def test_refreshing_offers_never_changes_the_report(self) -> None:
         """The refresh runs inside a reportchange listener. A write there would call scheduleSave,
@@ -4200,11 +4002,15 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
-        before = page.evaluate("JSON.stringify(JSON.parse(document.querySelector('main').dataset.report))")
+        # main.dataset.report is only ever read, so comparing it proved nothing. A write inside the
+        # listener goes through scheduleSave, which marks the page unsaved synchronously and then PUTs.
+        puts = []
+        page.on("request", lambda request: request.method == "PUT" and puts.append(request.url))
+        save_state = page.locator("#save-button")
+        self.assertNotEqual(save_state.get_attribute("data-save-state"), "unsaved")
         page.evaluate("document.dispatchEvent(new Event('reportchange'))")
-        page.wait_for_timeout(300)
-        after = page.evaluate("JSON.stringify(JSON.parse(document.querySelector('main').dataset.report))")
-        self.assertEqual(before, after)
+        self.assertNotEqual(save_state.get_attribute("data-save-state"), "unsaved", "the offer refresh changed the report")
+        self.assertEqual(puts, [], "the offer refresh saved the report")
 
     def test_emptying_the_installed_steps_offers_them_again(self) -> None:
         """A decline is permanent, an install is not: the record of installing describes content that
@@ -4413,8 +4219,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
         # Too narrow to carry two fields, so the pair stacks the way the content sections do.
+        # Layout is read synchronously and the stacking is a container query, so no wait is needed.
         page.set_viewport_size({"width": 700, "height": 900})
-        page.wait_for_timeout(200)
         self.assertEqual(
             page.evaluate(measure),
             [["Severity Review Tickets"], ["CVSS Score"], ["CVSS Vector"]],
@@ -4434,10 +4240,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.wait_for_selector('[data-content-type="additional_information"]')
         self.page.fill('[data-fragment-id$=":cvss_score"] .additional-input', "9.8")
         self.page.fill('[data-fragment-id$=":cvss_vector"] .additional-input', "CVSS:3.1/AV:N")
-        for _ in range(50):
-            if main.workspace.load(report_id).vulnerabilities[0].cvss_vector:
-                break
-            self.page.wait_for_timeout(100)
+        self.page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
 
         stored = main.workspace.load(report_id)
         self.assertEqual((stored.vulnerabilities[0].cvss_score, stored.vulnerabilities[0].cvss_vector), ("9.8", "CVSS:3.1/AV:N"))
@@ -4584,13 +4387,20 @@ class BrowserWorkflowTests(unittest.TestCase):
                 page.wait_for_selector("#findings tr")
                 # Watch for the navigation request, not the resulting URL: when the client is laxer
                 # than the server it still fires the request and the server's redirect hides it, so
-                # the landing page looks identical whether or not the two agree.
-                try:
-                    with page.expect_request(lambda request: request.url.rstrip("/").endswith("/edit"), timeout=3_000):
-                        page.locator("#next").click()
-                    client_allows = True
-                except PlaywrightTimeoutError:
-                    client_allows = False
+                # the landing page looks identical whether or not the two agree. A refusal marks the
+                # table instead, so each case waits for whichever happens first, not for a timeout.
+                edit_requests = []
+                watcher = lambda request: request.url.rstrip("/").endswith("/edit") and edit_requests.append(request.url)
+                page.on("request", watcher)
+                refused = page.locator('#findings[data-validation-attempted="true"]')
+                self.assertEqual(refused.count(), 0, "the gate was marked before Next was pressed")
+                page.locator("#next").click()
+                deadline = time.monotonic() + 10
+                while not edit_requests and not self._count_or_zero(refused):
+                    self.assertLess(time.monotonic(), deadline, f"{case.__name__}: Next neither navigated nor refused")
+                    page.wait_for_timeout(25)
+                page.remove_listener("request", watcher)
+                client_allows = bool(edit_requests)
 
                 self.assertEqual(
                     client_allows,
@@ -4622,25 +4432,30 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(main.workspace.load(report_id).evidence, {}, "deleting the finding left its evidence behind")
 
     def test_complete_report_saves_generated_docx_to_generated_folder(self) -> None:
+        # The server runs in this process, so patching Word out here lets the test run on every platform.
+        word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
+        word.start()
+        self.addCleanup(word.stop)
         self.page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
+        # The file name carries the report year; pin it so the test does not expire with the calendar.
+        report.engagement.report_date = date(2026, 1, 3)
         finding = report.vulnerabilities[0]
         next(content for content in finding.contents if content.type == "description").fragments[0].runs = [Run(text="Complete description")]
         next(content for content in finding.contents if content.type == "recommended_remediation").fragments[0].runs = [Run(text="Complete remediation")]
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Complete proof step")]
         image = next(fragment for fragment in proof.fragments if fragment.type == "image")
-        image_data = BytesIO()
-        Image.new("RGB", (2, 2), "white").save(image_data, format="PNG")
+        image_data = png_bytes(2, 2)
         evidence_id = "ev_browser_generate"
         image.evidence_id = evidence_id
         image.caption = "Production proof"
-        report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name="proof.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data.getvalue()).hexdigest(), uploaded_at=report.saved_at)
+        report.evidence[evidence_id] = EvidenceItem(file=f"evidence/{evidence_id}.png", original_name="proof.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data).hexdigest(), uploaded_at=report.saved_at)
         draft_path = main.workspace.find_path(report_id)
         evidence_path = draft_path.parent / "evidence" / f"{evidence_id}.png"
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
-        evidence_path.write_bytes(image_data.getvalue())
+        evidence_path.write_bytes(image_data)
         main.workspace.save(report)
 
         page = self.page
@@ -4677,7 +4492,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator("#generate-report").filter(has_text="Saving...").wait_for()
         self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT"])
         page.evaluate("window.releaseGenerateSave()")
-        page.locator("#generate-status").wait_for(state="visible", timeout=60_000)
+        page.locator("#generate-status").wait_for(state="visible", timeout=15_000)
         self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT", "POST"])
         page.get_by_role("heading", name="Unrelated warning").wait_for()
         persisted_description = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "description")
@@ -4690,7 +4505,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
         self.assertIn("Browser finding", text)
         self.assertNotIn("{{", text)
-        output_path.unlink()
 
     def test_list_textareas_show_markers_and_store_non_empty_lines(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -4813,35 +4627,40 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_text("Report deleted.").wait_for()
         page.locator(".report-row").filter(has_text=report_id).wait_for(state="detached")
 
-    def test_docx_import_offers_both_modes_and_cancel_sends_no_second_request(self) -> None:
+    def test_docx_import_offers_both_modes_and_backing_out_sends_no_second_request(self) -> None:
+        """Cancel and Escape both back out after the one classifying request: nothing is imported and
+        the file input is cleared. The .zip name on a Word file shows the dialog follows the bytes."""
         document = self.importable_docx()
-        before = set(Path(self.temp_dir.name).glob("apps/**/draft.json"))
-        requests = []
-        self.page.on("request", lambda request: requests.append(request) if request.method == "POST" and request.url.endswith("/reports/import") else None)
-        self.page.goto(f"{self.base_url}/")
+        cases = [
+            ("Cancel button", "report.zip", "application/zip", lambda dialog: dialog.get_by_role("button", name="Cancel").click()),
+            ("Escape key", "report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", lambda dialog: self.page.keyboard.press("Escape")),
+        ]
+        for way, name, mime, back_out in cases:
+            with self.subTest(way=way):
+                before = set(self.root.glob("apps/**/draft.json"))
+                requests = []
+                watcher = lambda request: requests.append(request) if request.method == "POST" and request.url.endswith("/reports/import") else None
+                self.page.on("request", watcher)
+                self.page.goto(f"{self.base_url}/")
+                self.page.locator("#import-report").set_input_files({"name": name, "mimeType": mime, "buffer": document})
 
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.zip",
-            "mimeType": "application/zip",
-            "buffer": document,
-        })
-
-        dialog = self.page.get_by_role("dialog")
-        dialog.get_by_role("heading", name="Import report DOCX").wait_for()
-        self.assertTrue(dialog.get_by_role("button", name="Import as editable draft").is_visible())
-        self.assertTrue(dialog.get_by_role("button", name="Import as retest draft").is_visible())
-        dialog.get_by_role("button", name="Cancel").click()
-        self.page.get_by_text("Import cancelled.").wait_for()
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(set(Path(self.temp_dir.name).glob("apps/**/draft.json")), before)
-        self.assertEqual(self.page.locator("#import-report").input_value(), "")
+                dialog = self.page.get_by_role("dialog")
+                dialog.get_by_role("heading", name="Import report DOCX").wait_for()
+                self.assertTrue(dialog.get_by_role("button", name="Import as editable draft").is_visible())
+                self.assertTrue(dialog.get_by_role("button", name="Import as retest draft").is_visible())
+                back_out(dialog)
+                self.page.get_by_text("Import cancelled.").wait_for()
+                self.page.remove_listener("request", watcher)
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(set(self.root.glob("apps/**/draft.json")), before)
+                self.assertEqual(self.page.locator("#import-report").input_value(), "")
 
     def test_a_failed_second_import_request_after_mode_choice_can_be_retried(self) -> None:
         """The first /reports/import call only classifies the file; the mode choice fires a second
         call. If that second call fails (a dropped connection, a server error), the tester must see
         the failure and be able to retry without reloading or re-picking a mode from scratch."""
         document = self.importable_docx()
-        before = set(Path(self.temp_dir.name).glob("apps/**/draft.json"))
+        before = set(self.root.glob("apps/**/draft.json"))
         attempt = {"count": 0}
 
         def flaky_second_call(route) -> None:
@@ -4864,7 +4683,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         diagnostic = self.page.locator("#app-diagnostics")
         diagnostic.get_by_role("heading", name="Operation failed").wait_for()
-        self.assertEqual(set(Path(self.temp_dir.name).glob("apps/**/draft.json")), before, "a failed second call must not leave a partial report on disk")
+        self.assertEqual(set(self.root.glob("apps/**/draft.json")), before, "a failed second call must not leave a partial report on disk")
         self.assertEqual(self.page.locator("#import-report").input_value(), "", "the file input clears so the same file can be re-picked")
 
         self.page.unroute("**/reports/import", flaky_second_call)
@@ -4878,7 +4697,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         dialog.get_by_role("button", name="Import as editable draft").click()
         result = self.page.get_by_role("dialog")
         result.get_by_role("heading", name="Imported as editable draft").wait_for()
-        after = set(Path(self.temp_dir.name).glob("apps/**/draft.json"))
+        after = set(self.root.glob("apps/**/draft.json"))
         self.assertEqual(len(after - before), 1, "the retry must succeed and write exactly one report")
 
     def test_reselecting_a_file_while_the_mode_dialog_is_open_replaces_it_cleanly(self) -> None:
@@ -4888,7 +4707,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         this proves the abandoned first import never completes and exactly one report is written."""
         first_document = self.importable_docx()
         second_document = self.importable_docx()
-        before = set(Path(self.temp_dir.name).glob("apps/**/draft.json"))
+        before = set(self.root.glob("apps/**/draft.json"))
         self.page.goto(f"{self.base_url}/")
 
         self.page.locator("#import-report").set_input_files({
@@ -4917,28 +4736,8 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(self.page.get_by_role("dialog").count(), 0, "no stray dialog is left open")
         self.assertEqual(self.page.locator("#import-report").input_value(), "")
-        after = set(Path(self.temp_dir.name).glob("apps/**/draft.json"))
+        after = set(self.root.glob("apps/**/draft.json"))
         self.assertEqual(len(after - before), 1, "the abandoned first selection must not also import")
-
-    def test_docx_import_escape_cancels_without_a_second_request(self) -> None:
-        document = self.importable_docx()
-        before = set(Path(self.temp_dir.name).glob("apps/**/draft.json"))
-        requests = []
-        self.page.on("request", lambda request: requests.append(request) if request.method == "POST" and request.url.endswith("/reports/import") else None)
-        self.page.goto(f"{self.base_url}/")
-
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        self.page.get_by_role("dialog").get_by_role("heading", name="Import report DOCX").wait_for()
-        self.page.keyboard.press("Escape")
-
-        self.page.get_by_text("Import cancelled.").wait_for()
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(set(Path(self.temp_dir.name).glob("apps/**/draft.json")), before)
-        self.assertEqual(self.page.locator("#import-report").input_value(), "")
 
     def test_editable_import_of_an_asia_cvss_finding_reaches_ready_state(self) -> None:
         """The Section/CVSS table round trip is parser-tested in isolation, and the Asia CVSS
@@ -5074,7 +4873,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_editable_docx_import_shows_warnings_and_stay_reveals_the_report(self) -> None:
         document = self.importable_docx()
-        before = {path.parent.name for path in Path(self.temp_dir.name).glob("apps/**/draft.json")}
+        before = {path.parent.name for path in self.root.glob("apps/**/draft.json")}
         self.page.goto(f"{self.base_url}/")
         self.page.locator("#app-search").fill("No matching application")
         self.page.locator("#import-report").set_input_files({
@@ -5087,9 +4886,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         result = self.page.get_by_role("dialog")
         result.get_by_role("heading", name="Imported as editable draft").wait_for()
         self.assertIn("rendered Word copies", result.text_content())
-        after = {path.parent.name for path in Path(self.temp_dir.name).glob("apps/**/draft.json")}
+        after = {path.parent.name for path in self.root.glob("apps/**/draft.json")}
         imported_folder = (after - before).pop()
-        imported_id = main.workspace.load_path(next(Path(self.temp_dir.name).glob(f"apps/**/{imported_folder}/draft.json"))).report_id
+        imported_id = main.workspace.load_path(next(self.root.glob(f"apps/**/{imported_folder}/draft.json"))).report_id
         result.get_by_role("button", name="Stay on reports").click()
 
         self.page.get_by_text("Report imported.").wait_for()

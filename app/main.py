@@ -32,7 +32,9 @@ from .storage import atomic_write_bytes
 from .workspace import StaleReportError, Workspace, app_id_for
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data"
+# Tests point this at a temporary folder (tests/__init__.py) so a run never touches real drafts,
+# prefs or the error log.
+DATA = Path(os.environ.get("VULNREPORT_DATA_DIR") or ROOT / "data")
 # One shared folder at the repo root so testers do not have to dig through per-report directories.
 GENERATED = ROOT / "generated"
 prefs = load_or_bootstrap(DATA / "prefs.json")
@@ -61,6 +63,8 @@ class _AssetVersion:
 templates.env.globals["asset_v"] = _AssetVersion()
 logger = logging.getLogger(__name__)
 ERROR_LOG_PATH = DATA / "vulnreport-errors.log"
+# Shown to the tester as-is; relative only when the data folder sits inside the project.
+ERROR_LOG_LABEL = str(ERROR_LOG_PATH.relative_to(ROOT) if ERROR_LOG_PATH.is_relative_to(ROOT) else ERROR_LOG_PATH)
 STALE_REPORT_DETAIL = "This report changed in another browser tab. Choose whether to save your version or load the latest version."
 
 
@@ -118,7 +122,7 @@ def error_diagnostic(
         "method": request.method,
         "path": request.url.path,
         "timestamp": datetime.now().astimezone().isoformat(),
-        "log_file": str(ERROR_LOG_PATH.relative_to(ROOT)),
+        "log_file": ERROR_LOG_LABEL,
     }
     if exception_type:
         diagnostic["exception_type"] = exception_type

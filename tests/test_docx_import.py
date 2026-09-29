@@ -7,6 +7,7 @@ them would test the environment rather than the document.
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 import tempfile
@@ -20,13 +21,12 @@ from unittest.mock import patch
 from docx import Document
 from docx.oxml.ns import qn
 from fastapi.testclient import TestClient
-from PIL import Image
 
 from app import main
 from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import RESOLVED_REMEDIATION, finding_input_issues
-from app.workspace import Workspace
+from tests.support import png_bytes, use_temp_workspace
 from app.models import (
     CodeFragment,
     Content,
@@ -52,6 +52,14 @@ from app.models import (
 TEMPLATE = Path(__file__).resolve().parent.parent / "resources" / "MAIN.docx"
 
 
+@functools.cache
+def base_render() -> bytes:
+    """The shared fixture, rendered once. Tests reopen it from these bytes, so none can alter it."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        folder = Path(temporary_directory)
+        return render_report_docx(FragmentRecognitionTests._report(folder), TEMPLATE, folder)
+
+
 class FragmentRecognitionTests(unittest.TestCase):
     """The importer recognises a fragment by the component that produced it, so these pin the
     signals that survive generation. A template edit that erases one fails here rather than
@@ -60,9 +68,8 @@ class FragmentRecognitionTests(unittest.TestCase):
     @staticmethod
     def _report(folder: Path) -> Report:
         (folder / "evidence").mkdir()
-        buffer = BytesIO()
-        Image.new("RGB", (40, 20), "white").save(buffer, format="PNG")
-        (folder / "evidence" / "ev_shot.png").write_bytes(buffer.getvalue())
+        buffer = png_bytes(40, 20)
+        (folder / "evidence" / "ev_shot.png").write_bytes(buffer)
         now = datetime.now().astimezone()
         report = Report(
             report_id="r_import", app_id="CI-IMPORT", saved_at=now,
@@ -102,8 +109,8 @@ class FragmentRecognitionTests(unittest.TestCase):
         )]
         return report
 
-    def _rendered(self, folder: Path):
-        return Document(BytesIO(render_report_docx(self._report(folder), TEMPLATE, folder)))
+    def _rendered(self):
+        return Document(BytesIO(base_render()))
 
     def _retest_report(self, folder: Path, tickets: str = "") -> Report:
         """Generation-clean and previously discovered, so it renders ``retest_finding.docx``.
@@ -161,9 +168,8 @@ class FragmentRecognitionTests(unittest.TestCase):
         """Retest is the default mode, so warning only on the editable path would leave the
         commoner one silent about a value it quietly defaulted."""
         for mode in ("retest", "editable"):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary_directory:
-                folder = Path(temporary_directory)
-                data = render_report_docx(self._report(folder), TEMPLATE, folder)
+            with self.subTest(mode=mode):
+                data = base_render()
 
                 payload, _evidence, summary = parse_report_docx(data, mode=mode)
 
@@ -186,58 +192,60 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual(payload["vulnerabilities"][0]["severity_review_tickets"], "1234\n5678\n90123")
 
     def test_retest_default_preserves_the_retest_projection_except_named_neutral_fixes(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+        """The proof of concept the document carries is the latest one, so it becomes the draft's
+        *previous* proof of concept and the retest starts with an empty one."""
+        data = base_render()
 
-            payload, evidence, summary = parse_report_docx(data)
-            projection = self._normalized_retest_projection(payload, evidence, summary)
+        payload, evidence, summary = parse_report_docx(data)
+        projection = self._normalized_retest_projection(payload, evidence, summary)
 
-            self.assertEqual(projection["engagement"], {
-                "app_name": "Northstar Banking", "app_owner": "", "ci_number": "", "bsn_number": "",
-                "segment": "JH", "report_type": None, "report_date": None, "tester": "",
-                "network": "Internal",
-                "tested_environments": ["production"], "tested_channels": ["web"],
-                "non_production_label": "NON-PROD", "start_date": None, "end_date": None,
-                "test_windows": {}, "test_accounts": [{"user_role": "N/A", "username": "N/A"}],
-                "limitations": "N/A", "classification": "Confidential", "template_set": "default-v1",
-            })
-            self.assertEqual(projection["targets"], [{
-                "environment": "production", "channel": "web",
-                "value": "https://prod.example.test", "description": "", "order": 0,
-            }])
-            finding = projection["findings"][0]
-            self.assertEqual(
-                {key: finding[key] for key in ("display_id", "title", "likelihood", "impact", "severity", "status", "scope_targets")},
-                {"display_id": "001", "title": "Authorization bypass", "likelihood": "high", "impact": "high",
-                 "severity": "high", "status": "open_previously_discovered", "scope_targets": [0]},
-            )
-            self.assertEqual([content["type"] for content in finding["contents"]], [
-                "description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion",
-            ])
-            self.assertEqual(
-                [fragment["type"] for fragment in finding["contents"][2]["fragments"]],
-                ["numbered_list", "instance_title", "code_block", "table", "image"],
-            )
-            self.assertEqual([fragment["type"] for fragment in finding["contents"][3]["fragments"]], ["numbered_list", "image"])
-            self.assertEqual(len(projection["evidence"]), 1)
-            self.assertEqual(projection["summary"], {
-                "retained": 1, "dropped_resolved": [], "statuses_rewritten": ["Authorization bypass"],
-                "warnings": [NETWORK_IMPORT_WARNING],
-            })
+        self.assertEqual(projection["engagement"], {
+            "app_name": "Northstar Banking", "app_owner": "", "ci_number": "", "bsn_number": "",
+            "segment": "JH", "report_type": None, "report_date": None, "tester": "",
+            "network": "Internal",
+            "tested_environments": ["production"], "tested_channels": ["web"],
+            "non_production_label": "NON-PROD", "start_date": None, "end_date": None,
+            "test_windows": {}, "test_accounts": [{"user_role": "N/A", "username": "N/A"}],
+            "limitations": "N/A", "classification": "Confidential", "template_set": "default-v1",
+        })
+        self.assertEqual(projection["targets"], [{
+            "environment": "production", "channel": "web",
+            "value": "https://prod.example.test", "description": "", "order": 0,
+        }])
+        finding = projection["findings"][0]
+        self.assertEqual(
+            {key: finding[key] for key in ("display_id", "title", "likelihood", "impact", "severity", "status", "scope_targets")},
+            {"display_id": "001", "title": "Authorization bypass", "likelihood": "high", "impact": "high",
+             "severity": "high", "status": "open_previously_discovered", "scope_targets": [0]},
+        )
+        self.assertEqual([content["type"] for content in finding["contents"]], [
+            "description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion",
+        ])
+        self.assertEqual(
+            [fragment["type"] for fragment in finding["contents"][2]["fragments"]],
+            ["numbered_list", "instance_title", "code_block", "table", "image"],
+        )
+        self.assertEqual([fragment["type"] for fragment in finding["contents"][3]["fragments"]], ["numbered_list", "image"])
+        self.assertEqual([fragment["type"] for fragment in finding["contents"][0]["fragments"]], ["paragraph", "note", "bulleted_list"])
+        self.assertEqual(len(projection["evidence"]), 1)
+        record = payload["evidence"][next(iter(evidence))]
+        self.assertEqual(record["sha256"], hashlib.sha256(next(iter(evidence.values()))).hexdigest())
+        self.assertEqual(projection["summary"], {
+            "retained": 1, "dropped_resolved": [], "statuses_rewritten": ["Authorization bypass"],
+            "warnings": [NETWORK_IMPORT_WARNING],
+        })
+        Report.model_validate(payload)
 
     def test_retest_mode_and_omitted_mode_are_equivalent(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+        data = base_render()
 
-            implicit = parse_report_docx(data)
-            explicit = parse_report_docx(data, mode="retest")
+        implicit = parse_report_docx(data)
+        explicit = parse_report_docx(data, mode="retest")
 
-            self.assertEqual(
-                self._normalized_retest_projection(*implicit),
-                self._normalized_retest_projection(*explicit),
-            )
+        self.assertEqual(
+            self._normalized_retest_projection(*implicit),
+            self._normalized_retest_projection(*explicit),
+        )
 
     def test_duplicate_title_asia_rows_pair_by_occurrence(self) -> None:
         resources = Path(__file__).resolve().parent.parent / "resources"
@@ -392,117 +400,76 @@ class FragmentRecognitionTests(unittest.TestCase):
                 self.assertEqual(stray, [], "the environment heading survived as a visible fragment")
 
     def test_every_fragment_type_is_recognisable_in_a_generated_report(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            document = self._rendered(Path(temporary_directory))
-            formats = numbering_formats(document)
-            found = {}
-            for paragraph in document.paragraphs:
-                text = paragraph.text.strip()
-                kind = classify_paragraph(paragraph, formats)
-                if paragraph._p.findall(".//" + qn("a:blip")):
-                    found["image"] = kind
-                for marker, expected in (
-                    ("A justified paragraph.", "paragraph"),
-                    ("Validate independently.", "note"),
-                    ("A bullet.", "bulleted_list"),
-                    ("Send the request.", "numbered_list"),
-                    ("Instance 1: First instance", "instance_title"),
-                    ("GET /accounts/123", "code_block"),
-                    ("Request", "caption"),
-                ):
-                    if text == marker or (marker == "Validate independently." and text.endswith(marker)):
-                        found[expected] = kind
-            for expected, actual in found.items():
-                self.assertEqual(actual, expected, f"{expected} was read as {actual}")
-            self.assertEqual(
-                set(found),
-                {"paragraph", "note", "bulleted_list", "numbered_list", "instance_title", "code_block", "caption", "image"},
-                "a fragment type never appeared in the rendered document",
-            )
+        document = self._rendered()
+        formats = numbering_formats(document)
+        found = {}
+        for paragraph in document.paragraphs:
+            text = paragraph.text.strip()
+            kind = classify_paragraph(paragraph, formats)
+            if paragraph._p.findall(".//" + qn("a:blip")):
+                found["image"] = kind
+            for marker, expected in (
+                ("A justified paragraph.", "paragraph"),
+                ("Validate independently.", "note"),
+                ("A bullet.", "bulleted_list"),
+                ("Send the request.", "numbered_list"),
+                ("Instance 1: First instance", "instance_title"),
+                ("GET /accounts/123", "code_block"),
+                ("Request", "caption"),
+            ):
+                if text == marker or (marker == "Validate independently." and text.endswith(marker)):
+                    found[expected] = kind
+        for expected, actual in found.items():
+            self.assertEqual(actual, expected, f"{expected} was read as {actual}")
+        self.assertEqual(
+            set(found),
+            {"paragraph", "note", "bulleted_list", "numbered_list", "instance_title", "code_block", "caption", "image"},
+            "a fragment type never appeared in the rendered document",
+        )
 
     def test_a_table_is_a_body_element_not_a_paragraph(self) -> None:
         """``table_fragment.docx`` adds no paragraph style of its own, so a table is only ever found
         structurally."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            document = self._rendered(Path(temporary_directory))
-            cells = [cell.text for table in document.tables for row in table.rows for cell in row.cells]
-            self.assertIn("Cell", cells)
+        payload, _evidence, _summary = parse_report_docx(base_render(), mode="editable")
+        proof = next(content for content in payload["vulnerabilities"][0]["contents"] if content["type"] == "proof_of_concept")
+        table = next(fragment for fragment in proof["fragments"] if fragment["type"] == "table")
+        text = lambda cell: "".join(run["text"] for run in cell["runs"])
+        self.assertEqual([text(cell) for cell in table["header"]], ["Header"])
+        self.assertEqual([[text(cell) for cell in row] for row in table["rows"]], [["Cell"]])
 
     def test_list_format_is_resolved_rather_than_read_from_the_numbering_id(self) -> None:
         """Merging the components renumbers the lists, so trusting ``numId`` swaps bulleted and
         numbered lists. Only the resolved format survives."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            document = self._rendered(Path(temporary_directory))
-            formats = numbering_formats(document)
-            by_text = {}
-            for paragraph in document.paragraphs:
-                properties = paragraph._p.find(qn("w:pPr"))
-                numbering = properties.find(qn("w:numPr")) if properties is not None else None
-                if numbering is None:
-                    continue
-                number_id = numbering.find(qn("w:numId")).get(qn("w:val"))
-                by_text[paragraph.text.strip()] = (number_id, formats.get(number_id))
-            self.assertEqual(by_text["A bullet."][1], "bullet")
-            self.assertEqual(by_text["Send the request."][1], "decimal")
-            self.assertNotEqual(by_text["A bullet."][0], by_text["Send the request."][0])
+        document = self._rendered()
+        formats = numbering_formats(document)
+        by_text = {}
+        for paragraph in document.paragraphs:
+            properties = paragraph._p.find(qn("w:pPr"))
+            numbering = properties.find(qn("w:numPr")) if properties is not None else None
+            if numbering is None:
+                continue
+            number_id = numbering.find(qn("w:numId")).get(qn("w:val"))
+            by_text[paragraph.text.strip()] = (number_id, formats.get(number_id))
+        self.assertEqual(by_text["A bullet."][1], "bullet")
+        self.assertEqual(by_text["Send the request."][1], "decimal")
+        self.assertNotEqual(by_text["A bullet."][0], by_text["Send the request."][0])
 
-
-    def test_a_generated_report_reads_back_into_a_valid_draft(self) -> None:
-        """The proof of concept the document carries is the latest one, so it becomes the draft's
-        *previous* proof of concept and the retest starts with an empty one."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            data = render_report_docx(self._report(folder), TEMPLATE, folder)
-            payload, evidence, summary = parse_report_docx(data)
-
-            self.assertEqual(payload["engagement"]["app_name"], "Northstar Banking")
-            self.assertEqual(payload["engagement"]["segment"], "JH")
-            self.assertEqual(payload["engagement"]["report_type"], None, "the report type is the tester's to choose")
-            self.assertEqual(payload["engagement"]["test_windows"], {}, "test dates describe the previous engagement")
-            self.assertEqual([target["value"] for target in payload["scope_targets"]], ["https://prod.example.test"])
-
-            finding = payload["vulnerabilities"][0]
-            self.assertEqual(finding["title"], "Authorization bypass")
-            self.assertEqual(finding["display_id"], "001")
-            self.assertEqual(finding["severity"], "high")
-            self.assertEqual(finding["status"], "open_previously_discovered")
-            self.assertEqual(summary["statuses_rewritten"], ["Authorization bypass"])
-
-            sections = {content["type"]: [fragment["type"] for fragment in content["fragments"]] for content in finding["contents"]}
-            self.assertEqual(sections["description"], ["paragraph", "note", "bulleted_list"])
-            self.assertEqual(
-                sections["previous_proof_of_concept"],
-                ["numbered_list", "instance_title", "code_block", "table", "image"],
-                "the document's proof of concept becomes the draft's previous one, in order",
-            )
-            self.assertEqual(
-                sections["proof_of_concept"],
-                ["numbered_list", "image"],
-                "the retest starts empty, with somewhere to write and one slot per affected environment",
-            )
-
-            self.assertEqual(len(evidence), 1)
-            record = payload["evidence"][next(iter(evidence))]
-            self.assertEqual(record["sha256"], hashlib.sha256(next(iter(evidence.values()))).hexdigest())
-            Report.model_validate(payload)
 
     def test_editable_mode_keeps_the_source_status_and_proof_role(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+        data = base_render()
 
-            payload, evidence, _summary = parse_report_docx(data, mode="editable")
+        payload, evidence, _summary = parse_report_docx(data, mode="editable")
 
-            finding = payload["vulnerabilities"][0]
-            self.assertEqual(finding["status"], "open_new")
-            sections = {content["type"]: content["fragments"] for content in finding["contents"]}
-            self.assertNotIn("previous_proof_of_concept", sections)
-            self.assertEqual(
-                [fragment["type"] for fragment in sections["proof_of_concept"]],
-                ["numbered_list", "instance_title", "code_block", "table", "image"],
-            )
-            self.assertEqual(len(evidence), 1)
-            Report.model_validate(payload)
+        finding = payload["vulnerabilities"][0]
+        self.assertEqual(finding["status"], "open_new")
+        sections = {content["type"]: content["fragments"] for content in finding["contents"]}
+        self.assertNotIn("previous_proof_of_concept", sections)
+        self.assertEqual(
+            [fragment["type"] for fragment in sections["proof_of_concept"]],
+            ["numbered_list", "instance_title", "code_block", "table", "image"],
+        )
+        self.assertEqual(len(evidence), 1)
+        Report.model_validate(payload)
 
     def test_editable_mode_restores_every_printed_engagement_field(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -566,8 +533,14 @@ class FragmentRecognitionTests(unittest.TestCase):
 
     def test_editable_mode_rejects_invalid_nonempty_finding_scalars(self) -> None:
         resources = Path(__file__).resolve().parent.parent / "resources"
-        cases = ("display_id", "cvss_score", "severity_review_tickets")
-        for field in cases:
+        # None is the unedited document: it must import, or every refusal below proves nothing.
+        cases = {
+            None: None,
+            "display_id": "invalid finding ID",
+            "cvss_score": "invalid CVSS score",
+            "severity_review_tickets": "invalid severity review ticket",
+        }
+        for field, message in cases.items():
             with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary_directory:
                 folder = Path(temporary_directory)
                 report = self._retest_report(folder, tickets="1234")
@@ -584,13 +557,16 @@ class FragmentRecognitionTests(unittest.TestCase):
                 elif field == "cvss_score":
                     cvss = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Section")
                     cvss.rows[1].cells[3].text = "8.1?"
-                else:
+                elif field == "severity_review_tickets":
                     paragraph = next(paragraph for paragraph in document.paragraphs if "GRIMPEN-1234" in paragraph.text)
                     paragraph.text = "GRIMPEN-1234\nnot-a-ticket"
                 output = BytesIO()
                 document.save(output)
 
-                with self.assertRaises(ReportImportError):
+                if message is None:
+                    parse_report_docx(output.getvalue(), mode="editable")
+                    continue
+                with self.assertRaisesRegex(ReportImportError, message):
                     parse_report_docx(output.getvalue(), mode="editable")
 
     def test_editable_scope_recovers_all_four_template_variants(self) -> None:
@@ -890,88 +866,76 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual([fragment.get("continue_numbering", False) for fragment in lists], [False, True, False])
 
     def test_editable_image_preserves_embedded_png_bytes_and_display_width(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            data = render_report_docx(self._report(folder), TEMPLATE, folder)
-            document = Document(BytesIO(data))
-            paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
-            blip = paragraph._p.find(".//" + qn("a:blip"))
-            expected = document.part.related_parts[blip.get(qn("r:embed"))].blob
+        data = base_render()
+        document = Document(BytesIO(data))
+        paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+        blip = paragraph._p.find(".//" + qn("a:blip"))
+        expected = document.part.related_parts[blip.get(qn("r:embed"))].blob
 
-            payload, evidence, _summary = parse_report_docx(data, mode="editable")
+        payload, evidence, _summary = parse_report_docx(data, mode="editable")
 
-            image = next(
-                fragment
-                for content in payload["vulnerabilities"][0]["contents"]
-                for fragment in content["fragments"]
-                if fragment["type"] == "image"
-            )
-            self.assertEqual(evidence[image["evidence_id"]], expected)
-            self.assertEqual(image["width_mm"], 155.0)
+        image = next(
+            fragment
+            for content in payload["vulnerabilities"][0]["contents"]
+            for fragment in content["fragments"]
+            if fragment["type"] == "image"
+        )
+        self.assertEqual(evidence[image["evidence_id"]], expected)
+        self.assertEqual(image["width_mm"], 155.0)
 
     def test_docx_resource_limits_reject_before_import(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            data = render_report_docx(self._report(folder), TEMPLATE, folder)
-            cases = (
-                {"max_package_bytes": len(data) - 1},
-                {"max_files": 1},
-                {"max_uncompressed_bytes": 1},
-                {"max_image_bytes": 1},
-                {"max_image_pixels": 1},
-                {"max_evidence_bytes": 1},
-            )
-            for limits in cases:
-                with self.subTest(limits=limits), self.assertRaises(ReportImportLimitError):
-                    parse_report_docx(data, mode="editable", **limits)
+        data = base_render()
+        cases = (
+            {"max_package_bytes": len(data) - 1},
+            {"max_files": 1},
+            {"max_uncompressed_bytes": 1},
+            {"max_image_bytes": 1},
+            {"max_image_pixels": 1},
+            {"max_evidence_bytes": 1},
+        )
+        for limits in cases:
+            with self.subTest(limits=limits), self.assertRaises(ReportImportLimitError):
+                parse_report_docx(data, mode="editable", **limits)
 
     def test_oversized_media_member_rejects_before_python_docx_materializes_it(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            data = render_report_docx(self._report(folder), TEMPLATE, folder)
+        data = base_render()
 
-            with patch("app.docx_import.Document") as document, self.assertRaises(ReportImportLimitError):
-                parse_report_docx(data, mode="editable", max_image_bytes=1)
+        with patch("app.docx_import.Document") as document, self.assertRaises(ReportImportLimitError):
+            parse_report_docx(data, mode="editable", max_image_bytes=1)
 
-            document.assert_not_called()
+        document.assert_not_called()
 
     def test_editable_mode_rejects_image_width_above_renderer_maximum(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            document = Document(BytesIO(render_report_docx(self._report(folder), TEMPLATE, folder)))
-            paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
-            extent = paragraph._p.find(".//" + qn("wp:extent"))
-            original_width, original_height = int(extent.get("cx")), int(extent.get("cy"))
-            oversized_width = 156 * 36_000
-            extent.set("cx", str(oversized_width))
-            extent.set("cy", str(round(original_height * oversized_width / original_width)))
-            output = BytesIO()
-            document.save(output)
+        document = Document(BytesIO(base_render()))
+        paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+        extent = paragraph._p.find(".//" + qn("wp:extent"))
+        original_width, original_height = int(extent.get("cx")), int(extent.get("cy"))
+        oversized_width = 156 * 36_000
+        extent.set("cx", str(oversized_width))
+        extent.set("cy", str(round(original_height * oversized_width / original_width)))
+        output = BytesIO()
+        document.save(output)
 
-            with self.assertRaisesRegex(ReportImportError, "155 mm"):
-                parse_report_docx(output.getvalue(), mode="editable")
+        with self.assertRaisesRegex(ReportImportError, "155 mm"):
+            parse_report_docx(output.getvalue(), mode="editable")
 
     def test_editable_mode_rejects_rotated_evidence_geometry(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            document = Document(BytesIO(render_report_docx(self._report(folder), TEMPLATE, folder)))
-            paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
-            paragraph._p.find(".//" + qn("a:xfrm")).set("rot", "60000")
-            output = BytesIO()
-            document.save(output)
+        document = Document(BytesIO(base_render()))
+        paragraph = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+        paragraph._p.find(".//" + qn("a:xfrm")).set("rot", "60000")
+        output = BytesIO()
+        document.save(output)
 
-            with self.assertRaisesRegex(ReportImportError, "Rotated or flipped"):
-                parse_report_docx(output.getvalue(), mode="editable")
+        with self.assertRaisesRegex(ReportImportError, "Rotated or flipped"):
+            parse_report_docx(output.getvalue(), mode="editable")
 
     def test_the_note_prefix_is_not_kept_as_content(self) -> None:
         """``Note: `` is printed by note_fragment.docx, so keeping it would render ``Note: Note: ``
         the next time the report is generated."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            payload, _, _ = parse_report_docx(render_report_docx(self._report(folder), TEMPLATE, folder))
-            description = payload["vulnerabilities"][0]["contents"][0]["fragments"]
-            note = next(fragment for fragment in description if fragment["type"] == "note")
-            self.assertEqual("".join(run["text"] for run in note["runs"]), "Validate independently.")
+        payload, _, _ = parse_report_docx(base_render())
+        description = payload["vulnerabilities"][0]["contents"][0]["fragments"]
+        note = next(fragment for fragment in description if fragment["type"] == "note")
+        self.assertEqual("".join(run["text"] for run in note["runs"]), "Validate independently.")
 
     def test_two_findings_may_share_a_title(self) -> None:
         """Nothing stops a tester naming two findings the same. Keying the summary by title gave
@@ -991,7 +955,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             Report.model_validate(payload)
 
     def test_a_file_that_is_not_a_word_document_is_refused_by_name(self) -> None:
-        with self.assertRaises(ReportImportError):
+        with self.assertRaisesRegex(ReportImportError, "not a readable Word document"):
             parse_report_docx(b"not a document")
 
 
@@ -999,16 +963,12 @@ class ImportRouteTests(unittest.TestCase):
     """A .docx is itself a ZIP, so the sharpest risk here is the new branch stealing the bundle's."""
 
     def setUp(self) -> None:
-        self.root = tempfile.TemporaryDirectory()
-        self.addCleanup(self.root.cleanup)
-        main.workspace = Workspace(Path(self.root.name), "QA Tester")
+        self.root = use_temp_workspace(self, "QA Tester")
         self.client = TestClient(main.app)
 
     @staticmethod
     def _docx() -> bytes:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            return render_report_docx(FragmentRecognitionTests._report(folder), TEMPLATE, folder)
+        return base_render()
 
     def _import(self, name: str, data: bytes, mode: str | None = None):
         form = {"docx_mode": mode} if mode is not None else None
@@ -1158,7 +1118,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"source": "docx", "mode_required": True})
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_route_imports_editable_then_first_put_preserves_visible_semantics(self) -> None:
         response = self._import("report.docx", self._docx(), "editable")
@@ -1205,11 +1165,11 @@ class ImportRouteTests(unittest.TestCase):
         self.assertNotIn("mode_required", response.json())
 
     def test_unknown_docx_mode_is_rejected_without_writing(self) -> None:
-        before = set(Path(self.root.name).glob("apps/**/draft.json"))
+        before = set(self.root.glob("apps/**/draft.json"))
         response = self._import("report.docx", self._docx(), "replace")
         self.assertEqual(response.status_code, 422)
         self.assertIn("Unknown DOCX import mode", response.json()["detail"])
-        self.assertEqual(set(Path(self.root.name).glob("apps/**/draft.json")), before)
+        self.assertEqual(set(self.root.glob("apps/**/draft.json")), before)
 
     def test_an_unrecognised_status_is_assumed_rather_than_refusing_the_document(self) -> None:
         """A report written by an older version, or edited by hand, must still import. Only the
@@ -1225,7 +1185,7 @@ class ImportRouteTests(unittest.TestCase):
         response = self._import("report.docx", output.getvalue(), "editable")
 
         self.assertEqual(response.status_code, 200)
-        draft = json.loads(next(Path(self.root.name).glob("apps/**/draft.json")).read_text())
+        draft = json.loads(next(self.root.glob("apps/**/draft.json")).read_text())
         assumed = next(finding for finding in draft["vulnerabilities"] if finding["title"] == title)
         self.assertEqual(assumed["status"], "open_previously_discovered")
         self.assertEqual(
@@ -1255,7 +1215,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("invalid Location row", response.json()["detail"])
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_truncated_component_row_is_rejected_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1284,7 +1244,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("invalid Component row", response.json()["detail"])
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_component_table_with_both_channel_markers_is_rejected_without_writing(self) -> None:
         """Mutual exclusion between Mobile and Thick Client is a Setup-page UI rule only; nothing on
@@ -1321,7 +1281,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("does not identify exactly one supported app type", response.json()["detail"])
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_truncated_asia_section_row_is_rejected_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1345,7 +1305,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("invalid Section row", response.json()["detail"])
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_empty_limitations_row_is_rejected_without_writing(self) -> None:
         document = Document(BytesIO(self._docx()))
@@ -1358,7 +1318,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("invalid Limitations row", response.json()["detail"])
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_empty_scope_row_is_rejected_without_writing(self) -> None:
         document = Document(BytesIO(self._docx()))
@@ -1372,7 +1332,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("invalid URL(s) in Scope row", response.json()["detail"])
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_empty_table_header_row_does_not_break_lookup(self) -> None:
         document = Document(BytesIO(self._docx()))
@@ -1385,7 +1345,10 @@ class ImportRouteTests(unittest.TestCase):
 
         response = self._import("report.docx", output.getvalue(), "editable")
 
-        self.assertNotEqual(response.status_code, 500, response.text)
+        # A table whose header row is gone is simply not found; everything else still imports.
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["summary"]["retained"], 1)
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
 
     def test_empty_finding_detail_row_is_skipped_without_crashing(self) -> None:
         document = Document(BytesIO(self._docx()))
@@ -1424,7 +1387,7 @@ class ImportRouteTests(unittest.TestCase):
             response = self._import("report.docx", self._docx(), "editable")
 
         self.assertEqual(response.status_code, 422)
-        self.assertEqual(list(Path(self.root.name).glob("apps/**/draft.json")), [])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_a_bundle_still_takes_the_bundle_branch(self) -> None:
         created = self.client.get("/new", follow_redirects=False)

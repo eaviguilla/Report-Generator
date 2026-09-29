@@ -175,19 +175,12 @@ trusting the list.
 
 `tests/test_browser.py` already owns a Playwright harness with a live server and a temp workspace. Put the attack there. Use `self.ready_report(...)`, drive the page, and assert on what the user would see and on what landed in `draft.json`.
 
-Run only the smallest check that can disprove the current hypothesis:
-
-```sh
-.venv/bin/python -m unittest tests.test_browser.BrowserWorkflowTests.test_name
-```
-
-After a fix, rerun the new regression and only directly affected neighboring tests. Use
-`scripts/relevant_tests.py --run` once at the end only when the change touches shared behavior. Run
-the whole suite only when the user explicitly requests it, and never repeat that full run after it
-passes unless later edits affect its scope.
-
-The two Word-only tests that always fail on macOS are named in `.github/copilot-instructions.md`
-under *Running tests in this repo*; they are not findings.
+Run only the smallest check that can disprove the current hypothesis: the one test by name, or
+`scripts/relevant_tests.py --run`, which picks exactly the tests you added or changed. After a fix,
+run `scripts/relevant_tests.py --affected --run` once. Never the full suite unless the user asks.
+The levels, the commands and how tests are written are in `.github/copilot-instructions.md`
+("Running tests in this repo") and `.github/instructions/tests.instructions.md`; follow those rather
+than anything restated here.
 
 ### 3. Prove the test guards the fix
 
@@ -214,6 +207,7 @@ Trace to the function that is actually wrong before editing. The seams where the
 
 - **Rules live twice.** Many validations exist in Python *and* in JavaScript. Fixing one side alone produces a report that the browser says is ready and the server refuses to generate. `tests/test_browser.py::test_browser_readiness_verdict_matches_server_generation_issues` catches some drift, not all of it. When you change a rule, change both and say which two files you touched.
 - **Line endings.** Most files in this repo are stored with CRLF. Rewriting one with a tool that normalizes newlines turns a five-line change into a whole-file diff. Use the editor's edit tools, not shell rewrites, and check with `git diff --stat` before you call it done.
+- **Browser-test timing is not the app's.** The harness defaults autosave to 500 ms idle (`AUTOSAVE_TEST_DEFAULT`), not the app's 5 s; set `window.VULNREPORT_AUTOSAVE_IDLE_MS` with `add_init_script` to change it. A real second tab is `self.context.new_page()` (shared localStorage); `self.other_profile_page()` is a second browser profile, which is what the existing "two tabs" tests use.
 - **`draft.json` has a sibling.** `draft.bak.json` is written alongside it. A test that inspects the saved file should be explicit about which one it means.
 - **The data-layer contract.** If your fix touches `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/main.py`, or `app/web/static/app.js`, follow `.github/instructions/data-layer.instructions.md` and keep `docs/DATA_MAP.md` honest.
 

@@ -14,13 +14,15 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+# This file lives in app/, so the release root, where data/, .venv and requirements.txt sit, is one level up.
+# It is the same expression app/main.py uses.
+ROOT = Path(__file__).resolve().parent.parent
 VENV_DIR = ROOT / ".venv"
 REQUIREMENTS = ROOT / "requirements.txt"
 STAMP = VENV_DIR / ".requirements-sha256"
 RELAUNCH_FLAG = "VULNREPORT_BOOTSTRAPPED"
 
-# The three names below are shared with the Burp extension (burp/report_generator_burp.py), which starts
+# The three names below are shared with the Burp extension (report_generator_burp.py, at the release root), which starts
 # this script and reads its output. A test pins them on both sides.
 BURP_FLAG = "VULNREPORT_STARTED_BY_BURP"
 ADDRESS_LINE = "Report Generator is running at "
@@ -244,6 +246,10 @@ def serve() -> None:
                 print("Close this window to stop the application.", flush=True)
                 threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
 
+    # Run as a script path (python app/init.py), Python searches app/ for modules, not the release root, and
+    # uvicorn.Config adds no directory of its own, so "app.main" would not import. Here rather than at the top
+    # of the file so importing this module (tests, --data-status) has no side effect.
+    sys.path.insert(0, str(ROOT))
     server = AnnouncingServer(uvicorn.Config("app.main:app", host="127.0.0.1", port=port))
     if from_burp:
         threading.Thread(target=_stop_at_end_of_input, args=(server,), daemon=True).start()
@@ -293,14 +299,15 @@ def bring_over(old_argument: str) -> int:
     one store, and nothing is deleted: an empty data folder a Start already made here is set aside.
     """
     if not old_argument:
-        return _refuse("Give the previous release folder: run.py --bring-over <folder>.")
+        return _refuse("Give the previous release folder: app/init.py --bring-over <folder>.")
     if os.environ.get(DATA_ENV):
         return _refuse(f"{DATA_ENV} is set, so the data folder is not inside this release. Move it by hand (see README.md).")
     old = Path(old_argument).resolve()
     if _is_inside(old, ROOT) or _is_inside(ROOT, old):
         return _refuse("That is this folder, or contains it or sits inside it. Choose the previous release folder.")
-    if not (old / "run.py").is_file():
-        return _refuse(f"{old} has no run.py, so it is not a Report Generator folder.")
+    # A release from before the launcher moved has run.py at its root; a current one has app/init.py.
+    if not ((old / "run.py").is_file() or (old / "app" / "init.py").is_file()):
+        return _refuse(f"{old} has neither run.py nor app/init.py, so it is not a Report Generator folder.")
     if (old / MOVED_NOTE).is_file():
         return _refuse(f"{old} was already moved: {(old / MOVED_NOTE).read_text(encoding='utf-8').strip()}")
     old_data, new_data = old / "data", ROOT / "data"

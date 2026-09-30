@@ -1,10 +1,10 @@
 Run the app from this folder:
 
 ```powershell
-py -3 run.py
+py -3 app/init.py
 ```
 
-Use `python run.py` if `py` is not available on your machine.
+Use `python app/init.py` if `py` is not available on your machine (`python3 app/init.py` on macOS).
 
 The first run creates `.venv`, installs dependencies, and opens the app in your
 browser. Every run after that opens the browser straight away. When
@@ -20,7 +20,7 @@ else - drafting, saving, import, and export - runs anywhere.
 
 ## Running it from Burp Suite
 
-`report_generator_burp.py`, next to `run.py`, adds a **Report Generator** tab to Burp
+`report_generator_burp.py`, at the top of this folder, adds a **Report Generator** tab to Burp
 with Start, Stop and Open buttons and the app's output. It only starts and stops the
 same app described above: nothing else changes, and the tab prints the folder, the
 exact command and the address.
@@ -54,7 +54,8 @@ Things worth knowing:
 
 ## Moving to a new release
 
-Reports live in the `data` folder next to `run.py`, so a new release starts empty.
+Reports live in the `data` folder at the top of this folder, so a new release starts empty.
+Unzip each release into a new folder, not over an old one.
 
 1. Unzip the new release, and load its `report_generator_burp.py` in Burp (remove the
    previous release's extension first).

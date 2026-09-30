@@ -5,7 +5,7 @@ environments, app types, scope targets), **Findings** (one row per vulnerability
 finding's description, remediation, proof of concept, screenshots) — and the app produces a Word
 document matching the house template. No database, no frontend framework, no build step.
 
-- **Start:** `py -3 run.py` (on macOS, `python3 run.py`; after the first run `.venv/bin/python run.py` works too). It creates `.venv`, installs
+- **Start:** `py -3 app/init.py` (on macOS, `python3 app/init.py`; after the first run `.venv/bin/python app/init.py` works too). It creates `.venv`, installs
   `requirements.txt` when its hash changes, and serves `app.main:app` on the first free port 8765–8799.
 - **Server:** `app/main.py` (FastAPI routes) → `app/report_service.py` (provisioning, scope
   reconciliation, page gates) → `app/workspace.py` (locking, folders, load/save) →
@@ -17,8 +17,9 @@ document matching the house template. No database, no frontend framework, no bui
   splices in the small component documents under `resources/`; `app/docx_captions.py` makes real
   caption fields and drives Word itself (Windows + Word + `pywin32` only);
   `app/docx_import.py` reads a finished report back into a draft.
-- **Burp launcher:** `burp/report_generator_burp.py` is one Jython 2.7 file on Burp's legacy Extender API that starts and
-  stops `run.py` from a Burp tab (in a release it sits beside `run.py`). `run.py` holds the launcher's half: one server per
+- **Burp launcher:** `report_generator_burp.py`, at the repository root and at the top of a release, is one Jython 2.7 file on
+  Burp's legacy Extender API that starts and stops `app/init.py` from a Burp tab. `app/init.py` (the launcher; its `ROOT` is
+  the release root, one level up) holds the launcher's half: one server per
   data folder (a lock), `--data-status`, `--bring-over`, and stop at end of input. Checked by `tests/test_launcher.py`
   (its Jython self-checks run when `java` and `VULNREPORT_JYTHON_JAR` are available; a Python 2.7 syntax test always runs)
   and by the checklist in `docs/plans/burp-extension-launcher.md`.
@@ -144,7 +145,7 @@ A change to docs, comments or instructions alone needs nothing, and the script s
 | one page template | that page's tests |
 | CSS, `dialog.js`, `theme.js`, `diagnostics.js`, shared partials, server code in `app/*.py`, `tests/support.py` | every browser test |
 | `app/docx_*.py`, `resources/*.docx` | the import and generate browser tests |
-| `run.py`, `burp/` | none; every Python test module runs, and `tests.test_launcher` is the one that matters |
+| `app/init.py`, `report_generator_burp.py` | none; every Python test module runs, and `tests.test_launcher` is the one that matters |
 | `docs/`, `.github/`, `.claude/`, `*.md` | none |
 
 Each browser test's pages are read from the URLs and buttons in its own code, so there are no tags to

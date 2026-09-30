@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Report Generator launcher for Burp Suite: one Jython 2.7 file on Burp's legacy Extender API.
 
-It starts the Report Generator web app as a separate Python 3 process (`run.py`, in the folder this
+It starts the Report Generator web app as a separate Python 3 process (`app/init.py`, in the folder this
 file sits in), shows its output, and stops it. The app, its page and its data are unchanged, and
 nothing is hidden: the folder, the exact command and the address are printed in the tab.
 
@@ -32,8 +32,8 @@ from javax.swing import JButton, JFileChooser, JLabel, JOptionPane, JPanel, JScr
 from javax.swing import Timer
 from jarray import array
 
-# Shared with run.py (a test pins both): what its "ready" line starts with, and the variable that tells it
-# it was started from here. Nothing else is shared: the data folder and the port stay entirely in run.py.
+# Shared with app/init.py (a test pins both): what its "ready" line starts with, and the variable that tells it
+# it was started from here. Nothing else is shared: the data folder and the port stay entirely in app/init.py.
 ADDRESS_LINE = u"Report Generator is running at "
 BURP_FLAG = u"VULNREPORT_STARTED_BY_BURP"
 
@@ -102,6 +102,11 @@ def _arguments(words):
     return arguments
 
 
+def launcher_file(app_folder):
+    """The app's launcher, written once: <release folder>/app/init.py (Jython 2.7's File has no varargs join)."""
+    return File(File(app_folder, u"app"), u"init.py")
+
+
 class ServerProcess(object):
     """The app's process: start, stop by closing its input, Force stop, and whether it is still alive."""
 
@@ -112,7 +117,7 @@ class ServerProcess(object):
         self.process = None
 
     def command(self):
-        return self.python_words + [File(self.app_folder, u"run.py").getPath()]
+        return self.python_words + [launcher_file(self.app_folder).getPath()]
 
     def start(self):
         builder = ProcessBuilder(_arguments(self.command()))
@@ -143,7 +148,7 @@ class ServerProcess(object):
         return self.process.waitFor(int(seconds), TimeUnit.SECONDS)
 
     def stop(self):
-        """Close the server's standard input: run.py treats end of input as "finish what you are doing and exit"."""
+        """Close the server's standard input: app/init.py treats end of input as "finish what you are doing and exit"."""
         if self.process is None:
             return
         try:
@@ -217,9 +222,9 @@ def resolve_python(field):
 
 
 def data_status(app_folder, python_words):
-    """run.py --data-status as a dict, or None when it cannot be read. It changes nothing on disk."""
+    """app/init.py --data-status as a dict, or None when it cannot be read. It changes nothing on disk."""
     try:
-        code, text = run_command(python_words + [File(app_folder, u"run.py").getPath(), u"--data-status"], app_folder)
+        code, text = run_command(python_words + [launcher_file(app_folder).getPath(), u"--data-status"], app_folder)
     except (Exception, Throwable):
         return None
     for line in reversed(text.splitlines()):
@@ -381,7 +386,7 @@ class LauncherPanel(object):
         self.last_exit_code = None
         self._opened = False
         self._shown = 0
-        self.installed = File(app_folder, u"run.py").isFile()
+        self.installed = launcher_file(app_folder).isFile()
 
         self.status = JLabel()
         self.python_field = JTextField(settings.get(u"python") or u"", 24)
@@ -424,7 +429,7 @@ class LauncherPanel(object):
     def _status_text(self):
         where = u"Folder: %s.  " % self.app_folder
         if not self.installed:
-            return where + u"Load this file from the Report Generator folder (the one that contains run.py)."
+            return where + u"Load this file from the Report Generator folder (the one that contains app/init.py)."
         if self.state == u"starting":
             return where + u"Starting..."
         if self.state == u"setting_up":
@@ -501,7 +506,7 @@ class LauncherPanel(object):
             self.settings.put(fresh_key, u"1")
             return True
         self.buffer.note(u"Bringing reports over from %s" % old_folder)
-        code, _ = run_command(words + [File(self.app_folder, u"run.py").getPath(), u"--bring-over", old_folder], self.app_folder, self.buffer.add)
+        code, _ = run_command(words + [launcher_file(self.app_folder).getPath(), u"--bring-over", old_folder], self.app_folder, self.buffer.add)
         if code != 0:
             self.buffer.note(u"Nothing was moved. Fix the problem above, or choose Start fresh.")
             return False
@@ -655,7 +660,7 @@ def self_check(app_folder, python_exe):
     words = [python_exe]
     status = data_status(app_folder, words)
     if status is None:
-        _say(u"FAIL: run.py --data-status could not be read")
+        _say(u"FAIL: app/init.py --data-status could not be read")
         return 1
     if status.get(u"reports") != 0:
         _say(u"Refusing to run: the data folder %s holds %s report(s), and the self-check must never touch real reports."

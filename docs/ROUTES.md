@@ -161,4 +161,4 @@ Run these after navigation or persistence changes:
    retest rewrites/drops are named.
 10. Export/import a report containing evidence; verify the PNG survives and a
     tampered archive is rejected.
-11. Run `py -3 scripts/relevant_tests.py --affected --run` (see "Running tests in this repo" in `.github/copilot-instructions.md`; `discover -s tests` would bypass the temporary data folder and write into the real `data/`).
+11. Run `py -3 scripts/relevant_tests.py --affected --run` (`discover -s tests` would bypass the temporary data folder and write into the real `data/`).

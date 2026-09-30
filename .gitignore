@@ -17,12 +17,20 @@ generated/*
 # release packaging output
 /dist/
 
-# agent tooling — not needed on other devices
-.claude/
-CLAUDE.md
+# agent tooling: CLAUDE.md and .claude/ are committed; only local state is ignored
+CLAUDE.local.md
+.claude/settings.local.json
 .impeccable/
 .graphifyignore
 graphify-out/
+
+# secrets and tool output
+.env
+.env.*
+!.env.example
+node_modules/
+build/
+output/
 
 # customer reports used for local testing; these never belong in the repository
 /*.docx

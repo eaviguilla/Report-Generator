@@ -50,14 +50,6 @@ data-layer instructions, and `.claude/agents/` and `.claude/commands/` hold thin
 back at `.github/agents/` and `.github/prompts/`. Edit rules here only. When you add an agent or a
 prompt, add its wrapper and list it in `CLAUDE.md`.
 
-## Codebase graph (graphify)
-
-When `graphify-out/graph.json` exists (it is local, not in git), use it before raw searching:
-`graphify query "<question>"` for codebase questions, `graphify path "<A>" "<B>"` for how two things
-connect, `graphify explain "<concept>"` for one concept. They return a small scoped subgraph. Use
-`graphify-out/wiki/index.md` for broad navigation if it exists, and `graphify-out/GRAPH_REPORT.md`
-only for architecture-wide review. After changing code, run `graphify update .`, which is AST-only and costs no API calls.
-
 # Talking to me
 
 - **Open with a recap.** Before any summary, decision point, or question: 2–3 plain sentences on what we were just working on, why, and where it stands now.
@@ -65,26 +57,6 @@ only for architecture-wide review. After changing code, run `graphify update .`,
 - **Self-contained questions.** When asking me to decide something, the question itself must carry everything needed to answer it: the background, the options, the tradeoffs, and your recommendation. Never require scrolling back.
 - **One question at a time.** When a summary or decision point holds several open questions or next steps, say so up front ("three decisions are waiting; here's the first"), then present only the first and wait for the answer before raising the next. Never dump them all at once — it's too much mental load.
 - **Always end with `Next action:`.** Every response ends with a final line naming what I do next. Not a summary — an instruction. Examples: `Next action: none.` / `Next action: review the output above.` / `Next action: consider the output above.` / `Next action: choose from the options above.` / `Next action: execute step 1.` Pick the one that actually fits; invent a better verb when none of those do.
-
-# Changing how the app looks
-
-When a change is visual — layout, spacing, colour, a component's appearance — **do not stop at
-"looks done".** Without a check, "looks done" is the only signal available and the user becomes the
-verification loop, noticing every mistake by hand.
-
-Close the loop yourself:
-
-1. Open the running app in the browser and screenshot the element or page you changed.
-2. Compare it against the reference: the screenshot the user gave you, the design you were asked to
-   match, or the same element before the change.
-3. **List the differences explicitly** — position, size, weight, colour, spacing — then fix them and
-   screenshot again. Repeat until the list is empty.
-
-Eyeballing a screenshot finds the obvious faults and misses the rest. When the target is a precise
-match, read computed styles out of the page and diff them against the reference numerically; that is
-what turns "close enough" into actually correct.
-
-Show the evidence — the screenshot, or the diff you ran — rather than asserting it matches.
 
 # Implementing a plan
 

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "additionalDirectories": ["../brain"],
+    "ask": [
+      "Bash(*relevant_tests.py*--full*)"
+    ],
+    "deny": [
+      "Read(./.env)", "Read(./.env.local)",
+      "Read(./dist/**)", "Read(./.venv/**)", "Read(./**/*.docx)",
+      "Read(./graphify-out/graph.json)", "Read(./graphify-out/graph.html)",
+      "Read(./graphify-out/cache/**)"
+    ]
+  }
+}

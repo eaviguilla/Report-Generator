@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.relevant_tests import ALL_PAGES, DECLARATION, REPORT_PAGES, ROOT, app_js_pages, browser_tags, changed_tests, parse_diff, parse_module
+from scripts.relevant_tests import ALL_PAGES, DECLARATION, FILE_PAGES, REPORT_PAGES, ROOT, app_js_pages, browser_tags, changed_tests, parse_diff, parse_module
 
 SAMPLE_TESTS = '''import unittest
 
@@ -107,6 +107,15 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(tags[prefix + "test_home_then_setup"], {"home", "setup"})
         self.assertEqual(tags[prefix + "test_bounced_to_findings"], {"content", "findings"})
         self.assertEqual(tags[prefix + "test_unknown"], set(ALL_PAGES), "an unclassifiable test must run for every page")
+
+    def test_the_launcher_and_the_burp_file_select_no_browser_pages_but_the_server_still_selects_all(self) -> None:
+        def pages_for(path: str):
+            return next((found for prefix, found in FILE_PAGES if path.startswith(prefix)), None)
+
+        self.assertEqual(pages_for("app/init.py"), frozenset(), "the launcher sits in app/, whose row would select every page")
+        self.assertEqual(pages_for("report_generator_burp.py"), frozenset(), "no rule would list it under 'No rule for these'")
+        for path in ("app/main.py", "app/workspace.py", "app/storage.py"):
+            self.assertEqual(pages_for(path), ALL_PAGES, f"{path} is server code every page talks to")
 
     def test_the_real_app_js_still_has_its_two_page_entry_points(self) -> None:
         """If these are renamed, every app.js change quietly selects all report-page tests."""

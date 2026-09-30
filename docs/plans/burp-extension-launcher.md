@@ -1,5 +1,9 @@
 # Host the app from a Burp Suite extension
 
+> **Paths moved after this was written** (`docs/plans/launcher-file-layout.md`): the launcher `run.py` is now
+> `app/init.py`, and `burp/report_generator_burp.py` is now `report_generator_burp.py` at the repository root. Read
+> `run.py` and `burp/` below as those two files. The Step 8 checklist is unchanged, and still open.
+
 > **Status:** in progress · 2026-09-30 · Steps 1–7 are built and their tests pass here (242 Python
 > tests, 4 skipped); Step 8 (checks on Windows and inside a real Burp) and Step 9's close-out are still
 > to do.

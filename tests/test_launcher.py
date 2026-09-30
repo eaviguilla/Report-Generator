@@ -21,18 +21,18 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.request import urlopen
 
-import run
+from app import init as run
 from scripts import package_release
 
 REPO = Path(__file__).resolve().parent.parent
 HOLDER = (
-    "import sys; sys.path.insert(0, sys.argv[2]); import run; from pathlib import Path\n"
+    "import sys; sys.path.insert(0, sys.argv[2]); from app import init as run; from pathlib import Path\n"
     "handle = run.take_server_lock(Path(sys.argv[1]), wait=1)\n"
     "print('locked' if handle else 'refused', flush=True)\n"
     "sys.stdin.read()\n"
 )
-# What `python run.py` does, with the browser stubbed out so a test never opens a real one.
-SERVE_WRAPPER = "import webbrowser; webbrowser.open = lambda *a, **k: True; import run; raise SystemExit(run.main())"
+# What `python app/init.py` does, with the browser stubbed out so a test never opens a real one.
+SERVE_WRAPPER = "import webbrowser; webbrowser.open = lambda *a, **k: True; from app import init as run; raise SystemExit(run.main())"
 
 
 class Lines:
@@ -69,9 +69,9 @@ class Lines:
         return None
 
 
-def start_child(args: list[str], env: dict | None = None, **kwargs) -> tuple[subprocess.Popen, Lines]:
+def start_child(args: list[str], env: dict | None = None, cwd: Path = REPO, **kwargs) -> tuple[subprocess.Popen, Lines]:
     process = subprocess.Popen(
-        args, cwd=REPO, env=env or os.environ.copy(), text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs
+        args, cwd=cwd, env=env or os.environ.copy(), text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs
     )
     return process, Lines(process)
 
@@ -153,7 +153,7 @@ class DataFolderTests(unittest.TestCase):
             os.environ[run.DATA_ENV] = absolute
             self.assertEqual(run.data_dir(), Path(absolute))
 
-            # A relative value is read against where run.py was started, then written back absolute, so the
+            # A relative value is read against where app/init.py was started, then written back absolute, so the
             # relaunched child (which runs from the app folder) serves the folder the parent locked.
             start = os.getcwd()
             os.chdir(directory)
@@ -165,6 +165,22 @@ class DataFolderTests(unittest.TestCase):
                 self.assertEqual(os.environ[run.DATA_ENV], str(expected))
             finally:
                 os.chdir(start)
+
+    def test_default_data_folder_is_the_servers_default_data_folder(self) -> None:
+        """The launcher sits in app/, so a ROOT one level short would put data/, the lock and .venv under app/."""
+        env = {key: value for key, value in os.environ.items() if key != run.DATA_ENV}
+        served = subprocess.run(
+            [sys.executable, "-c", "import app.main as m; print(m.DATA)"], cwd=REPO, env=env, capture_output=True, text=True, timeout=120
+        )
+        self.assertEqual(served.returncode, 0, served.stderr)
+        with patch.dict(os.environ):
+            os.environ.pop(run.DATA_ENV, None)
+            self.assertEqual(run.data_dir(), REPO / "data")
+            self.assertEqual(Path(served.stdout.strip().splitlines()[-1]), run.data_dir(), "the launcher must lock the folder the server serves")
+        self.assertEqual(run.ROOT, REPO)
+        self.assertEqual(run.VENV_DIR, REPO / ".venv")
+        self.assertEqual(run.REQUIREMENTS, REPO / "requirements.txt")
+        self.assertTrue(run.REQUIREMENTS.is_file(), "ROOT must be the folder that holds requirements.txt")
 
     def test_data_dir_matches_what_app_main_serves(self) -> None:
         """app.main is the other half of this rule, so pin the text of its half and run it once for real."""
@@ -182,7 +198,7 @@ class DataFolderTests(unittest.TestCase):
 
 class LockTests(unittest.TestCase):
     def guard(self, folder: Path) -> subprocess.CompletedProcess:
-        code = "import run; run.LOCK_WAIT = 0.3; run.guard_start()"
+        code = "from app import init as run; run.LOCK_WAIT = 0.3; run.guard_start()"
         return subprocess.run(
             [sys.executable, "-c", code], cwd=REPO, env={**os.environ, run.DATA_ENV: str(folder)}, capture_output=True, text=True, timeout=60
         )
@@ -266,6 +282,14 @@ class DataStatusTests(unittest.TestCase):
             self.assertEqual(list(Path(directory).iterdir()), [], "--data-status must never create anything")
 
 
+def make_release(folder: Path, *markers: str) -> None:
+    """A release folder: `run.py` is how a release from before the launcher moved marks itself, `app/init.py` a current one."""
+    folder.mkdir(parents=True, exist_ok=True)
+    for marker in markers:
+        (folder / marker).parent.mkdir(parents=True, exist_ok=True)
+        (folder / marker).write_text("", encoding="utf-8")
+
+
 def tree(folder: Path) -> dict:
     return {str(path.relative_to(folder)): (path.read_bytes() if path.is_file() else None) for path in sorted(folder.rglob("*"))}
 
@@ -278,9 +302,8 @@ class BringOverTests(unittest.TestCase):
         self.addCleanup(self.folder.cleanup)
         base = Path(self.folder.name).resolve()  # run.ROOT is resolved, and macOS temp folders are symlinks
         self.old, self.new = base / "old", base / "new"
-        for release in (self.old, self.new):
-            release.mkdir()
-            (release / "run.py").write_text("", encoding="utf-8")
+        make_release(self.old, "run.py")  # a release from before the launcher moved
+        make_release(self.new, "app/init.py")
         for name, body in (("Northstar/2026-09_Annual_a1", b'{"a": 1}'), ("Other/2026-09_Retest_b2", b'{"b": 2}')):
             draft = self.old / "data" / "apps" / name / "draft.json"
             draft.parent.mkdir(parents=True)
@@ -326,6 +349,27 @@ class BringOverTests(unittest.TestCase):
         self.assertEqual(len(aside), 1)
         self.assertEqual((aside[0] / "prefs.json").read_text(encoding="utf-8"), "made by an early Start", "set aside, never deleted")
 
+    def test_bring_over_accepts_a_release_of_either_layout(self) -> None:
+        """Releases already with testers have run.py at the top; a current one has app/init.py. Neither may be refused."""
+        for name, markers in (("before the move", ("run.py",)), ("current", ("app/init.py",)), ("both", ("run.py", "app/init.py"))):
+            with self.subTest(release=name):
+                base = Path(self.folder.name).resolve() / name.replace(" ", "-")
+                old, new = base / "old", base / "new"
+                make_release(old, *markers)
+                make_release(new, "app/init.py")
+                draft = old / "data" / "apps" / "Northstar" / "2026-09_Annual_a1" / "draft.json"
+                draft.parent.mkdir(parents=True)
+                draft.write_bytes(b'{"a": 1}')
+                (old / "generated").mkdir()
+                (old / "generated" / "JH - Report.docx").write_bytes(b"docx")
+                with patch.object(run, "ROOT", new), patch.object(run, "VENV_DIR", new / ".venv"):
+                    code, _, err = self.bring(str(old))
+                self.assertEqual(code, 0, err)
+                self.assertEqual((new / "data" / "apps" / "Northstar" / "2026-09_Annual_a1" / "draft.json").read_bytes(), b'{"a": 1}')
+                self.assertEqual((new / "generated" / "JH - Report.docx").read_bytes(), b"docx")
+                self.assertFalse((new / "app" / "data").exists(), "data must land beside app/, not inside it")
+                self.assertFalse((new / "app" / "generated").exists())
+
     def test_bring_over_refuses_a_folder_that_already_holds_reports(self) -> None:
         draft = self.new / "data" / "apps" / "Mine" / "2026-09_Annual_c3" / "draft.json"
         draft.parent.mkdir(parents=True)
@@ -359,13 +403,13 @@ class BringOverTests(unittest.TestCase):
         plain = self.old.parent / "plain"
         plain.mkdir()
         empty = self.old.parent / "empty"
+        make_release(empty, "app/init.py")
         (empty / "data" / "apps").mkdir(parents=True)
-        (empty / "run.py").write_text("", encoding="utf-8")
         rows = [
             ("no folder given", "", {}),
             ("this very folder", str(self.new), {}),
             ("a folder holding this one", str(self.new.parent), {}),
-            ("no run.py", str(plain), {}),
+            ("neither run.py nor app/init.py", str(plain), {}),
             ("already moved", str(marked), {}),
             ("no reports", str(empty), {}),
             ("the data folder is set elsewhere", str(self.old), {run.DATA_ENV: str(self.new.parent / "custom")}),
@@ -442,8 +486,41 @@ class StreamTests(unittest.TestCase):
                             self.assertEqual(streams, {"stdin": None, "stdout": None, "stderr": None})
 
 
+class ScriptPathTests(unittest.TestCase):
+    """`python app/init.py` puts app/ first on the module path, not the release root, and only a script path shows it.
+
+    Every other launcher test starts the code with `python -c`, which puts the working directory on the path and
+    would pass even if the app could not be imported. These run the file itself, from a folder that is not the
+    repository, so the working directory cannot be what makes the import work.
+    """
+
+    def script(self, *arguments: str) -> list[str]:
+        return [sys.executable, str(REPO / "app" / "init.py"), *arguments]
+
+    def test_data_status_runs_from_any_folder_with_only_the_standard_library(self) -> None:
+        with tempfile.TemporaryDirectory() as elsewhere, tempfile.TemporaryDirectory() as data:
+            env = {**os.environ, run.DATA_ENV: data}
+            env.pop(run.RELAUNCH_FLAG, None)
+            done = subprocess.run(self.script("--data-status"), cwd=elsewhere, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            status = json.loads(done.stdout)
+            self.assertEqual((status["data"], status["reports"], status["locked"]), (data, 0, False))
+            self.assertEqual(list(Path(data).iterdir()), [], "--data-status must create nothing")
+
+    def test_the_server_starts_and_stops_when_run_as_a_script_path(self) -> None:
+        with tempfile.TemporaryDirectory() as elsewhere, tempfile.TemporaryDirectory() as data:
+            env = {**os.environ, run.RELAUNCH_FLAG: "1", run.BURP_FLAG: "1", run.DATA_ENV: data}
+            process, lines = start_child(self.script(), env=env, cwd=Path(elsewhere), stdin=subprocess.PIPE)
+            self.addCleanup(finish, process, 0.1)
+            line = lines.wait_for(run.ADDRESS_LINE)
+            self.assertIsNotNone(line, "the server did not start:\n" + "\n".join(lines.seen))
+            self.assertTrue(port_answers(line[len(run.ADDRESS_LINE):]))
+            process.stdin.close()
+            self.assertEqual(finish(process, 20), 0, lines.output())
+
+
 class ServeTests(unittest.TestCase):
-    """Each test starts `run.py` for real, serving from this interpreter, with the browser stubbed out."""
+    """Each test starts `app/init.py` for real, serving from this interpreter, with the browser stubbed out."""
 
     def start(self, *, burp: bool, stdin) -> tuple[subprocess.Popen, Lines]:
         env = {**os.environ, run.RELAUNCH_FLAG: "1"}
@@ -498,7 +575,7 @@ class ServeTests(unittest.TestCase):
         self.assertNotIn("Traceback", output)
 
 
-BURP_FILE = REPO / "burp" / "report_generator_burp.py"
+BURP_FILE = REPO / "report_generator_burp.py"
 
 
 def python2_only_problems(tree: ast.AST) -> list[str]:
@@ -562,34 +639,46 @@ class BurpFileTests(unittest.TestCase):
                 self.assertTrue(python2_only_problems(ast.parse(snippet)), f"the checker missed {name}, so it would pass a file using it")
         self.assertEqual(python2_only_problems(ast.parse(BURP_FILE.read_text(encoding="utf-8"))), [])
 
-    def test_burp_file_shares_only_two_names_with_run_py(self) -> None:
+    def test_burp_file_shares_only_two_names_with_the_launcher(self) -> None:
         source = BURP_FILE.read_text(encoding="utf-8")
         self.assertIn(f'ADDRESS_LINE = u"{run.ADDRESS_LINE}"', source)
         self.assertIn(f'BURP_FLAG = u"{run.BURP_FLAG}"', source)
         for name in ("VULNREPORT_DATA_DIR", "VULNREPORT_PORT", "VULNREPORT_JYTHON_JAR", run.DATA_ENV):
-            self.assertNotIn(name, source, f"{name} must stay out of the extension: the data folder and port are run.py's alone")
+            self.assertNotIn(name, source, f"{name} must stay out of the extension: the data folder and port are app/init.py's alone")
         self.assertEqual(set(re.findall(r"VULNREPORT_\w+", source)), {run.BURP_FLAG})
 
-    def test_burp_file_only_runs_run_py_commands_that_exist(self) -> None:
-        """The extension calls run.py with these flags, so run.py must still understand them."""
+    def test_burp_file_only_runs_launcher_commands_that_exist(self) -> None:
+        """The extension calls app/init.py with these flags, so app/init.py must still understand them."""
         source = BURP_FILE.read_text(encoding="utf-8")
-        run_source = (REPO / "run.py").read_text(encoding="utf-8")
-        passed = set(re.findall(r'u"run\.py"\)\.getPath\(\), u"(--[a-z-]+)"', source))
-        self.assertEqual(passed, {"--data-status", "--bring-over"}, "the extension's calls into run.py changed; update this pin")
-        for flag in sorted(passed):
-            self.assertIn(f'"{flag}"', run_source, f"the extension passes {flag} to run.py, which does not read it")
+        launcher_source = (REPO / "app" / "init.py").read_text(encoding="utf-8")
+        found = re.findall(r'launcher_file\([^)]*\)\.getPath\(\), u"(--[a-z-]+)"', source)
+        self.assertGreaterEqual(len(found), 2, "the pattern matched nothing: the way the extension calls the launcher changed")
+        self.assertEqual(set(found), {"--data-status", "--bring-over"}, "the extension's calls into the launcher changed; update this pin")
+        for flag in sorted(set(found)):
+            self.assertIn(f'"{flag}"', launcher_source, f"the extension passes {flag} to the launcher, which does not read it")
+
+    def test_burp_file_names_the_launcher_once_and_by_its_current_path(self) -> None:
+        source = BURP_FILE.read_text(encoding="utf-8")
+        self.assertEqual(source.count('File(File(app_folder, u"app"), u"init.py")'), 1, "the path is written in one helper")
+        self.assertEqual(len(re.findall(r"launcher_file\(", source)), 5, "the helper, plus its four users")
+        self.assertNotIn("run.py", source, "the launcher used to be run.py at the release root")
+        self.assertTrue((REPO / "app" / "init.py").is_file(), "the file the extension starts exists where it says")
+        self.assertFalse((REPO / "run.py").exists(), "a second launcher at the root would undo the move")
 
 
 class ReleaseTests(unittest.TestCase):
-    def test_release_zip_carries_the_burp_file_at_the_root(self) -> None:
+    def test_release_zip_carries_the_launcher_in_app_and_the_burp_file_at_the_root(self) -> None:
         with tempfile.TemporaryDirectory() as dist, patch.object(package_release, "DIST", Path(dist)):
             archive = package_release.build_release("Report-Generator-test")
             with zipfile.ZipFile(archive) as bundle:
                 names = bundle.namelist()
-                shipped = bundle.read("Report-Generator-test/report_generator_burp.py")
-        self.assertIn("Report-Generator-test/run.py", names)
+                burp = bundle.read("Report-Generator-test/report_generator_burp.py")
+                launcher = bundle.read("Report-Generator-test/app/init.py")
+        self.assertIn("Report-Generator-test/app/init.py", names)
         self.assertIn("Report-Generator-test/report_generator_burp.py", names)
-        self.assertEqual(shipped, BURP_FILE.read_bytes(), "the shipped extension is the repository's file, byte for byte")
+        self.assertNotIn("Report-Generator-test/run.py", names, "one launcher only, where testers are told to find it")
+        self.assertEqual(burp, BURP_FILE.read_bytes(), "the shipped extension is the repository's file, byte for byte")
+        self.assertEqual(launcher, (REPO / "app" / "init.py").read_bytes())
         for name in names:
             top = name.split("/", 2)[1] if name.count("/") >= 1 else ""
             self.assertNotIn(top, {"data", "generated", "burp", "tests"}, f"{name} must not ship")

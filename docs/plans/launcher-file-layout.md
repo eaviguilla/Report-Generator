@@ -1,7 +1,7 @@
 # Move the launcher into app/ and the Burp file to the root
 
-> **Status:** in progress · 2026-09-30 · built and tested (248 Python tests pass, 4 skipped: three need Java, one
-> needs Word). Becomes `shipped`, with the commit, when it is pushed.
+> **Status:** shipped · 2026-09-30 · `f53eef5` (248 Python tests pass, 4 skipped: three need Java, one
+> needs Word).
 >
 > **What deviated.**
 > - Two more launcher tests than planned besides Step 3's pin: `test_data_status_runs_from_any_folder…` and the

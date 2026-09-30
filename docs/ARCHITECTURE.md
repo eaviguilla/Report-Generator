@@ -183,15 +183,17 @@ restart.
 | `VULNREPORT_MAX_IMAGE_PIXELS` | 40000000 |
 | `VULNREPORT_MAX_REPORT_EVIDENCE_BYTES` | 250 MB |
 | `VULNREPORT_LIBRARY_EDITOR` | unset; set it to mount `/library-editor` |
-| `VULNREPORT_DATA_DIR` | unset, meaning `data/` in the project; the tests point it at a temporary folder |
+| `VULNREPORT_DATA_DIR` | unset, meaning `data/` in the project; the tests point it at a temporary folder. `run.py` reads it too (to lock the folder) and resolves a relative value once |
+| `VULNREPORT_STARTED_BY_BURP` | unset; the Burp extension sets it to `1`. `run.py` then stops when its input closes, opens no browser, and passes its pipes to child processes |
 
 Two browser-side values are read off `window` rather than the environment:
 `VULNREPORT_AUTOSAVE_IDLE_MS` and its older alias `VULNREPORT_AUTOSAVE_INTERVAL_MS` (default 5000 ms,
 floor 100 ms).
 
 The vulnerability library path comes from `prefs.library_path`. A relative value resolves against the
-project root. When that path is not a file the loader falls back to `resources/vuln_library.json`,
-creating the directory and seeding the file if it is missing.
+project root. When the file is missing or invalid, `Library.load_or_empty` starts the app with an empty
+library and records why in `library.load_error`; the reason is printed at startup (in the Burp tab, when
+started from there). Reports still open, save and generate.
 
 ## Development and tests
 
@@ -208,3 +210,25 @@ On Windows use `py -3` in place of `.venv/bin/python`. Tests run against a tempo
 Chromium per run and run in parallel chunks. Which tests to run for a given change, and how tests are
 written, are set out in `.github/copilot-instructions.md` (*Running tests in this repo*) and
 `.github/instructions/tests.instructions.md`.
+
+## Starting from Burp
+
+`report_generator_burp.py`, at the top of a release folder beside `run.py`, is a single Jython 2.7
+extension for Burp's legacy Extender API. It is only a launcher: a tab with Start, Stop / Force stop,
+Open and the app's output. Start runs the tester's Python 3 on `run.py` exactly as a console start does,
+so the server, the page and `data/` are unchanged. It prints the folder, the command and the address, and
+hides nothing.
+
+- **Stop** closes the server's input. `run.py` sees the end of input and asks uvicorn to shut down, so
+  running requests, including a report being generated, finish. **Force stop** kills the process tree and
+  is the only stop that can cut a save short (`docs/DATA_MAP.md` §3).
+- **One server per data folder.** `run.py` takes a lock in the data folder; a second Start says where the
+  first is running.
+- **New release.** On the first Start in a folder with no reports the tab offers *Bring reports over*,
+  which runs `run.py --bring-over <previous folder>`: the previous `data/` is renamed into this folder, and
+  the previous `.venv` is copied and checked. Or *Start fresh*.
+- **The port** is still the first free one from 8765. Unsaved browser work is tied to the port, so it comes
+  back only when the app runs on the same one (`docs/DATA_MAP.md` §13).
+- **Checks.** `tests/test_launcher.py` covers `run.py`, and runs the extension's Jython self-checks when
+  Java and a Jython jar (`VULNREPORT_JYTHON_JAR`) are available. What only Burp can show is settled by the
+  checklist in `docs/plans/burp-extension-launcher.md`.

@@ -2,6 +2,11 @@
 data/apps/
 data/.locks/
 data/prefs.json
+# one server per data folder, and what moving data into a new release leaves behind
+data/server.lock
+data.before-move-*/
+generated.before-move-*/
+DATA-MOVED.txt
 # the handler rotates into .log.1, .log.2 and so on
 data/vulnreport-errors.log*
 

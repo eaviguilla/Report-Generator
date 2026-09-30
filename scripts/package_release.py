@@ -20,6 +20,10 @@ DIST = ROOT / "dist"
 # (tests/, scripts/, docs/, .git, .claude, graphify-out, requirements-dev.txt,
 # data/, generated/, ...) is dev-only and left behind.
 INCLUDE_FILES = ["run.py", "requirements.txt", "README.md"]
+# Shipped from a different place than it lives in the repository: the Burp extension works out the app
+# folder from its own location, so in a release it must sit beside run.py. It is a readable .py file:
+# nothing is compiled, downloaded or pinned to build it.
+RELEASE_ROOT_FILES = {"burp/report_generator_burp.py": "report_generator_burp.py"}
 INCLUDE_DIRS = ["app", "resources"]
 
 # Dev-only files that live inside an otherwise-shipped directory.
@@ -52,6 +56,8 @@ def build_release(name: str) -> Path:
 
     for filename in INCLUDE_FILES:
         shutil.copy2(ROOT / filename, staging / filename)
+    for source, target in RELEASE_ROOT_FILES.items():
+        shutil.copy2(ROOT / source, staging / target)
     for dirname in INCLUDE_DIRS:
         shutil.copytree(ROOT / dirname, staging / dirname, ignore=_ignore)
 

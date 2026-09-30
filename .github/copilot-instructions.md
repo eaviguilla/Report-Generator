@@ -17,6 +17,11 @@ document matching the house template. No database, no frontend framework, no bui
   splices in the small component documents under `resources/`; `app/docx_captions.py` makes real
   caption fields and drives Word itself (Windows + Word + `pywin32` only);
   `app/docx_import.py` reads a finished report back into a draft.
+- **Burp launcher:** `burp/report_generator_burp.py` is one Jython 2.7 file on Burp's legacy Extender API that starts and
+  stops `run.py` from a Burp tab (in a release it sits beside `run.py`). `run.py` holds the launcher's half: one server per
+  data folder (a lock), `--data-status`, `--bring-over`, and stop at end of input. Checked by `tests/test_launcher.py`
+  (its Jython self-checks run when `java` and `VULNREPORT_JYTHON_JAR` are available; a Python 2.7 syntax test always runs)
+  and by the checklist in `docs/plans/burp-extension-launcher.md`.
 - **Library:** `resources/vuln_library.json`, read by `app/library.py`; the editor at
   `/library-editor` (`app/library_editor.py`) mounts only when `VULNREPORT_LIBRARY_EDITOR` is set.
 - **Data:** `data/apps/<app>/<month>_<type>_<id>/draft.json` + `draft.bak.json` + `evidence/*.png`.
@@ -139,6 +144,7 @@ A change to docs, comments or instructions alone needs nothing, and the script s
 | one page template | that page's tests |
 | CSS, `dialog.js`, `theme.js`, `diagnostics.js`, shared partials, server code in `app/*.py`, `tests/support.py` | every browser test |
 | `app/docx_*.py`, `resources/*.docx` | the import and generate browser tests |
+| `run.py`, `burp/` | none; every Python test module runs, and `tests.test_launcher` is the one that matters |
 | `docs/`, `.github/`, `.claude/`, `*.md` | none |
 
 Each browser test's pages are read from the URLs and buttons in its own code, so there are no tags to

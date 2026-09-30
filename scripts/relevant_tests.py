@@ -59,6 +59,8 @@ FILE_PAGES: list[tuple[str, frozenset[str]]] = [
     ("tests/__init__.py", ALL_PAGES),
     ("requirements", ALL_PAGES),
     ("run.py", frozenset()),
+    (".gitignore", frozenset()),
+    ("burp/", frozenset()),  # the Burp launcher: covered by tests.test_launcher, which the all-Python tier runs
     ("scripts/", frozenset()),
 ]
 FILE_FEATURES = [("app/docx_", {"import", "generate"}), ("resources/", {"import", "generate"})]

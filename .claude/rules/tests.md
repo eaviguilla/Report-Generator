@@ -1,7 +1,9 @@
 ---
-description: "How tests are written here, so they stay fast, honest, and cheap to select."
-applyTo: "tests/**, scripts/relevant_tests.py"
+paths:
+  - "tests/**"
+  - "scripts/relevant_tests.py"
 ---
+<!-- Generated from .github/instructions/tests.instructions.md. Edit that file, not this one. -->
 
 # Writing tests
 

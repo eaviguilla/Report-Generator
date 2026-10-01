@@ -12,22 +12,24 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 - Lint: `.venv/bin/python -m pyflakes app scripts tests report_generator_burp.py`
 - Generate a report (Windows + Word only): `py -3 -m scripts.generate_report REPORT_ID`
 
-## Layout
-- `app/`: `main.py` routes, `report_service.py` provisioning and gates, `workspace.py` locking and folders, `storage.py` atomic writes, `models.py` schema, `docx_*.py` Word pipeline, `web/` templates and `static/app.js`
-- `resources/`: Word masters (`MAIN*.docx`), `fragments/`, `finding_types/`, `severity_titles/`, `vuln_library.json`
-- `scripts/` tools and the test selector, `tests/` unittest plus Playwright (`test_browser.py`), `docs/` contracts and `plans/`
-- `data/`: real drafts. Never delete or edit anything under it.
+## Where things are
+- How it works: `docs/ARCHITECTURE.md`. Data contract: `docs/DATA_MAP.md` (§12 rules that exist twice, §13 sharp edges). Routes: `docs/ROUTES.md`. Word tokens: `docs/DOCX_TEMPLATE.md`.
+- `data/` holds real drafts: never delete or edit anything under it. The Word masters are `resources/*.docx`.
+- Traps load by file path from `.claude/rules/`. Those files are generated from `.github/instructions/*.instructions.md` (the Copilot rules): edit the `.github` file, then run `.venv/bin/python scripts/sync_ai_rules.py`. `tests/test_ai_rules_sync.py` fails when they drift.
 
 ## Rules
 - Every bug fix gets a regression test. Before each test run, state its scope in one line; `relevant_tests.py` prints it.
 - Do not modify `resources/*.docx` or other binary templates without asking.
 - Word automation (`pythoncom`, `win32com`) stays in `app/docx_captions.py`; `msvcrt` stays behind its existing guards in `app/workspace.py` and `app/init.py`.
-- Changing `app/models.py`, `storage.py`, `workspace.py`, `report_service.py`, `main.py` or `app/web/static/app.js`: update `docs/DATA_MAP.md` in the same change. A new route goes in `docs/ROUTES.md`; a template or token change goes in `docs/DOCX_TEMPLATE.md`.
-- Implementing a `docs/plans/` document: update its status and deviations in the same change.
-- Fuller rules live in `.github/copilot-instructions.md` ("Implementing a plan", "Running tests in this repo", "Pushing changes"), `.github/instructions/data-layer.instructions.md` (before data-layer edits) and `tests.instructions.md` (before writing tests). Ignore its "Talking to me" section; my global style applies.
+- `docs/plans/` is 25 files of up to 3,400 lines each. Never Read one whole: `grep -n '^## '` it, then Read only `## Answers` and `## Agreed plan`. A plan is a dated record: trust the code and `docs/DATA_MAP.md` over it, and run `git log -S` on a symbol the plan adds before believing a `shipped` status.
+- Implementing a plan: update its status and deviations in the same change, and mark it `shipped` only with the commit that contains the change.
+- More process rules: `.github/copilot-instructions.md` ("Implementing a plan", "Running tests in this repo", "Pushing changes"). Ignore its "Talking to me" section; my global style applies.
 - `docs/FORM_STATE_PLAN.md` is superseded research, not the shipped design.
 
 ## Project memory
-- Durable notes (decisions, gotchas, architecture): `../brain/projects/Generator/`. Read `decisions.md` before changing architecture.
-- Code structure: use `graphify query`, `graphify path` and `graphify explain`, and read `graphify-out/GRAPH_REPORT.md`, before grepping the codebase.
+- Rationale and rejected options: `../brain/projects/Generator/decisions.md`. Read it before changing architecture instead of reading plans.
+- Code structure: use `graphify query`, `graphify path` and `graphify explain` (pass `--graph app/graphify-out/graph.json`), and read `app/graphify-out/GRAPH_REPORT.md`, before grepping the codebase.
 - Read nothing else in `../brain/`. Edit the vault only when I ask for notes.
+
+## Compact instructions
+When compacting, keep: the files changed and why, the last test command and its result, open plan steps, decisions made this session, and anything I said not to do. Drop file listings, search output and code that was explored but not used.

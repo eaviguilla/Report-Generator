@@ -1,7 +1,14 @@
 ---
-description: "Keeps docs/DATA_MAP.md accurate when the data layer changes, and lists the traps in these files."
-applyTo: "app/models.py, app/storage.py, app/workspace.py, app/report_service.py, app/main.py, app/library.py, app/web/static/app.js"
+paths:
+  - "app/models.py"
+  - "app/storage.py"
+  - "app/workspace.py"
+  - "app/report_service.py"
+  - "app/main.py"
+  - "app/library.py"
+  - "app/web/static/app.js"
 ---
+<!-- Generated from .github/instructions/data-layer.instructions.md. Edit that file, not this one. -->
 
 # Data layer change contract
 

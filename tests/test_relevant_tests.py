@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.relevant_tests import ALL_PAGES, DECLARATION, FILE_PAGES, REPORT_PAGES, ROOT, app_js_pages, browser_tags, changed_tests, parse_diff, parse_module
+from scripts.relevant_tests import ALL_PAGES, DECLARATION, FILE_PAGES, REPORT_PAGES, ROOT, RULE_SYNC_TEST, app_js_pages, browser_tags, changed_tests, parse_diff, parse_module, select, test_modules
 
 SAMPLE_TESTS = '''import unittest
 
@@ -122,6 +122,14 @@ class SelectorTests(unittest.TestCase):
         source = (ROOT / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
         names = {match[1] or match[2] for line in source.splitlines() if (match := DECLARATION.match(line))}
         self.assertLessEqual({"setup", "continuousEditor"}, names)
+
+    def test_a_change_to_the_instructions_or_their_claude_copies_selects_the_drift_test(self) -> None:
+        """.github/ and .claude/ otherwise select nothing, so this pair could drift unnoticed."""
+        modules = test_modules()
+        for path in (".github/instructions/tests.instructions.md", ".claude/rules/tests.md"):
+            self.assertEqual(select("affected", {path: None}, modules).python, {RULE_SYNC_TEST}, path)
+        for path in (".github/copilot-instructions.md", ".claude/settings.json", "CLAUDE.md"):
+            self.assertEqual(select("affected", {path: None}, modules).python, set(), f"{path} has no copy to compare")
 
 
 if __name__ == "__main__":

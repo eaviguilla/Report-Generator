@@ -6,9 +6,11 @@
       "Read(./dist/**)",
       "Read(./.venv/**)",
       "Read(./**/*.docx)",
-      "Read(./graphify-out/graph.json)",
-      "Read(./graphify-out/graph.html)",
-      "Read(./graphify-out/cache/**)"
+      "Read(./**/graphify-out/graph.json)",
+      "Read(./**/graphify-out/graph.html)",
+      "Read(./**/graphify-out/cache/**)",
+      "Edit(./data/**)",
+      "Write(./data/**)"
     ],
     "ask": [
       "Bash(*relevant_tests.py*--full*)"

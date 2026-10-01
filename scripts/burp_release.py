@@ -1,10 +1,13 @@
-"""Build a clean, user-facing release zip: no git, no dev tooling, no dev data.
+"""Build the Burp release zip: the local web app plus the Burp extension.
 
 Usage:
-    .venv/bin/python scripts/package_release.py [name]
+    .venv/bin/python scripts/burp_release.py [name]
 
 Copies only the runtime-required files into a staging folder, zips it, and
 writes the result to dist/<name>.zip (dist/ is a build output, gitignored).
+
+Fully independent of scripts/default_release.py (docs/plans/split-release-into-burp-and-default.md):
+nothing this ships should hint that a non-Burp build exists.
 """
 from __future__ import annotations
 
@@ -16,13 +19,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 
-# Everything a tester's machine needs to run the app. Anything not listed here
-# (tests/, scripts/, docs/, .git, .claude, graphify-out, requirements-dev.txt,
-# data/, generated/, ...) is dev-only and left behind.
-# report_generator_burp.py is the Burp extension: a readable .py file that works out the app folder from its own
-# location, so it sits at the top of the release exactly where it sits in the repository. The launcher itself,
-# app/init.py, ships with app/.
-INCLUDE_FILES = ["requirements.txt", "README.md", "report_generator_burp.py"]
+# Everything a tester's machine needs to run this build. Anything not listed here
+# (tests/, scripts/, docs/, .git, .claude, graphify-out, requirements-dev.txt, data/, generated/,
+# run.py, ...) is left behind. README-burp.md ships renamed to README.md: report_generator_burp.py
+# works out the app folder from its own location, so it sits at the top of the release exactly
+# where it sits in the repository.
+INCLUDE_FILES = {
+    "requirements.txt": "requirements.txt",
+    "README-burp.md": "README.md",
+    "report_generator_burp.py": "report_generator_burp.py",
+}
 INCLUDE_DIRS = ["app", "resources"]
 
 # Dev-only files that live inside an otherwise-shipped directory.
@@ -53,8 +59,8 @@ def build_release(name: str) -> Path:
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
 
-    for filename in INCLUDE_FILES:
-        shutil.copy2(ROOT / filename, staging / filename)
+    for source, target in INCLUDE_FILES.items():
+        shutil.copy2(ROOT / source, staging / target)
     for dirname in INCLUDE_DIRS:
         shutil.copytree(ROOT / dirname, staging / dirname, ignore=_ignore)
 
@@ -64,7 +70,7 @@ def build_release(name: str) -> Path:
 
 
 def main() -> int:
-    name = sys.argv[1] if len(sys.argv) > 1 else f"Report-Generator-{date.today():%Y-%m-%d}"
+    name = sys.argv[1] if len(sys.argv) > 1 else f"Report-Generator-Burp-{date.today():%Y-%m-%d}"
     DIST.mkdir(exist_ok=True)
     archive = build_release(name)
     print(archive)

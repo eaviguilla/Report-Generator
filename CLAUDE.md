@@ -9,7 +9,7 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 - Tests before done: `.venv/bin/python scripts/relevant_tests.py --affected --run`
 - One test: `.venv/bin/python -m unittest tests.test_browser -k conclusion`. Always `tests.MODULE` or the script; `discover -s tests` writes into the real `data/`.
 - Full suite (`--full`) only when I ask; it needs my approval.
-- Lint: `.venv/bin/python -m pyflakes app scripts tests report_generator_burp.py`
+- Lint: `.venv/bin/python -m pyflakes app scripts tests report_generator_burp.py run.py`
 - Generate a report (Windows + Word only): `py -3 -m scripts.generate_report REPORT_ID`
 
 ## Where things are

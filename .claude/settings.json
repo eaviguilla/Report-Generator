@@ -14,9 +14,6 @@
     ],
     "ask": [
       "Bash(*relevant_tests.py*--full*)"
-    ],
-    "additionalDirectories": [
-      "../brain"
     ]
   },
   "enabledPlugins": {

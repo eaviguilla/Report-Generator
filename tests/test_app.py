@@ -260,6 +260,19 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(renamed.status_code, 422)
         self.assertEqual(renamed.json()["detail"], 'Application name contains invalid character: "/" (slash)')
 
+    def test_rename_accepts_every_application_name_setup_accepts(self) -> None:
+        """The home-page rename kept its own, narrower character set, so it refused a name the Setup
+        page had already saved."""
+        report_id = self.new_report()
+        name = "Portal v1.2; EU"
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["app_name"] = name
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+
+        renamed = self.client.patch(f"/reports/{report_id}/name", json={"app_name": name})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, name)
+
     def test_additional_information_input_validation_rejects_unapproved_characters(self) -> None:
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)

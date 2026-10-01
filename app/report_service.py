@@ -4,22 +4,22 @@ import json
 import re
 import unicodedata
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
 from itertools import zip_longest
 from typing import Callable, Literal
 
-from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TableFragment, Vulnerability, resolve_tested_channels
+from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TableFragment, Vulnerability, resolve_tested_channels
 
-REPORT_TYPE_LABELS = {
-    "annual_pentest": "Annual Pentest",
-    "retest": "Retest",
-    "deployment_pentest": "Deployment Pentest",
-    "new_test": "New Test",
-}
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$")
 RESOLVED_REMEDIATION = "None, the vulnerability has been remediated."
+# Guidance left in library text, such as "(insert version here)"; generation refuses it.
+PLACEHOLDER_TEXT = re.compile(
+    r"\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here",
+    re.IGNORECASE,
+)
 CHARACTER_NAMES = {
     " ": "space", "\t": "tab", "\n": "line feed", "\r": "carriage return",
     "!": "exclamation mark", '"': "double quote", "#": "number sign", "$": "dollar sign",
@@ -125,27 +125,63 @@ def invalid_character_issue(
     return f"{label} contains invalid {noun}: {descriptions}"
 
 
-APP_NAME_SYMBOLS = "-:;.()"
-# Twin of componentScopeRule in app.js. A strict superset of the retired mobile set, so every value
-# that validated before still does; the backslash and brackets are what make an install path typable.
+# A strict superset of the retired mobile set, so every value that validated before still does; the
+# backslash and brackets are what make an install path typable.
 COMPONENT_SCOPE_SYMBOLS = "/,.;:()&'\"-_\\[]"
-# Twins of the Additional Information rules in app.js. Tickets carry no symbol at all: the GRIMPEN-
-# prefix belongs to the document, not to the stored value.
-TICKET_SYMBOLS = ""
-CVSS_SCORE_SYMBOLS = "."
-CVSS_VECTOR_SYMBOLS = "./:"
+
+
+@dataclass(frozen=True)
+class CharacterRule:
+    """What one free-text field may hold. app/vocabulary.py sends the same table to the browser."""
+
+    label: str
+    symbols: str
+    letters: bool = True
+    numbers: bool = True
+    spaces: bool = True
+    line_breaks: bool = False
+
+
+CHARACTER_RULES: dict[str, CharacterRule] = {
+    "app_name": CharacterRule("Application name", "-:;.()"),
+    "ci_number": CharacterRule("CI number", "-", spaces=False),
+    "bsn_number": CharacterRule("BSN number", "-", spaces=False),
+    "app_owner": CharacterRule("Application owner", "-", numbers=False),
+    "tester": CharacterRule("Tester", "-", numbers=False),
+    "test_time": CharacterRule("Time", ":/-"),
+    "user_role": CharacterRule("User role", "/-"),
+    "limitations": CharacterRule("Limitations", "/,.;:()&'\"-", line_breaks=True),
+    # A subset of Limitations, because the retest suggestion writes this name into that field.
+    "non_production_label": CharacterRule("Non-Production name", "/-"),
+    "component_scope": CharacterRule("Component scope", COMPONENT_SCOPE_SYMBOLS),
+    # No symbol at all: the GRIMPEN- prefix belongs to the document, not to the stored value.
+    "severity_review_tickets": CharacterRule("Severity Review Tickets", "", letters=False, spaces=False, line_breaks=True),
+    "cvss_score": CharacterRule("CVSS Score", ".", letters=False, spaces=False),
+    "cvss_vector": CharacterRule("CVSS Vector", "./:", spaces=False),
+}
+
+
+def character_issue(field: str, value: str, label: str | None = None, *, portable_names: bool = False) -> str | None:
+    """Check a value against its field's rule. `label` names a numbered or per-environment copy."""
+    rule = CHARACTER_RULES[field]
+    return invalid_character_issue(
+        label or rule.label,
+        value,
+        rule.symbols,
+        allow_letters=rule.letters,
+        allow_numbers=rule.numbers,
+        allow_spaces=rule.spaces,
+        allow_line_breaks=rule.line_breaks,
+        portable_names=portable_names,
+    )
 
 
 def setup_input_issues(engagement: Engagement) -> list[str]:
     """Return invalid Setup values without treating blank draft fields as errors."""
     issues = []
-    if engagement.app_name and (issue := invalid_character_issue("Application name", engagement.app_name, APP_NAME_SYMBOLS)):
-        issues.append(issue)
-    for label, value in (("CI number", engagement.ci_number), ("BSN number", engagement.bsn_number)):
-        if value and (issue := invalid_character_issue(label, value, "-", allow_spaces=False)):
-            issues.append(issue)
-    for label, value in (("Application owner", engagement.app_owner), ("Tester", engagement.tester)):
-        if value and (issue := invalid_character_issue(label, value, "-", allow_numbers=False)):
+    for field in ("app_name", "ci_number", "bsn_number", "app_owner", "tester"):
+        value = getattr(engagement, field)
+        if value and (issue := character_issue(field, value)):
             issues.append(issue)
     for environment in engagement.tested_environments:
         test_window = engagement.test_windows.get(environment)
@@ -154,21 +190,21 @@ def setup_input_issues(engagement: Engagement) -> list[str]:
         environment_label = "Production" if environment == "production" else "Non-Production"
         if test_window.start_date and test_window.end_date and test_window.start_date > test_window.end_date:
             issues.append(f"{environment_label} start date cannot be after its end date")
-        if test_window.test_time and (issue := invalid_character_issue(f"{environment_label} time", test_window.test_time, ":/-")):
+        if test_window.test_time and (issue := character_issue("test_time", test_window.test_time, f"{environment_label} time")):
             issues.append(issue)
     for index, account in enumerate(engagement.test_accounts, start=1):
-        if account.user_role and (issue := invalid_character_issue(f"User role {index}", account.user_role, "/-")):
+        if account.user_role and (issue := character_issue("user_role", account.user_role, f"User role {index}")):
             issues.append(issue)
         if account.username and account.username != "N/A" and not USERNAME_PATTERN.fullmatch(account.username):
             issue = invalid_character_issue(f"Username {index}", account.username, "._@\\-")
             issues.append(issue or f"Username {index} must start and end with a letter or number")
-    if engagement.limitations and (issue := invalid_character_issue("Limitations", engagement.limitations, "/,.;:()&'\"-", allow_line_breaks=True)):
+    if engagement.limitations and (issue := character_issue("limitations", engagement.limitations)):
         issues.append(issue)
     # Only when it can reach the document. An unticked Non-Production leaves the field disabled, and a
     # disabled input is exempt from browser validation, so checking it here would 422 a save the
     # client had no way to block.
     if "non_production" in engagement.tested_environments and engagement.non_production_label:
-        if issue := invalid_character_issue("Non-Production name", engagement.non_production_label, "/-"):
+        if issue := character_issue("non_production_label", engagement.non_production_label):
             issues.append(issue)
     return issues
 
@@ -179,25 +215,9 @@ def finding_input_issues(report: Report) -> list[str]:
     # report moving off Asia and back cannot strand a draft that no longer saves.
     issues = []
     for finding in report.vulnerabilities:
-        if finding.severity_review_tickets:
-            issue = invalid_character_issue(
-                "Severity Review Tickets",
-                finding.severity_review_tickets,
-                TICKET_SYMBOLS,
-                allow_letters=False,
-                allow_spaces=False,
-                allow_line_breaks=True,
-                portable_names=True,
-            )
-            if issue:
-                issues.append(issue)
-        if finding.cvss_score:
-            issue = invalid_character_issue("CVSS Score", finding.cvss_score, CVSS_SCORE_SYMBOLS, allow_letters=False, allow_spaces=False, portable_names=True)
-            if issue:
-                issues.append(issue)
-        if finding.cvss_vector:
-            issue = invalid_character_issue("CVSS Vector", finding.cvss_vector, CVSS_VECTOR_SYMBOLS, allow_spaces=False, portable_names=True)
-            if issue:
+        for field in ("severity_review_tickets", "cvss_score", "cvss_vector"):
+            value = getattr(finding, field)
+            if value and (issue := character_issue(field, value, portable_names=True)):
                 issues.append(issue)
     return issues
 
@@ -675,7 +695,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             for order, (value, description) in enumerate(cleaned):
                 if channel in COMPONENT_CHANNELS:
                     for label, text in ((scope_label, value), (f"{scope_label} description", description)):
-                        if issue := invalid_character_issue(label, text, COMPONENT_SCOPE_SYMBOLS):
+                        if issue := character_issue("component_scope", text, label):
                             raise ValueError(issue)
                 targets.append({"target_id": old.get((environment, channel, value), f"tgt_{uuid.uuid4().hex[:8]}"), "environment": environment, "channel": channel, "value": value, "description": description, "order": order})
     payload["scope_targets"] = targets

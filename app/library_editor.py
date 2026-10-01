@@ -15,6 +15,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from .library import Library, LibraryDocument
+from .vocabulary import client_vocabulary
 
 # Only the fragment types the proof-of-concept section already accepts on the Content page.
 STEP_TYPE = "numbered_list"
@@ -63,7 +64,8 @@ def register(app, library_path: Path, rebind) -> None:
             for entry in document["entries"]
         ]
         template = (Path(__file__).parent / "web" / "templates" / "library_editor.html").read_text(encoding="utf-8")
-        return HTMLResponse(template.replace("__ENTRIES__", json.dumps(entries)))
+        page = template.replace("__VOCABULARY__", json.dumps(client_vocabulary()))
+        return HTMLResponse(page.replace("__ENTRIES__", json.dumps(entries)))
 
     @app.put("/library-editor/entries/{library_id}")
     async def save_entry(library_id: str, request: Request):

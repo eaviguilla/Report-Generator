@@ -10,7 +10,8 @@ document matching the house template. No database, no frontend framework, no bui
 - **Server:** `app/main.py` (FastAPI routes) → `app/report_service.py` (provisioning, scope
   reconciliation, page gates) → `app/workspace.py` (locking, folders, load/save) →
   `app/storage.py` (atomic JSON writes). Schema is `app/models.py` (Pydantic, schema 1.4).
-- **Browser:** `app/web/templates/*.html` embed the report as JSON; `app/web/static/app.js` is the
+- **Browser:** `app/web/templates/*.html` embed the report as JSON, and every page also carries the
+  fixed lists and character rules from `app/vocabulary.py`; `app/web/static/app.js` is the
   whole client — `setup()` for Setup/Findings, `continuousEditor()` for Content, plus autosave,
   undo, and the 409 conflict flow. `manager.js` is the home page.
 - **Word pipeline:** `app/docx_report.py` picks one of four `resources/MAIN*.docx` masters and

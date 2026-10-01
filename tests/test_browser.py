@@ -7,6 +7,7 @@ import hashlib
 import threading
 import time
 import unittest
+from copy import deepcopy
 from datetime import date, datetime as RealDateTime
 from io import BytesIO
 from pathlib import Path
@@ -540,6 +541,23 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_label("Report Type").select_option("new_test")
         page.get_by_role("button", name="Next: Findings").click()
         page.wait_for_url("**/findings")
+
+    def test_pages_take_their_lists_from_the_served_vocabulary(self) -> None:
+        """No page keeps its own copy of a closed list, so a value or label that only the server adds
+        reaches the template's options and the script's selects alike."""
+        vocabulary = deepcopy(main.templates.env.globals["vocabulary"])
+        vocabulary["segments"].append("QA")
+        vocabulary["statuses"] = [[status, f"{label} (served)"] for status, label in vocabulary["statuses"]]
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        with patch.dict(main.templates.env.globals, {"vocabulary": vocabulary}):
+            page.goto(f"{self.base_url}/reports/{report_id}/setup")
+            self.assertEqual(page.get_by_label("Segment").locator("option").all_text_contents()[-1], "QA")
+            page.goto(f"{self.base_url}/reports/{report_id}/findings")
+            self.assertEqual(
+                page.get_by_label("Status", exact=True).locator("option").all_text_contents(),
+                [label for _, label in vocabulary["statuses"]],
+            )
 
     def test_mobile_scope_allows_names_and_rejects_unapproved_special_characters(self) -> None:
         page = self.page

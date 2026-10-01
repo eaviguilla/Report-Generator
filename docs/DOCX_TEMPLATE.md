@@ -171,7 +171,8 @@ their printed sections, engagement metadata, scope, Additional Information, and
 reachable evidence. It does not recover hidden source-draft state, original IDs,
 or original image upload metadata.
 
-Status round-trips on the printed label, so `STATUS_BY_LABEL` carries all five
+Status round-trips on the printed label. `STATUS_BY_LABEL` is the inverse of
+`STATUS_LABELS` in `app/models.py`, so it carries all five,
 including `"Closed": "closed"` — without it a generated Closed report imports as
 `open_previously_discovered` through `FALLBACK_STATUS`, which succeeds with one
 warning and is therefore easy to miss. A retest drops Closed findings exactly as
@@ -255,7 +256,7 @@ because the selection is `new_finding.docx` if `open_new` else
 five-section shape from its own `!= "open_new"` test. Neither side carries a
 `closed` arm, deliberately: adding one to either would make every Closed report
 this app writes a report it cannot read back. `STATUS_LABELS` in
-`app/docx_report.py` is the whole of the status contract on the way out — both
+`app/models.py` is the whole of the status contract on the way out — both
 call sites are bare subscripts, and the status cell is neither recoloured nor
 resized, so a fifth label was all the document needed.
 

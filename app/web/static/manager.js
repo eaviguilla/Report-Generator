@@ -1,5 +1,6 @@
 (() => {
   const diagnostics = window.VulnReportDiagnostics;
+  const vocabulary = JSON.parse(document.getElementById("vocabulary").textContent);
   const main = document.querySelector("main");
   window.vrPage.bindSkipLink(main);
   const rows = document.querySelector("#report-rows");
@@ -198,7 +199,7 @@
       }
       notices.push(...(summary.warnings || []), ...(summary.normalizations || []));
       const findingCount = summary.retained ?? 0;
-      const labels = {open_new:"Open New", open_previously_discovered:"Previously Discovered", open_resolved_on_non_prod:"Resolved on Non-Prod", resolved:"Resolved", closed:"Closed"};
+      const labels = Object.fromEntries(vocabulary.statuses);
       const statusCounts = Object.entries(summary.status_counts || {})
         .filter(([, count]) => count)
         .map(([key, count]) => `${count} ${labels[key] || key}`)

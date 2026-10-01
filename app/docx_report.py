@@ -42,19 +42,12 @@ from .docx_components import (
     replace_pattern_across_text_nodes,
     set_page_break_before,
 )
-from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS
-from .report_service import REPORT_TYPE_LABELS, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, setup_issues
+from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, STATUS_LABELS
+from .report_service import PLACEHOLDER_TEXT, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, setup_issues
 
 SEVERITY_ORDER = list(get_args(Severity))
 # Targets number from zero within each channel, so channel rank has to come first when ordering them.
 CHANNEL_ORDER = list(CHANNELS)
-STATUS_LABELS = {
-    "open_new": "Open (New)",
-    "open_previously_discovered": "Open (Previously Discovered)",
-    "open_resolved_on_non_prod": "Open (Resolved on Non-Prod)",
-    "resolved": "Resolved",
-    "closed": "Closed",
-}
 # Belongs to the document, never to the draft, so the stored value stays bare digits.
 SEVERITY_TICKET_PREFIX = "GRIMPEN-"
 PLAIN_METADATA_TOKENS = {"app-name", "app-owner", "tester-name", "report-name"}
@@ -66,10 +59,6 @@ UNRESOLVED_MARKERS = (
     "-step-2-here",
     "-images-and-caption-here",
     "brief-explanation-here",
-)
-PLACEHOLDER_TEXT = re.compile(
-    r"\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here",
-    re.IGNORECASE,
 )
 CELL_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
 SEVERITY_COMPONENT_FILES = {

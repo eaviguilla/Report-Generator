@@ -14,6 +14,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from io import BytesIO
+from typing import get_args
 
 from docx import Document
 from docx.opc.exceptions import OpcError, PackageNotFoundError
@@ -21,8 +22,8 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from PIL import Image, UnidentifiedImageError
 
-from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS
-from .report_service import REPORT_TYPE_LABELS, RESOLVED_REMEDIATION, content_types_for_status
+from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, Segment
+from .report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
 # renders one of every fragment type and fails if any of these stops identifying it.
@@ -50,14 +51,7 @@ BOILERPLATE = {
     "The following demonstrates the vulnerability:",
     SEVERITY_TICKET_LABEL,
 }
-STATUS_BY_LABEL = {
-    "Open (New)": "open_new",
-    "Open (Previously Discovered)": "open_previously_discovered",
-    "Open (Resolved on Non-Prod)": "open_resolved_on_non_prod",
-    "Resolved": "resolved",
-    "Closed": "closed",
-}
-LABEL_BY_STATUS = {status: label for label, status in STATUS_BY_LABEL.items()}
+STATUS_BY_LABEL = {label: status for status, label in STATUS_LABELS.items()}
 # A label this app does not know falls back to this rather than refusing the document, so a report
 # written by an older version or edited by hand still imports.
 FALLBACK_STATUS = "open_previously_discovered"
@@ -101,13 +95,13 @@ def _visible_value(value: str) -> str:
 TICKET_SEPARATORS = re.compile(r"[\r\n,;]+")
 TICKET_PREFIX = re.compile(r"^[A-Za-z]+-")
 def _valid_cvss_score(value: str) -> bool:
-    """Twin of the save rule: decimal digits and periods only."""
-    return bool(value) and all(character.isdecimal() or character == "." for character in value)
+    """The save rule itself, so no imported score fails the next save."""
+    return bool(value) and character_issue("cvss_score", value) is None
 
 
 def _valid_cvss_vector(value: str) -> bool:
-    """Twin of the save rule: letters, decimal digits, periods, slashes and colons only."""
-    return bool(value) and all(character.isalpha() or character.isdecimal() or character in "./:" for character in value)
+    """The save rule itself, so no imported vector fails the next save."""
+    return bool(value) and character_issue("cvss_vector", value) is None
 
 
 def _parsed_ticket_lines(text: str) -> tuple[str, list[str]]:
@@ -784,7 +778,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         if row["status_label"] not in STATUS_BY_LABEL:
             warnings.append(
                 f'"{row["title"]}" had an unrecognised status '
-                f'({row["status_label"] or "blank"}) and was imported as {LABEL_BY_STATUS[FALLBACK_STATUS]}.'
+                f'({row["status_label"] or "blank"}) and was imported as {STATUS_LABELS[FALLBACK_STATUS]}.'
             )
     body = list(document.element.body.iterchildren())
     summary_table = _find_table(document, "Findings")
@@ -900,7 +894,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         if section_order != expected_sections:
             raise ReportImportError(
                 f'"{title}" does not have the expected section structure for '
-                f'{row["status_label"] or LABEL_BY_STATUS[row["status"]]}.'
+                f'{row["status_label"] or STATUS_LABELS[row["status"]]}.'
             )
         if detail is None:
             raise ReportImportError(f'"{title}" has no finding detail table.')
@@ -1110,7 +1104,7 @@ def parse_report_docx(
     app_name, segment, report_type = "", None, None
     for paragraph in document.paragraphs[:20]:
         parts = [part.strip() for part in re.split(r"\s[\u2013\u2014-]\s", paragraph.text) if part.strip()]
-        if len(parts) >= 3 and parts[0] in ("JH", "GWAM", "Asia", "GDT", "GFT"):
+        if len(parts) >= 3 and parts[0] in get_args(Segment):
             segment, app_name = parts[0], " - ".join(parts[1:-1])
             label = re.sub(r"\s+\d{4}$", "", parts[-1])
             report_type = REPORT_TYPE_BY_LABEL.get(label)

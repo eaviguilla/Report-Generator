@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import get_args
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from docx import Document
 from docx.oxml.ns import qn
@@ -24,7 +24,7 @@ from pydantic import ValidationError
 from starlette.requests import ClientDisconnect
 
 from app import main
-from app import docx_import, docx_report, models, report_service
+from app import docx_import, docx_report, library_editor, models, report_service, vocabulary
 from app import library as library_module, storage as storage_module, workspace as workspace_module
 from app.docx_report import _finding_locations, _metadata, generation_issues
 from app.library import Library
@@ -546,7 +546,7 @@ class ReportApiTests(unittest.TestCase):
         the canonical order absorbs the new member without reordering the old ones."""
         self.assertEqual(models.CHANNELS, ("web", "api", "mobile", "thick_client"))
         self.assertEqual(models.COMPONENT_CHANNELS, ("mobile", "thick_client"))
-        # Twin of channelLabels in app.js. Every channel needs an entry or a message prints "undefined".
+        # The browser reads these labels from the vocabulary, so every channel needs one.
         self.assertEqual(sorted(models.CHANNEL_LABELS), sorted(models.CHANNELS))
 
         # A draft written before description existed still validates, and identity is unaffected.
@@ -572,14 +572,45 @@ class ReportApiTests(unittest.TestCase):
         models.normalise_scope_modes(mapping)
         self.assertEqual(mapping["vulnerabilities"][0]["scope"]["target_ids"], ["tgt_web", "tgt_mobile", "tgt_thick"])
 
-    def test_the_library_editor_offers_every_channel_the_model_knows(self) -> None:
-        """Third copy of the channel list, in a page that cannot import app.js. Drift here silently
-        drops a whole app type's saved steps on save, and no browser test loads that page."""
+    def test_every_page_embeds_the_served_vocabulary(self) -> None:
+        """The browser keeps no copy of a closed list, so every page must carry the server's."""
+        report = main.workspace.create_report()
+        report.engagement.app_name = "Vocabulary QA"
+        report.engagement.ci_number = "CI-VOCAB"
+        report.engagement.segment = "JH"
+        report.engagement.report_type = "annual_pentest"
+        report.engagement.tested_environments = ["production"]
+        report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
+        report.scope_targets = [ScopeTarget(target_id="tgt_vocab", environment="production", channel="web", value="https://prod.example.test")]
+        finding = Vulnerability(uid="v_vocab", title="Vocabulary finding", likelihood="low", impact="low", severity="low", status="open_new", scope={"mode": "custom", "target_ids": ["tgt_vocab"]})
+        provision(finding)
+        report.vulnerabilities = [finding]
+        main.workspace.save(report)
+
+        expected = vocabulary.client_vocabulary()
+        for path in ("/", *(f"/reports/{report.report_id}/{page}" for page in ("setup", "findings", "edit"))):
+            with self.subTest(path=path):
+                response = self.client.get(path, follow_redirects=False)
+                self.assertEqual(response.status_code, 200)
+                embedded = re.search(r'<script type="application/json" id="vocabulary">(.*?)</script>', response.text, re.S)
+                self.assertIsNotNone(embedded, "the page carries no vocabulary")
+                self.assertEqual(json.loads(embedded.group(1)), expected)
+
+    def test_the_library_editor_takes_its_lists_from_the_served_vocabulary(self) -> None:
+        """The editor page cannot load app.js, so it once kept a third copy of the channel list, and
+        drift there silently dropped a whole app type's saved steps on save. No browser test loads it."""
+        library_path = self.root / "library_for_editor.json"
+        library_path.write_text('{"entries": []}', encoding="utf-8")
+        editor = FastAPI()
+        library_editor.register(editor, library_path, lambda: None)
+        page = TestClient(editor).get("/library-editor")
+        self.assertEqual(page.status_code, 200)
+        embedded = re.search(r"const vocabulary = (\{.*?\});\n", page.text)
+        self.assertIsNotNone(embedded, "the editor carries no vocabulary")
+        self.assertEqual(json.loads(embedded.group(1)), vocabulary.client_vocabulary())
         template = (Path(main.__file__).parent / "web" / "templates" / "library_editor.html").read_text(encoding="utf-8")
-        variants = re.search(r"const variants = \[(.*?)\]", template).group(1)
-        for channel in models.CHANNELS:
-            self.assertIn(f'"{channel}"', variants)
-            self.assertIn(f'id="poc_{channel}"', template)
+        for spelled in ('"thick_client"', 'id="poc_', '"informational"'):
+            self.assertNotIn(spelled, template, "the editor page spells out a list the vocabulary owns")
 
     def test_workflow_routes_enforce_setup_and_finding_gates(self) -> None:
 
@@ -2170,11 +2201,16 @@ class ReportApiTests(unittest.TestCase):
     def test_every_status_has_a_label_the_importer_can_read_back(self) -> None:
         """A status with no printed label is a KeyError on the generate path, and a label the
         importer does not know silently downgrades the finding on the way back in."""
-        members = set(get_args(models.Status))
-        self.assertEqual(set(docx_report.STATUS_LABELS), members)
-        self.assertEqual(set(docx_import.LABEL_BY_STATUS), members)
-        for status in members:
-            self.assertEqual(docx_import.LABEL_BY_STATUS[status], docx_report.STATUS_LABELS[status])
+        self.assertEqual(set(models.STATUS_LABELS), set(get_args(models.Status)))
+        for status, label in models.STATUS_LABELS.items():
+            self.assertEqual(docx_import.STATUS_BY_LABEL[label], status)
+
+    def test_every_report_type_has_a_label_the_importer_can_read_back(self) -> None:
+        """The label is printed in the title line and read back from it, so a report type without one
+        prints "N/A" and an editable import of it fails."""
+        self.assertEqual(set(models.REPORT_TYPE_LABELS), set(get_args(models.ReportType)))
+        for report_type, label in models.REPORT_TYPE_LABELS.items():
+            self.assertEqual(docx_import.REPORT_TYPE_BY_LABEL[label], report_type)
 
     def test_an_emptied_conclusion_paragraph_is_not_refilled(self) -> None:
         """The app used to claim the first text-less paragraph, which wrote boilerplate above a

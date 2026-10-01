@@ -1,6 +1,7 @@
 (() => {
   const root = document.querySelector("main[data-report]");
   if (!root) return;
+  const vocabulary = JSON.parse(document.getElementById("vocabulary").textContent);
   const diagnostics = window.VulnReportDiagnostics;
   window.vrPage.bindSkipLink(root);
   const serverReport = JSON.parse(root.dataset.report);
@@ -8,7 +9,7 @@
   delete serverReport._unicode_character_ranges;
   let report = serverReport;
   const reportId = report.report_id;
-  const reportTypeLabels = {annual_pentest:"Annual Pentest", retest:"Retest", deployment_pentest:"Deployment Pentest", new_test:"New Test"};
+  const reportTypeLabels = Object.fromEntries(vocabulary.report_types);
   // The header names the engagement only once both halves are saved; a missing half falls back.
   // Each fact gets its own chip: the old hyphen-joined string was unreadable against an application
   // name that contains hyphens of its own.
@@ -109,14 +110,13 @@
   let previousReport = clone(report);
   let activeTextTransaction = null;
   const library = JSON.parse(root.dataset.library || "[]");
-  const severity = ["critical", "high", "medium", "low", "informational"];
-  const statuses = [["open_new", "Open (New)"], ["open_previously_discovered", "Open (Previously Discovered)"], ["open_resolved_on_non_prod", "Open (Resolved on Non-Prod)"], ["resolved", "Resolved"], ["closed", "Closed"]];
+  const severity = vocabulary.severities;
+  const statuses = vocabulary.statuses;
   const contentNames = {description:"Description", recommended_remediation:"Recommended Remediation", previous_proof_of_concept:"Previous Proof of Concept", proof_of_concept:"Proof of Concept", in_conclusion:"In Conclusion", additional_information:"Additional Information"};
   const allowed = {description:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], recommended_remediation:["paragraph","numbered_list","bulleted_list","image","table","note","code_block"], previous_proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], proof_of_concept:["numbered_list","image","bulleted_list","instance_title","note","code_block"], in_conclusion:["paragraph","note"]};
   // Twin of docx_report.generation_issues; these carry the finding, so none is ever left empty.
   const requiresFragment = ["description", "recommended_remediation", "in_conclusion"];
-  // Twin of report_service.RESOLVED_REMEDIATION.
-  const RESOLVED_REMEDIATION = "None, the vulnerability has been remediated.";
+  const RESOLVED_REMEDIATION = vocabulary.resolved_remediation;
   // Twin of report_service.status_conclusion_runs and STATUS_CONCLUSION_PATTERN. The builder and the
   // recogniser must stay a pair: relax one and every default on disk freezes at its stored title.
   const statusConclusionWord = status => status === "resolved" ? "Resolved" : status === "closed" ? "CLOSED" : "Open";
@@ -992,14 +992,24 @@
     const invalidCharacters = value => [...new Set([...value].filter(character => !allowed.test(character)))];
     return {label, invalidCharacters, valid:value => !invalidCharacters(value).length};
   };
-  const serverCharacterRule = (label, {letters=false, numbers=false, symbols="", lineBreaks=false}) => characterRule(label, {
+  // Built from the server's CHARACTER_RULES, judging letters and digits by the browser's own Unicode
+  // categories. Setup has always worked this way; the Content page uses serverCharacterRule instead.
+  const browserCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
+    test: character => (letters && /\p{L}/u.test(character))
+      || (numbers && /\p{Nd}/u.test(character))
+      || (spaces && character === " ")
+      || (line_breaks && (character === "\r" || character === "\n"))
+      || symbols.includes(character),
+  });
+  const serverCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
     test: character => {
       const codePoint = character.codePointAt(0);
       const inRanges = ranges => (ranges || []).some(([first, last]) => codePoint >= first && codePoint <= last);
       return (letters && inRanges(unicodeCharacterRanges.letters))
         || (numbers && inRanges(unicodeCharacterRanges.decimals))
-        || symbols.includes(character)
-        || (lineBreaks && (character === "\r" || character === "\n"));
+        || (spaces && character === " ")
+        || (line_breaks && (character === "\r" || character === "\n"))
+        || symbols.includes(character);
     },
   });
   const showRuleState = (input, invalid, marker) => {
@@ -1184,13 +1194,11 @@
     return environments;
   };
   const affectedEnvironments = finding => scopeEnvironments(finding.scope);
-  // Twin of models.CHANNELS; the one canonical app-type order on this side.
-  const CHANNELS = ["web", "api", "mobile", "thick_client"];
-  // Twin of models.CHANNEL_LABELS.
-  const channelLabels = {web:"Web", api:"API", mobile:"Mobile", thick_client:"Thick Client"};
-  // Twin of models.COMPONENT_CHANNELS: scoped as a named component plus a description, and mutually
-  // exclusive with each other.
-  const COMPONENT_CHANNELS = ["mobile", "thick_client"];
+  // The one canonical app-type order on this side.
+  const CHANNELS = vocabulary.channels.map(([channel]) => channel);
+  const channelLabels = Object.fromEntries(vocabulary.channels);
+  // Scoped as a named component plus a description, and mutually exclusive with each other.
+  const COMPONENT_CHANNELS = vocabulary.component_channels;
   const isComponentChannel = channel => COMPONENT_CHANNELS.includes(channel);
   // scope_text holds a string for a location channel and {component, description} for a component
   // one. Reading through these keeps every call site out of the business of knowing which.
@@ -1464,37 +1472,34 @@
   // Initializes the setup page's engagement metadata, coverage, and scope controls.
   function setup() {
     const environmentLabels = {production:"Production", non_production:"Non-Production"};
-    // Twin of models.NON_PRODUCTION_LABEL_PRESETS. OTHERS is a UI affordance and is never stored.
-    const nonProductionLabels = ["NON-PROD", "MOD", "UAT", "STAGE"];
+    // OTHERS is a UI affordance and is never stored.
+    const nonProductionLabels = vocabulary.non_production_label_presets;
     const OTHERS_OPTION = "OTHERS";
     // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
     let typingCustomLabel = false;
     // The space sits first inside the class so the trailing hyphen cannot become a range.
     const usernameCharacters = characterRule("Username", /^[ A-Za-z0-9._@\\-]$/);
-    // Twin of report_service.COMPONENT_SCOPE_SYMBOLS. A strict superset of the retired mobile set,
-    // so nothing that validated before is rejected now; the backslash and brackets are what make an
-    // install path typable. Applied to component channels only -- a URL carries ? and =.
-    const componentScopeCharacters = characterRule("Component scope", /^[\p{L}\p{Nd} \/,.;:()&'"\-_\\\[\]]$/u);
+    // Applied to component channels only -- a URL carries ? and =.
+    const componentScopeCharacters = browserCharacterRule(vocabulary.character_rules.component_scope);
     const componentScopeInvalidCharacters = value => componentScopeCharacters.invalidCharacters(
       value.split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith("#")).join("")
     );
     const componentScopeRule = {
-      label:"Component scope",
+      label:componentScopeCharacters.label,
       invalidCharacters:componentScopeInvalidCharacters,
       valid:value => !componentScopeInvalidCharacters(value).length,
     };
+    const setupRule = field => browserCharacterRule(vocabulary.character_rules[field]);
     const setupRules = {
-      app_name: characterRule("Application name", /^[\p{L}\p{Nd} :;.()\-]$/u),
-      ci_number: characterRule("CI number", /^[\p{L}\p{Nd}-]$/u),
-      bsn_number: characterRule("BSN number", /^[\p{L}\p{Nd}-]$/u),
-      app_owner: characterRule("Application owner", /^[\p{L} \-]$/u),
-      tester: characterRule("Tester", /^[\p{L} \-]$/u),
-      limitations: characterRule("Limitations", /^[\p{L}\p{Nd} /,.;:()&'"\-\r\n]$/u),
-      time: characterRule("Time", /^[\p{L}\p{Nd} :/\-]$/u),
-      userRole: characterRule("User role", /^[\p{L}\p{Nd} /\-]$/u),
-      // Deliberately a subset of the Limitations set: the retest suggestion writes this label into
-      // Limitations, and a character legal here but not there would 422 the save that accepts it.
-      non_production_label: characterRule("Non-Production name", /^[\p{L}\p{Nd} /\-]$/u),
+      app_name: setupRule("app_name"),
+      ci_number: setupRule("ci_number"),
+      bsn_number: setupRule("bsn_number"),
+      app_owner: setupRule("app_owner"),
+      tester: setupRule("tester"),
+      limitations: setupRule("limitations"),
+      time: setupRule("test_time"),
+      userRole: setupRule("user_role"),
+      non_production_label: setupRule("non_production_label"),
       username: {...usernameCharacters, valid:value => !value || value === "N/A" || /^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/.test(value), message:label => `${label} must start and end with a letter or number`},
     };
     const setupNotice = document.querySelector("#setup-validation-note");
@@ -3451,11 +3456,11 @@
       const fields = [];
       if (finding.status !== "open_new") fields.push({
         key:"severity_review_tickets", label:"Severity Review Tickets", multiline:true,
-        placeholder:"One ticket number per line", rule:serverCharacterRule("Severity Review Tickets", {numbers:true, lineBreaks:true}),
+        placeholder:"One ticket number per line", rule:serverCharacterRule(vocabulary.character_rules.severity_review_tickets),
       });
       if (report.engagement.segment === "Asia") {
-        fields.push({key:"cvss_score", label:"CVSS Score", placeholder:"For example 9.8", rule:serverCharacterRule("CVSS Score", {numbers:true, symbols:"."})});
-        fields.push({key:"cvss_vector", label:"CVSS Vector", placeholder:"For example CVSS:3.1/AV:N/AC:L/PR:N", rule:serverCharacterRule("CVSS Vector", {letters:true, numbers:true, symbols:"./:"})});
+        fields.push({key:"cvss_score", label:"CVSS Score", placeholder:"For example 9.8", rule:serverCharacterRule(vocabulary.character_rules.cvss_score)});
+        fields.push({key:"cvss_vector", label:"CVSS Vector", placeholder:"For example CVSS:3.1/AV:N/AC:L/PR:N", rule:serverCharacterRule(vocabulary.character_rules.cvss_vector)});
       }
       return fields;
     };
@@ -3475,7 +3480,7 @@
       const count = document.querySelector("#issue-count");
       if (!panel || !count) return [];
       const hasText = runs => Array.isArray(runs) && runs.some(run => run.text?.trim());
-      const placeholderPattern = /\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here/i;
+      const placeholderPattern = new RegExp(vocabulary.placeholder_pattern.source, vocabulary.placeholder_pattern.flags);
       const fragmentText = fragment => {
         if (fragment.runs) return fragment.runs.map(run => run.text).join("");
         if (fragment.items) return fragment.items.flatMap(item => item.runs).map(run => run.text).join(" ");

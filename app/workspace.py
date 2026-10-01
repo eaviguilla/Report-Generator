@@ -13,8 +13,8 @@ from typing import Iterator
 
 from pydantic import ValidationError
 
-from app.models import Engagement, FolderHint, Report, normalise_scope_modes
-from .report_service import INVALID_FILENAME_CHARACTERS, REPORT_TYPE_LABELS, RESOLVED_REMEDIATION
+from app.models import REPORT_TYPE_LABELS, Engagement, FolderHint, Report, normalise_scope_modes
+from .report_service import INVALID_FILENAME_CHARACTERS, RESOLVED_REMEDIATION
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 
 RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}

@@ -27,8 +27,9 @@ from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, main_template_path, render_report_docx
 from .library import Library
 from .docx_import import ReportImportLimitError, parse_report_docx
-from .report_service import APP_NAME_SYMBOLS, applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, finding_input_issues, finding_is_complete, invalid_character_issue, provision, reconcile_targets, report_export_filename, scope_text_from_targets, setup_input_issues, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
+from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_input_issues, finding_is_complete, provision, reconcile_targets, report_export_filename, scope_text_from_targets, setup_input_issues, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
 from .storage import atomic_write_bytes
+from .vocabulary import client_vocabulary
 from .workspace import StaleReportError, Workspace, app_id_for
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +62,8 @@ class _AssetVersion:
 
 
 templates.env.globals["asset_v"] = _AssetVersion()
+# Rendered by _vocabulary.html, which every app page includes.
+templates.env.globals["vocabulary"] = client_vocabulary()
 logger = logging.getLogger(__name__)
 ERROR_LOG_PATH = DATA / "vulnreport-errors.log"
 # Shown to the tester as-is; relative only when the data folder sits inside the project.
@@ -707,7 +710,7 @@ async def rename_report(report_id: str, request: Request):
     if not isinstance(name, str) or not name.strip():
         raise HTTPException(422, "Enter an application name")
     name = name.strip()
-    if issue := invalid_character_issue("Application name", name, APP_NAME_SYMBOLS):
+    if issue := character_issue("app_name", name):
         raise HTTPException(422, issue)
     report.engagement.app_name = name
     if report.app_id == "unnamed":

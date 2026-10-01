@@ -57,7 +57,7 @@ A local-only library editor mounts when `VULNREPORT_LIBRARY_EDITOR` is set **and
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/library-editor` | Editor page with every library entry embedded |
+| GET | `/library-editor` | Editor page with every library entry and the vocabulary embedded |
 | POST | `/library-editor/entries` | Create an entry |
 | PUT | `/library-editor/entries/{library_id}` | Save an entry |
 | DELETE | `/library-editor/entries/{library_id}` | Delete an entry |

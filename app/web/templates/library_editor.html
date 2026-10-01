@@ -140,12 +140,7 @@
       <section aria-labelledby="poc-heading">
         <h2 id="poc-heading">Proof of concept steps</h2>
         <p class="muted">One step per line. Leave an app type empty when it has no saved steps.</p>
-        <div class="grid fields poc-fields">
-          <label>Web<textarea id="poc_web"></textarea></label>
-          <label>API<textarea id="poc_api"></textarea></label>
-          <label>Mobile<textarea id="poc_mobile"></textarea></label>
-          <label>Thick Client<textarea id="poc_thick_client"></textarea></label>
-        </div>
+        <div class="grid fields poc-fields" id="poc-fields"></div>
       </section>
     </form>
   </div>
@@ -153,14 +148,21 @@
 </main>
 <script src="/static/dialog.js"></script>
 <script>
+  const vocabulary = __VOCABULARY__;
   const entries = __ENTRIES__;
-  const severities = ["", "critical", "high", "medium", "low", "informational"];
-  // Third copy of models.CHANNELS: this page cannot import app.js. Drift here silently drops a
-  // whole app type's saved steps on save.
-  const variants = ["web", "api", "mobile", "thick_client"];
+  const severities = ["", ...vocabulary.severities];
+  const variants = vocabulary.channels.map(([channel]) => channel);
   const field = name => document.querySelector(`#${name}`);
   const status = field("status");
   let current = null;
+
+  vocabulary.channels.forEach(([channel, label]) => {
+    const box = document.createElement("label");
+    const steps = document.createElement("textarea");
+    steps.id = `poc_${channel}`;
+    box.append(label, steps);
+    field("poc-fields").append(box);
+  });
 
   severities.forEach(value => ["default_likelihood", "default_impact", "default_severity"].forEach(name => {
     field(name).append(new Option(value || "(none)", value));

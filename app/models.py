@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["critical", "high", "medium", "low", "informational"]
 Status = Literal["open_new", "open_previously_discovered", "open_resolved_on_non_prod", "resolved", "closed"]
+# Printed in the document and read back by docx_import, so each label must stay unique.
+STATUS_LABELS: dict[Status, str] = {
+    "open_new": "Open (New)",
+    "open_previously_discovered": "Open (Previously Discovered)",
+    "open_resolved_on_non_prod": "Open (Resolved on Non-Prod)",
+    "resolved": "Resolved",
+    "closed": "Closed",
+}
 Environment = Literal["production", "non_production"]
 Channel = Literal["web", "api", "mobile", "thick_client"]
 # The one canonical app-type order. Lives here because docx_report and report_service both import
@@ -16,8 +24,8 @@ CHANNELS: tuple[Channel, ...] = ("web", "api", "mobile", "thick_client")
 # App types scoped as a named component plus a description rather than as a list of locations.
 # Mutually exclusive with each other: one report describes one kind of binary.
 COMPONENT_CHANNELS: tuple[Channel, ...] = ("mobile", "thick_client")
-# Twin of channelLabels in app.js. Both sides name a channel in prose the tester reads, so a
-# channel added to one table and not the other prints "undefined" in a message or a checkbox.
+# app/vocabulary.py sends this table to the browser, so a channel without a label fails at import
+# instead of printing "undefined" in a message or a checkbox.
 CHANNEL_LABELS: dict[Channel, str] = {"web": "Web", "api": "API", "mobile": "Mobile", "thick_client": "Thick Client"}
 RETIRED_SCOPE_MODES = ("all", "all_production", "all_non_production")
 # The retired compound token set, kept only to read drafts written before app types became a list.
@@ -31,6 +39,12 @@ NON_PRODUCTION_LABEL_PRESETS: tuple[str, ...] = ("NON-PROD", "MOD", "UAT", "STAG
 LEGACY_NON_PRODUCTION_LABELS: tuple[str, ...] = ("TEST/MO", "DEV")
 Segment = Literal["JH", "GWAM", "Asia", "GDT", "GFT"]
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
+REPORT_TYPE_LABELS: dict[ReportType, str] = {
+    "annual_pentest": "Annual Pentest",
+    "retest": "Retest",
+    "deployment_pentest": "Deployment Pentest",
+    "new_test": "New Test",
+}
 NetworkAccess = Literal["Internal", "External"]
 ContentType = Literal["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"]
 StableId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]

@@ -413,24 +413,20 @@ resolved.
 
 ## Component composition
 
-`scripts/compose_component_test.py` demonstrates the component architecture:
+`scripts/compose_component_test.py` builds two image-caption proofs from the caption
+fragment document (`clone_component_elements`, which the renderer also uses):
 
-- `resources/MAIN.docx` supplies the complete report shell.
-- Severity components are inserted in Critical, High, Medium, Low,
-  Informational order and begin on new pages.
 - Finding-type and fragment documents retain their paragraph styles, direct run
-  formatting, tables, and list numbering.
+  formatting, tables, and list numbering when cloned into a report.
 - Component paragraph styles must already exist in the main template.
 - Evidence images are embedded by the renderer; their captions use the caption
   fragment document.
 
-Run the proof with:
+Run the proofs with:
 
 ```powershell
 py -3 -m scripts.compose_component_test
 ```
 
-It creates `generated/MAIN-composed.docx` and
-`generated/retest-finding-composed.docx`. The first proof populates only the
-findings anchor; other metadata placeholders in `MAIN.docx` intentionally
-remain unchanged.
+It creates `generated/image-caption-test.docx` and
+`generated/native-image-caption-test.docx`.

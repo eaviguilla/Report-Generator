@@ -508,15 +508,6 @@ def default_conclusion_span(text: str) -> tuple[int, int] | None:
     return None
 
 
-def default_conclusion_start(text: str) -> int | None:
-    """Where the app's own sentence begins, if the paragraph still ends with it.
-
-    The quoted proof-of-concept step shares this paragraph and sits in front, so the sentence is a
-    tail rather than the whole text. Twin of defaultConclusionStart in app.js."""
-    span = default_conclusion_span(text)
-    return span[0] if span is not None and span[1] == len(text.rstrip()) else None
-
-
 def is_default_status_conclusion(fragment: ParagraphFragment) -> bool:
     """Whether the paragraph is nothing but the app's sentence, with no tester text in front."""
     text = "".join(run.text for run in fragment.runs)

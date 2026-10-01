@@ -609,6 +609,42 @@ class DocxReportTests(unittest.TestCase):
             everything = "\n".join([*(p.text for p in rendered.paragraphs), *(c.text for t in rendered.tables for r in t.rows for c in r.cells)])
             self.assertNotIn("v_unnumbered", everything)
 
+    def test_each_severity_section_and_each_later_finding_starts_on_a_new_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            (report_folder / "evidence").mkdir()
+            (report_folder / "evidence" / "ev_pages.png").write_bytes(png_bytes(40, 20))
+            now = datetime.now().astimezone()
+            report = Report(
+                report_id="r_pages", app_id="CI-DOCX", saved_at=now,
+                engagement=Engagement(
+                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web"],
+                    test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
+                ),
+                scope_targets=[ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test")],
+                evidence={"ev_pages": EvidenceItem(file="evidence/ev_pages.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)},
+            )
+            image = lambda uid: [ImageFragment(frag_id=f"{uid}_img", type="image", environment="production", evidence_id="ev_pages", caption="Production response")]
+            report.vulnerabilities = [
+                self._finding("v_low", "Low finding", "low", "003", ["t_web"], image("v_low")),
+                self._finding("v_high_b", "Beta high finding", "high", "002", ["t_web"], image("v_high_b")),
+                self._finding("v_critical", "Critical finding", "critical", "001", ["t_web"], image("v_critical")),
+                self._finding("v_high_a", "Alpha high finding", "high", "004", ["t_web"], image("v_high_a")),
+            ]
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
+
+            paragraphs = {paragraph.text: paragraph for paragraph in rendered.paragraphs}
+            texts = [paragraph.text for paragraph in rendered.paragraphs]
+            headings = ["Critical Findings", "High Findings", "Low Findings"]
+            self.assertEqual([texts.index(heading) for heading in headings], sorted(texts.index(heading) for heading in headings))
+            for heading in headings:
+                with self.subTest(heading=heading):
+                    self.assertIsNotNone(paragraphs[heading]._p.pPr.pageBreakBefore)
+            self.assertLess(texts.index("Alpha high finding"), texts.index("Beta high finding"))
+            self.assertIsNotNone(paragraphs["Beta high finding"]._p.pPr.pageBreakBefore)
+            self.assertIsNone(paragraphs["Alpha high finding"]._p.pPr.pageBreakBefore)
+
     def _numbered_sections(self, report_folder: Path, *, continue_second: bool):
         """A proof of concept holding two numbered lists either side of an image, plus one in the
         description, so a continued chain can be told apart from a section boundary."""
@@ -653,9 +689,7 @@ class DocxReportTests(unittest.TestCase):
             )
 
     def test_two_numbered_lists_in_one_section_restart_independently_by_default(self) -> None:
-        """New coverage, not a re-assertion: nothing else pins this. The component test that looks
-        similar drives compose_docx_template, which render_report_docx never calls, and its two lists
-        differ only because they sit at separate anchors. This is what stands between a future edit
+        """New coverage, not a re-assertion: nothing else pins this, and it is what stands between a future edit
         and silently renumbering every report on disk."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             details = self._numbered_sections(Path(temporary_directory), continue_second=False)

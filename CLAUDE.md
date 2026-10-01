@@ -26,10 +26,9 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 - More process rules: `.github/copilot-instructions.md` ("Implementing a plan", "Running tests in this repo", "Pushing changes"). Ignore its "Talking to me" section; my global style applies.
 - `docs/FORM_STATE_PLAN.md` is superseded research, not the shipped design.
 
-## Project memory
-- Rationale and rejected options: `../brain/projects/Generator/decisions.md`. Read it before changing architecture instead of reading plans.
+## Code structure
+- Why something is built a given way: grep `docs/plans/` for the topic and read only that plan's `## Answers`.
 - Code structure: use `graphify query`, `graphify path` and `graphify explain` (pass `--graph app/graphify-out/graph.json`), and read `app/graphify-out/GRAPH_REPORT.md`, before grepping the codebase.
-- Read nothing else in `../brain/`. Edit the vault only when I ask for notes.
 
 ## Compact instructions
 When compacting, keep: the files changed and why, the last test command and its result, open plan steps, decisions made this session, and anything I said not to do. Drop file listings, search output and code that was explored but not used.

@@ -2,6 +2,8 @@
 
 Local-only pentest report writer: a tester fills Setup, Findings and Content pages and the app builds a Word report from `resources/MAIN*.docx`. FastAPI, vanilla JS, no database, no build step. **Generating a report needs Windows with Microsoft Word** (`pywin32`); everything else runs on macOS. On this Mac see `CLAUDE.local.md`.
 
+@.claude/skills/unslop/SKILL.md
+
 ## Commands (bash/zsh; on Windows use `py -3` for `.venv/bin/python`)
 - Start: `python3 app/init.py` (creates `.venv`, installs `requirements.txt`, serves on the first free port 8765-8799)
 - Dev setup: `.venv/bin/python -m pip install -r requirements-dev.txt` then `.venv/bin/python -m playwright install chromium`

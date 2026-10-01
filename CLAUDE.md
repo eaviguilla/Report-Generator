@@ -35,3 +35,17 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 
 ## Compact instructions
 When compacting, keep: the files changed and why, the last test command and its result, open plan steps, decisions made this session, and anything I said not to do. Drop file listings, search output and code that was explored but not used.
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context (`GLOSSARY.md` + `docs/adr/` at the repo root). See `docs/agents/domain.md`.

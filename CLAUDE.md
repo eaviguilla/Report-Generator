@@ -29,6 +29,9 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 ## Code structure
 - Why something is built a given way: grep `docs/plans/` for the topic and read only that plan's `## Answers`.
 - Code structure: use `graphify query`, `graphify path` and `graphify explain` (pass `--graph app/graphify-out/graph.json`), and read `app/graphify-out/GRAPH_REPORT.md`, before grepping the codebase.
+- Before changing a function, class or route in `app/`: run `graphify explain NAME --graph app/graphify-out/graph.json` for its callers and neighbours, then grep `app/web/`, `tests/`, `scripts/` and `docs/DATA_MAP.md` for the name. A rule with a Python/JS twin (`docs/DATA_MAP.md` §12) changes on both sides in the same change.
+- Graph blind spots: it covers `app/` only, misses calls made through an instance (every `Workspace` method looks uncalled), has no Python-to-JS twin edges, and knows nothing about tests. "No callers" never means dead: grep before deleting.
+- The graph is gitignored and not refreshed automatically. After code changes in `app/`, run `graphify update app --force` (no API cost, about 2 s; `--force` is needed after deletions). To check staleness, compare `built_at_commit` in `app/graphify-out/graph.json` with `git rev-parse HEAD`.
 
 ## Compact instructions
 When compacting, keep: the files changed and why, the last test command and its result, open plan steps, decisions made this session, and anything I said not to do. Drop file listings, search output and code that was explored but not used.

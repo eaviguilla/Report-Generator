@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from dataclasses import dataclass, field
-from io import BytesIO
 from pathlib import Path
 
 from docx import Document
@@ -33,12 +31,6 @@ RATING_COLOR_TOKENS = {
 
 class ComponentCompositionError(ValueError):
     """Raised when a DOCX component cannot be safely merged."""
-
-
-@dataclass(frozen=True)
-class DocxComponent:
-    path: Path
-    values: dict[str, str] = field(default_factory=dict)
 
 
 def clone_component_elements(
@@ -80,118 +72,6 @@ def replace_component_token_runs(elements: list, token: str, runs: list[Run]) ->
     for element in elements:
         for paragraph in element.iter(qn("w:p")):
             _replace_pattern_with_runs(paragraph, pattern, runs)
-
-
-def compose_docx_components(
-    main_template: Path,
-    components: list[DocxComponent],
-    *,
-    anchor: str = "findings",
-) -> bytes:
-    """Insert component document bodies at a main-template placeholder."""
-    if not main_template.is_file():
-        raise ComponentCompositionError(f"Main template not found: {main_template}")
-    if not components:
-        raise ComponentCompositionError("At least one component is required")
-
-    document = Document(main_template)
-    anchor_paragraph = _find_anchor_paragraph(document, anchor)
-    anchor_element = anchor_paragraph._p
-    main_style_ids = {style.style_id for style in document.styles}
-
-    for component in components:
-        component_document = Document(component.path)
-        body_elements = [
-            deepcopy(element)
-            for element in component_document.element.body.iterchildren()
-            if element.tag != qn("w:sectPr")
-        ]
-        if not body_elements:
-            raise ComponentCompositionError(f"Component has no body content: {component.path}")
-        _validate_component(body_elements, main_style_ids, component.path)
-        for token, value in component.values.items():
-            _replace_token(body_elements, token, value)
-        unresolved = _tokens(body_elements)
-        if unresolved:
-            raise ComponentCompositionError(
-                f"Unresolved placeholders in {component.path.name}: {', '.join(unresolved)}"
-            )
-        first_paragraph = next((element for element in body_elements if element.tag == qn("w:p")), None)
-        if first_paragraph is None:
-            raise ComponentCompositionError(f"Component must begin with paragraph content: {component.path}")
-        set_page_break_before(first_paragraph)
-        for element in body_elements:
-            anchor_element.addprevious(element)
-
-    anchor_element.getparent().remove(anchor_element)
-    output = BytesIO()
-    document.save(output)
-    return output.getvalue()
-
-
-def compose_docx_template(
-    template: Path,
-    *,
-    values: dict[str, str],
-    components: dict[str, list[DocxComponent]],
-) -> bytes:
-    """Populate a DOCX template and insert formatted components at its anchors."""
-    if not template.is_file():
-        raise ComponentCompositionError(f"Template not found: {template}")
-
-    document = Document(template)
-    body = document.element.body
-    main_style_ids = {style.style_id for style in document.styles}
-    for token, value in values.items():
-        _replace_token([body], token, value)
-
-    for anchor, anchor_components in components.items():
-        anchor_paragraph = _find_anchor_paragraph(document, anchor)
-        anchor_element = anchor_paragraph._p
-        numbering_ids: dict[tuple[Path, int], int] = {}
-        for component in anchor_components:
-            component_document = Document(component.path)
-            body_elements = [
-                deepcopy(element)
-                for element in component_document.element.body.iterchildren()
-                if element.tag != qn("w:sectPr")
-            ]
-            if not body_elements:
-                raise ComponentCompositionError(f"Component has no body content: {component.path}")
-            _validate_component(body_elements, main_style_ids, component.path)
-            _remap_numbering(document, component_document, body_elements, component.path, numbering_ids)
-            for token, value in component.values.items():
-                _replace_token(body_elements, token, value)
-            unresolved = _tokens(body_elements)
-            if unresolved:
-                raise ComponentCompositionError(
-                    f"Unresolved placeholders in {component.path.name}: {', '.join(unresolved)}"
-                )
-            for element in body_elements:
-                anchor_element.addprevious(element)
-        anchor_element.getparent().remove(anchor_element)
-
-    unresolved = _tokens([body])
-    if unresolved:
-        raise ComponentCompositionError(f"Unresolved placeholders in {template.name}: {', '.join(unresolved)}")
-
-    output = BytesIO()
-    document.save(output)
-    return output.getvalue()
-
-
-def _find_anchor_paragraph(document, anchor: str):
-    pattern = re.compile(r"\{\{\s*" + re.escape(anchor) + r"\s*\}\}", re.IGNORECASE)
-    matches = [
-        paragraph
-        for paragraph in document.paragraphs
-        if pattern.search(paragraph.text)
-    ]
-    if len(matches) != 1:
-        raise ComponentCompositionError(
-            f"Expected exactly one {{{{{anchor}}}}} paragraph; found {len(matches)}"
-        )
-    return matches[0]
 
 
 def _validate_component(elements: list, main_style_ids: set[str], path: Path) -> None:
@@ -555,14 +435,6 @@ def _apply_run_formatting(run, source: Run) -> None:
             underline = OxmlElement("w:u")
             properties.append(underline)
         underline.set(qn("w:val"), "single")
-
-
-def _tokens(elements: list) -> list[str]:
-    text = "\n".join(
-        "".join(node.text or "" for node in element.iter(qn("w:t")))
-        for element in elements
-    )
-    return sorted(set(re.findall(r"\{\{\s*(.*?)\s*\}\}", text)))
 
 
 def set_page_break_before(paragraph) -> None:

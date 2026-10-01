@@ -55,7 +55,8 @@ FILE_PAGES: list[tuple[str, frozenset[str]]] = [
     ("app/web/templates/library_editor.html", frozenset()),  # no browser test loads it; test_app covers it
     ("app/web/templates/_", ALL_PAGES),
     ("app/library_editor.py", frozenset()),
-    ("app/init.py", frozenset()),  # the launcher: covered by tests.test_launcher, which the all-Python tier runs
+    ("app/init.py", frozenset()),  # the Burp build's launcher: covered by tests.test_launcher, which the all-Python tier runs
+    ("run.py", frozenset()),  # the default build's launcher: same, covered by tests.test_launcher
     ("resources/vuln_library.json", frozenset({"findings", "content"})),
     ("app/docx_", frozenset()),  # reaches the browser only through import and generate, see FILE_FEATURES
     ("resources/", frozenset()),

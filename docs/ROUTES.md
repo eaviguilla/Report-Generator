@@ -53,7 +53,7 @@ same change.
 
 The vulnerability library is `resources/vuln_library.json`, resolved from `prefs.library_path`. It is loaded once at import, **before the app object exists**, so `Library.load_or_empty` is used: an unreadable or invalid library leaves search empty and records why in `library.load_error` rather than stopping the app from starting.
 
-A local-only library editor mounts when `VULNREPORT_LIBRARY_EDITOR` is set **and** `app/library_editor.py` is present. Both files are tracked, but `scripts/package_release.py` leaves them out of a release, and nothing else links to the editor. Every write is validated by loading the exact bytes through `Library` in a temporary file before it replaces the real one.
+A local-only library editor mounts when `VULNREPORT_LIBRARY_EDITOR` is set **and** `app/library_editor.py` is present. Both files are tracked, but the release scripts (`scripts/default_release.py`, `scripts/burp_release.py`) leave them out of a release, and nothing else links to the editor. Every write is validated by loading the exact bytes through `Library` in a temporary file before it replaces the real one.
 
 | Method | Path | Purpose |
 |---|---|---|

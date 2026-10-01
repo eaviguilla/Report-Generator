@@ -22,7 +22,9 @@ from unittest.mock import MagicMock, patch
 from urllib.request import urlopen
 
 from app import init as run
-from scripts import package_release
+from scripts import burp_release, default_release
+
+import run as default_launcher
 
 REPO = Path(__file__).resolve().parent.parent
 HOLDER = (
@@ -576,6 +578,10 @@ class ServeTests(unittest.TestCase):
 
 
 BURP_FILE = REPO / "report_generator_burp.py"
+DEFAULT_LAUNCHER = REPO / "run.py"
+# Words that must never appear in the default build's launcher (docs/plans/split-release-into-burp-and-default.md, Q3/Q8).
+# Checked case-insensitively: "burp" alone also catches BURP_FLAG, started_by_burp and report_generator_burp.py.
+BURP_WORDS = ("burp", "--data-status", "--bring-over", "init.py")
 
 
 def python2_only_problems(tree: ast.AST) -> list[str]:
@@ -661,24 +667,78 @@ class BurpFileTests(unittest.TestCase):
         source = BURP_FILE.read_text(encoding="utf-8")
         self.assertEqual(source.count('File(File(app_folder, u"app"), u"init.py")'), 1, "the path is written in one helper")
         self.assertEqual(len(re.findall(r"launcher_file\(", source)), 5, "the helper, plus its four users")
-        self.assertNotIn("run.py", source, "the launcher used to be run.py at the release root")
+        self.assertNotIn("run.py", source, "the Burp file must never need to know the default build's launcher exists")
         self.assertTrue((REPO / "app" / "init.py").is_file(), "the file the extension starts exists where it says")
-        self.assertFalse((REPO / "run.py").exists(), "a second launcher at the root would undo the move")
+
+
+class DefaultLauncherTests(unittest.TestCase):
+    """run.py carries its own copy of app/init.py's shared logic (Q3/Q8): these prove the copy is sound."""
+
+    def test_run_py_has_no_fragment_of_the_burp_build(self) -> None:
+        source = DEFAULT_LAUNCHER.read_text(encoding="utf-8").lower()
+        for word in BURP_WORDS:
+            self.assertNotIn(word, source, f"run.py must not hint that a Burp build exists ({word})")
+        # Positive case: the probe words really do appear in the file this build leaves out, so the
+        # checks above are not vacuous.
+        launcher_source = (REPO / "app" / "init.py").read_text(encoding="utf-8").lower()
+        self.assertTrue(any(word in launcher_source for word in BURP_WORDS), "the probe words must exist somewhere")
+
+    def test_run_py_is_the_release_root_launcher(self) -> None:
+        """Unlike app/init.py, which sits one level inside app/, run.py sits at the release root itself."""
+        self.assertEqual(default_launcher.ROOT, REPO)
+        self.assertEqual(default_launcher.VENV_DIR, REPO / ".venv")
+        self.assertEqual(default_launcher.REQUIREMENTS, REPO / "requirements.txt")
+        self.assertTrue(default_launcher.REQUIREMENTS.is_file(), "ROOT must be the folder that holds requirements.txt")
+
+    def guard_root(self, folder: Path) -> subprocess.CompletedProcess:
+        code = "import run; run.LOCK_WAIT = 0.3; run.guard_start()"
+        return subprocess.run(
+            [sys.executable, "-c", code], cwd=REPO, env={**os.environ, run.DATA_ENV: str(folder)}, capture_output=True, text=True, timeout=60
+        )
+
+    def test_run_py_also_refuses_a_second_start_on_the_same_data_folder(self) -> None:
+        """The locking code is copied, not shared (Q3/Q8): prove the copy still enforces one server per folder."""
+        with tempfile.TemporaryDirectory() as directory:
+            holder = hold_lock(Path(directory))
+            try:
+                refused = self.guard_root(Path(directory))
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn(f"already running on {directory}", refused.stderr)
+            finally:
+                release(holder)
 
 
 class ReleaseTests(unittest.TestCase):
-    def test_release_zip_carries_the_launcher_in_app_and_the_burp_file_at_the_root(self) -> None:
-        with tempfile.TemporaryDirectory() as dist, patch.object(package_release, "DIST", Path(dist)):
-            archive = package_release.build_release("Report-Generator-test")
+    def test_default_release_zip_has_run_py_at_the_root_and_nothing_burp(self) -> None:
+        with tempfile.TemporaryDirectory() as dist, patch.object(default_release, "DIST", Path(dist)):
+            archive = default_release.build_release("Report-Generator-test")
             with zipfile.ZipFile(archive) as bundle:
                 names = bundle.namelist()
-                burp = bundle.read("Report-Generator-test/report_generator_burp.py")
-                launcher = bundle.read("Report-Generator-test/app/init.py")
-        self.assertIn("Report-Generator-test/app/init.py", names)
-        self.assertIn("Report-Generator-test/report_generator_burp.py", names)
-        self.assertNotIn("Report-Generator-test/run.py", names, "one launcher only, where testers are told to find it")
+                launcher = bundle.read("Report-Generator-test/run.py")
+        self.assertIn("Report-Generator-test/run.py", names)
+        self.assertNotIn("Report-Generator-test/app/init.py", names, "the Burp build's launcher must not ship here")
+        self.assertNotIn("Report-Generator-test/report_generator_burp.py", names)
+        self.assertEqual(launcher, DEFAULT_LAUNCHER.read_bytes(), "the shipped launcher is the repository's file, byte for byte")
+        for name in names:
+            top = name.split("/", 2)[1] if name.count("/") >= 1 else ""
+            self.assertNotIn(top, {"data", "generated", "burp", "tests"}, f"{name} must not ship")
+            self.assertFalse(name.endswith((".jar", ".class")), f"{name}: nothing compiled or downloaded ships")
+
+    def test_burp_release_zip_has_app_init_and_the_burp_file_and_a_renamed_readme(self) -> None:
+        with tempfile.TemporaryDirectory() as dist, patch.object(burp_release, "DIST", Path(dist)):
+            archive = burp_release.build_release("Report-Generator-Burp-test")
+            with zipfile.ZipFile(archive) as bundle:
+                names = bundle.namelist()
+                burp = bundle.read("Report-Generator-Burp-test/report_generator_burp.py")
+                launcher = bundle.read("Report-Generator-Burp-test/app/init.py")
+                readme = bundle.read("Report-Generator-Burp-test/README.md")
+        self.assertIn("Report-Generator-Burp-test/app/init.py", names)
+        self.assertIn("Report-Generator-Burp-test/report_generator_burp.py", names)
+        self.assertNotIn("Report-Generator-Burp-test/run.py", names, "one launcher only, where testers are told to find it")
+        self.assertNotIn("Report-Generator-Burp-test/README-burp.md", names, "it ships renamed, not under its repository name")
         self.assertEqual(burp, BURP_FILE.read_bytes(), "the shipped extension is the repository's file, byte for byte")
         self.assertEqual(launcher, (REPO / "app" / "init.py").read_bytes())
+        self.assertEqual(readme, (REPO / "README-burp.md").read_bytes(), "README-burp.md ships renamed to README.md")
         for name in names:
             top = name.split("/", 2)[1] if name.count("/") >= 1 else ""
             self.assertNotIn(top, {"data", "generated", "burp", "tests"}, f"{name} must not ship")

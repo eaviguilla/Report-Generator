@@ -45,10 +45,12 @@ Specialist agents live in `.github/agents/`: `loremaster` (data layer questions)
 pipeline questions), `tactician` (plans a change before code), `invader` (stress-tests new work).
 `.github/prompts/plan-change.prompt.md` runs them together over a handoff file in `docs/plans/`.
 
-Claude Code follows these same files. A local, gitignored `CLAUDE.md` imports this file and the
-data-layer instructions, and `.claude/agents/` and `.claude/commands/` hold thin wrappers that point
-back at `.github/agents/` and `.github/prompts/`. Edit rules here only. When you add an agent or a
-prompt, add its wrapper and list it in `CLAUDE.md`.
+Claude Code follows these same files. `CLAUDE.md` (committed) is the short Claude-only layer and points
+here. `.claude/rules/*.md` are generated copies of `.github/instructions/*.instructions.md`, with each
+`applyTo` glob turned into a `paths` entry: edit the instruction file, then run
+`py -3 scripts/sync_ai_rules.py` (`python3` on macOS). `tests/test_ai_rules_sync.py` fails when the two
+drift. Edit rules here only. Claude wrappers for the agents in `.github/agents/` and the prompts in
+`.github/prompts/` are not set up in this checkout.
 
 # Talking to me
 
@@ -75,6 +77,12 @@ plan that still reads `agreed` after it shipped is indistinguishable from one th
 If you implement something a plan covers without following that plan, say so there too. A plan
 contradicted by the code is worse than no plan, because the `loremaster` and anyone reading it will
 take it as fact.
+
+- Mark a plan `shipped` only with the commit that contains its change. A plan marked `shipped` whose
+  code is missing is worse than one still marked `agreed`: check with `git log -S` on a symbol the
+  plan adds.
+- Plans run to about 3,400 lines. Do not read one whole: list its `## ` headings, then read only
+  `## Answers` and `## Agreed plan`. The code and `docs/DATA_MAP.md` outrank a plan.
 
 # Running tests in this repo
 
@@ -118,7 +126,8 @@ A change to docs, comments or instructions alone needs nothing, and the script s
 | CSS, `dialog.js`, `theme.js`, `diagnostics.js`, shared partials, server code in `app/*.py`, `tests/support.py` | every browser test |
 | `app/docx_*.py`, `resources/*.docx` | the import and generate browser tests |
 | `app/init.py`, `report_generator_burp.py` | none; every Python test module runs, and `tests.test_launcher` is the one that matters |
-| `docs/`, `.github/`, `.claude/`, `*.md` | none |
+| `.github/instructions/`, `.claude/rules/` | `tests.test_ai_rules_sync` only (the Claude rules are generated copies of the instructions) |
+| `docs/`, other `.github/` and `.claude/` files, `*.md` | none |
 
 Each browser test's pages are read from the URLs and buttons in its own code, so there are no tags to
 maintain; a test whose pages cannot be read runs for every page. If the script lists a path under

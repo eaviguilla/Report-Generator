@@ -1,6 +1,6 @@
 ---
 description: "How tests are written here, so they stay fast, honest, and cheap to select."
-applyTo: "tests/**"
+applyTo: "tests/**, scripts/relevant_tests.py"
 ---
 
 # Writing tests
@@ -19,12 +19,15 @@ applyTo: "tests/**"
   message, not a bare `assertRaises`. When fixing a bug, break the code once and watch the test fail.
 - **One behaviour per test.** Variants are `subTest` rows, not copied tests; the name says what is asserted.
 - **Never touch real data.** `tests/__init__.py` points the app at a temporary data folder, and
-  `use_temp_workspace` in `tests/support.py` also redirects `generated/`. Patch Word with
-  `patch.object(main, "update_docx_bytes_with_word", ...)`; only a check of Word's own output skips
-  off Windows.
+  `use_temp_workspace` in `tests/support.py` also redirects `generated/`. That only happens when tests
+  run as `tests.MODULE` or through `scripts/relevant_tests.py`: `discover -s tests` skips the package and
+  writes into the real `data/`. Patch Word with `patch.object(main, "update_docx_bytes_with_word", ...)`;
+  only a check of Word's own output skips off Windows.
 - **Shared helpers** go in `tests/support.py`, and only when more than one module needs them. Browser
   fixtures are methods on the harness in `test_browser.py`: `ready_report`, `plant_recovery_draft`,
   `restore_recovery_draft`, `other_profile_page`.
 - **Reading `test_browser.py`:** read the harness at the top and one neighbouring test, not the whole
   file.
-- **Running them:** see "Running tests in this repo" in `.github/copilot-instructions.md`.
+- **Running them:** announce the scope in one line before each run, and run the full suite (`--full`)
+  only when the user asks. The rest is in "Running tests in this repo" in
+  `.github/copilot-instructions.md`.

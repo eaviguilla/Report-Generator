@@ -41,6 +41,10 @@ FEATURE_PATTERNS = [
 
 # --affected: which browser tests a changed file can reach. Checked in order; the first match wins.
 NO_TESTS = ("docs/", ".github/", ".claude/", "graphify-out/")
+# The Claude rules in .claude/rules/ are generated from .github/instructions/, so a change to either side
+# runs the one test that compares them, even though both folders otherwise select nothing.
+RULE_COPIES = (".github/instructions/", ".claude/rules/")
+RULE_SYNC_TEST = "tests.test_ai_rules_sync"
 FILE_PAGES: list[tuple[str, frozenset[str]]] = [
     ("app/web/static/manager.js", frozenset({"home"})),
     ("app/web/static/", ALL_PAGES),  # dialog.js, theme.js, diagnostics.js and every stylesheet load everywhere
@@ -296,10 +300,13 @@ def select(tier: str, changed: dict[str, set[int] | None], modules: dict[str, Te
     pages: set[str] = set()
     features: set[str] = set()
     python = False
+    rule_copies = False
     for path, lines in changed.items():
         if path.startswith("tests/test_"):
             python = True
             continue
+        if path.startswith(RULE_COPIES):
+            rule_copies = True
         if path.startswith(NO_TESTS) or (path.endswith(".md") and path != "docs/DATA_MAP.md"):
             continue
         python = True  # every Python module together takes about 18 s, so any real change runs them all
@@ -318,6 +325,9 @@ def select(tier: str, changed: dict[str, set[int] | None], modules: dict[str, Te
     if python:
         chosen.python = {module.dotted for path, module in modules.items() if module and path != BROWSER}
         chosen.reasons.append("all Python test modules (about 18 s)")
+    elif rule_copies:
+        chosen.python.add(RULE_SYNC_TEST)
+        chosen.reasons.append("the Claude rules are copies of the Copilot instructions")
     browser_module = modules.get(BROWSER)
     if (pages or features) and browser_module:
         tags = browser_tags(browser_module)

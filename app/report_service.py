@@ -413,14 +413,18 @@ def applicable_poc_variants(vulnerability: Vulnerability, report: Report, availa
 
 
 def fragment_applies(fragment, vulnerability: Vulnerability, report: Report, content_type: str) -> bool:
-    """Single owner of the rule: an image left behind for an environment the finding no longer
-    affects is stale, so it is neither the tester's to complete nor ours to render. Previous proof
-    of concept is exempt, because it records the engagement that found the finding rather than
-    this one, and a retest is usually narrower than the test before it."""
+    """Single owner of whether a fragment belongs in the report: what prints, and what generation
+    checks. An image prints when its environment is tested, so a supporting image does and an
+    untested-environment image does not. A supporting slot nobody has touched is left out rather
+    than demanded. Previous proof of concept always applies: it records an earlier engagement."""
     if content_type == "previous_proof_of_concept":
         return True
     environment = getattr(fragment, "environment", None)
-    return not environment or environment in affected_environments(vulnerability, report)
+    if not environment:
+        return True
+    if environment not in report.engagement.tested_environments:
+        return False
+    return environment in affected_environments(vulnerability, report) or bool(fragment.evidence_id or fragment.caption.strip())
 
 
 def _covered_environments(content: Content | None) -> set[Environment]:
@@ -436,9 +440,8 @@ def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> N
     Coverage is a property of the proof of concept alone: a carried previous-PoC image is history,
     not this retest's evidence, so it neither suppresses a slot nor gets relabelled here."""
     environments = affected_environments(vulnerability, report)
-    # An empty slot for an environment the finding no longer affects is nobody's to fill, so it goes
-    # rather than lingering as a second demand. An uploaded screenshot stays exactly where it is:
-    # relabelling it would file the tester's evidence under a heading it never belonged to.
+    # Only an untested environment's empty slot goes: a tested one may be a supporting image the
+    # tester has not uploaded yet. An uploaded screenshot is never removed or relabelled here.
     for content in vulnerability.contents:
         if content.type == "previous_proof_of_concept":
             continue
@@ -448,7 +451,7 @@ def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> N
             if not (
                 isinstance(fragment, ImageFragment)
                 and fragment.environment
-                and fragment.environment not in environments
+                and fragment.environment not in report.engagement.tested_environments
                 and not fragment.evidence_id
                 and not fragment.caption.strip()
             )

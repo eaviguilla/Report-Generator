@@ -1262,17 +1262,23 @@
     return CHANNELS.filter(channel => channels.includes(channel) && (available[channel] || []).length);
   };
   const environmentName = environment => environment === "production" ? "Production" : "Non-Production";
+  // Twin of report_service.fragment_applies: what prints and what readiness checks. An image prints
+  // when its environment is tested; a supporting slot nobody has started is left out, not demanded.
+  const fragmentApplies = (fragment, finding, contentType) => {
+    if (contentType === "previous_proof_of_concept" || !fragment.environment) return true;
+    if (!report.engagement.tested_environments.includes(fragment.environment)) return false;
+    return affectedEnvironments(finding).includes(fragment.environment) || Boolean(fragment.evidence_id || fragment.caption?.trim());
+  };
   const imagesForEnvironment = (finding, environment) => finding.contents.filter(content => content.type !== "previous_proof_of_concept").flatMap(content => (content.fragments || []).filter(fragment => fragment.type === "image" && fragment.environment === environment));
   // Twin of report_service.sync_evidence_image_slots; keep both in step. Coverage is a property of
   // the proof of concept alone, so a carried previous-PoC image is never relabelled or counted here.
   const syncEvidenceImageSlots = finding => {
     const environments = affectedEnvironments(finding);
-    // An empty slot for an environment the finding no longer affects is nobody's to fill, so it goes
-    // rather than lingering as a second demand. An uploaded screenshot stays exactly where it is:
-    // relabelling it would file the tester's evidence under a heading it never belonged to.
+    // Only an untested environment's empty slot goes: a tested one may be a supporting image the
+    // tester has not uploaded yet. An uploaded screenshot is never removed or relabelled here.
     finding.contents.filter(content => content.type !== "previous_proof_of_concept").forEach(content => {
       content.fragments = content.fragments.filter(fragment => !(
-        fragment.type === "image" && fragment.environment && !environments.includes(fragment.environment)
+        fragment.type === "image" && fragment.environment && !report.engagement.tested_environments.includes(fragment.environment)
         && !fragment.evidence_id && !fragment.caption?.trim()));
     });
     const proof = finding.contents.find(content => content.type === "proof_of_concept");
@@ -1715,15 +1721,13 @@
         && (!environments.includes(environment) || !channels.includes(channel)));
       const targetCount = Math.max(doomed.size, typedTargets);
       const stranded = findingsStrandedBy(environments, channels);
-      const impact = scopeChangeImpact(doomed);
+      const impact = scopeChangeImpact(doomed, environments);
       if (!targetCount && !stranded.length && !impact.findings) return true;
       const lines = [];
       if (targetCount) lines.push(`${count(targetCount, "scope target")} in Setup will be deleted.`);
       if (impact.findings) lines.push(`${impact.findings} finding${impact.findings === 1 ? "" : "s"} lose a selected location.`);
       if (stranded.length) lines.push(`${stranded.length} will be left with no affected location at all, and the report cannot be saved until you give ${stranded.length === 1 ? "it" : "them"} one.`);
-      // Screenshots are kept, not deleted -- but an unlabelled one blocks generation until it is
-      // reassigned or removed, so the tester hears it here rather than from the readiness panel.
-      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their original environment and file, but stop appearing in the report until explicitly reassigned or deleted.`);
+      lines.push(...screenshotFate(impact));
       return window.vrDialog.confirm({
         title: `${change}?`,
         message: lines.join(" "),
@@ -1734,6 +1738,16 @@
       });
     };
     const count = (total, word) => `${total} ${word}${total === 1 ? "" : "s"}`;
+    // Screenshots are never deleted by a Setup change: those whose environment is still tested become
+    // supporting images, and those whose environment is unticked stop printing until it returns.
+    const screenshotFate = ({supporting = 0, untested = 0}) => [
+      supporting && (supporting === 1
+        ? "One screenshot stays in the report as a supporting image."
+        : `${supporting} screenshots stay in the report as supporting images.`),
+      untested && (untested === 1
+        ? "One screenshot keeps its environment and file, but stops appearing in the report until that environment is tested again."
+        : `${untested} screenshots keep their environment and files, but stop appearing in the report until that environment is tested again.`),
+    ].filter(Boolean);
     // Everything an app type owns goes when it is unchecked, so the dialog counts it before asking.
     const channelRemovalImpact = channel => {
       const targetIds = new Set((report.scope_targets || []).filter(target => target.channel === channel).map(target => target.target_id));
@@ -1794,9 +1808,10 @@
       });
     };
     // What a scope change costs the findings, for a dialog that has to say so before it happens.
-    const scopeChangeImpact = targetIds => {
+    const scopeChangeImpact = (targetIds, testedAfter = report.engagement.tested_environments) => {
       let findings = 0;
-      let images = 0;
+      let supporting = 0;
+      let untested = 0;
       (report.vulnerabilities || []).forEach(finding => {
         const scope = finding.scope || {};
         const selected = scope.target_ids || [];
@@ -1810,11 +1825,12 @@
         if (!lost.length) return;
         (finding.contents || []).forEach(content => {
           if (content.type === "previous_proof_of_concept") return;
-          images += (content.fragments || []).filter(fragment => fragment.type === "image"
-            && lost.includes(fragment.environment) && (fragment.evidence_id || fragment.caption?.trim())).length;
+          (content.fragments || []).filter(fragment => fragment.type === "image"
+            && lost.includes(fragment.environment) && (fragment.evidence_id || fragment.caption?.trim()))
+            .forEach(fragment => { if (testedAfter.includes(fragment.environment)) supporting += 1; else untested += 1; });
         });
       });
-      return {findings, images};
+      return {findings, supporting, untested};
     };
     const dropChannelEverywhere = channel => {
       const targetIds = new Set((report.scope_targets || []).filter(target => target.channel === channel).map(target => target.target_id));
@@ -1838,9 +1854,8 @@
       const losses = [impact.targets && `${count(impact.targets, "scope target")} in Setup`, impact.endpoints && count(impact.endpoints, "additional affected endpoint")].filter(Boolean);
       // During a swap the tester ticked the incoming box, so a dialog about the outgoing one alone
       // reads as though it arrived unprompted.
-      const evidence = !impact.images ? "" : impact.images === 1
-        ? " One screenshot keeps its original environment and file, but stops appearing in the report until explicitly reassigned or deleted."
-        : ` ${impact.images} screenshots keep their original environment and files, but stop appearing in the report until explicitly reassigned or deleted.`;
+      // Removing an app type leaves every environment tested, so its screenshots all stay as supporting images.
+      const evidence = screenshotFate({supporting: impact.images}).map(line => ` ${line}`).join("");
       return window.vrDialog.confirm({
         title: replacedBy ? `Replace ${channelLabels[channel]} with ${channelLabels[replacedBy]}?` : `Remove ${channelLabels[channel]} from the scope?`,
         message: `${losses.join(", and ")} will be deleted, along with every ${channelLabels[channel]} affected location selected in the findings below.${stranded.length ? ` ${count(stranded.length, "finding")} will be left with no affected location at all.` : ""}${evidence}`,
@@ -1877,7 +1892,7 @@
       const lines = [];
       if (impact.findings) lines.push(`${impact.findings} finding${impact.findings === 1 ? "" : "s"} point at a target you are removing or renaming, and lose it.`);
       if (stranded.length) lines.push(`${stranded.length} will be left with no location at all, and the report cannot be saved until ${stranded.length === 1 ? "it gets" : "they get"} another.`);
-      if (impact.images) lines.push(`${impact.images} screenshot${impact.images === 1 ? "" : "s"} keep their original environment and file, but stop appearing in the report until explicitly reassigned or deleted.`);
+      lines.push(...screenshotFate(impact));
       return window.vrDialog.confirm({
         title: "Change these scope targets?",
         message: lines.join(" "),
@@ -2299,28 +2314,35 @@
     };
     const evidenceEnvironmentsLostBy = (finding, previousScope) => environmentsLostBy(finding, previousScope)
       .filter(environment => imagesForEnvironment(finding, environment).some(image => image.evidence_id || image.caption?.trim()));
-    // Losing an environment's last location strands that environment's evidence, so confirm before dropping it.
+    // Losing an environment's last location turns its screenshots into supporting images, so ask
+    // whether they still belong in the report before the scope change lands.
     const settleScopeChange = async (finding, previousScope) => {
       const lost = environmentsLostBy(finding, previousScope);
       const stranded = lost.filter(environment => imagesForEnvironment(finding, environment).some(image => image.evidence_id || image.caption?.trim()));
+      let keepScreenshots = false;
       if (stranded.length) {
         const names = stranded.map(environmentName).join(" and ");
-        const agreed = await window.vrDialog.confirm({
-          title: `Remove the ${names} evidence from this finding?`,
-          message: `This finding no longer has a ${names} affected location, so its ${names} screenshots and captions cannot appear in the report.`,
-          confirmLabel: "Remove that evidence",
-          cancelLabel: "Keep the affected location",
-          tone: "danger",
+        const answer = await window.vrDialog.ask({
+          title: `Keep the ${names} screenshots as supporting images?`,
+          message: `This finding no longer has a ${names} affected location. Its ${names} screenshots and captions can stay in the report as supporting images, or be removed.`,
+          actions: [
+            {key: "keep", label: "Keep as supporting images", tone: "primary"},
+            {key: "remove", label: "Remove them", tone: "danger"},
+            {key: "cancel", label: "Keep the affected location", cancel: true},
+          ],
         });
-        if (!agreed) {
+        if (answer === "cancel") {
           finding.scope = previousScope;
           return false;
         }
+        keepScreenshots = answer === "keep";
       }
       const previousEvidence = evidenceIdsIn(finding);
       lost.forEach(environment => finding.contents.forEach(content => {
         if (content.type === "previous_proof_of_concept") return;
-        content.fragments = (content.fragments || []).filter(fragment => !(fragment.type === "image" && fragment.environment === environment));
+        // Empty tiles for the lost environment go either way; only started screenshots can stay.
+        content.fragments = (content.fragments || []).filter(fragment => !(fragment.type === "image" && fragment.environment === environment
+          && !(keepScreenshots && (fragment.evidence_id || fragment.caption?.trim()))));
       }));
       dropUnreferencedEvidence(previousEvidence);
       syncEvidenceImageSlots(finding);
@@ -3002,25 +3024,29 @@
     // A historical image is labelled with where it was found, so the current scope neither
     // narrows the choice nor answers it for the tester.
     const historical = content.type === "previous_proof_of_concept";
-    const imageEnvironments = historical ? ["production", "non_production"] : affectedEnvironments(finding);
-    const outsideCurrentScope = !historical && Boolean(fragment.evidence_id || fragment.caption?.trim())
-      && Boolean(fragment.environment) && !imageEnvironments.includes(fragment.environment);
-    if (!historical && imageEnvironments.length === 1 && !outsideCurrentScope) {
+    const affected = affectedEnvironments(finding);
+    // Affected environments first, then any other tested one, which holds a supporting image.
+    const imageEnvironments = historical
+      ? ["production", "non_production"]
+      : [...affected, ...["production", "non_production"].filter(environment => report.engagement.tested_environments.includes(environment) && !affected.includes(environment))];
+    const untested = !historical && Boolean(fragment.environment) && !report.engagement.tested_environments.includes(fragment.environment);
+    const environmentOption = environment => `${environmentName(environment)}${content.type === "proof_of_concept" && !affected.includes(environment) ? " (supporting)" : ""}`;
+    if (!historical && imageEnvironments.length === 1 && !untested) {
       fragment.environment = imageEnvironments[0];
       const environmentValue = document.createElement("span");
       environmentValue.className = "evidence-environment-value";
-      environmentValue.textContent = imageEnvironments[0] === "production" ? "Production" : "Non-Production";
+      environmentValue.textContent = environmentOption(imageEnvironments[0]);
       facts.append(environmentValue);
     } else {
-      if (!historical && !outsideCurrentScope && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
+      if (!historical && !untested && !imageEnvironments.includes(fragment.environment)) fragment.environment = imageEnvironments[0] || null;
       const environmentSelect = document.createElement("select");
       environmentSelect.className = `evidence-environment${fragment.environment ? "" : " is-unset"}`;
       environmentSelect.setAttribute("aria-label", `${contentNames[content.type]} image environment`);
-      const current = outsideCurrentScope
-        ? `<option value="${fragment.environment}" selected>${environmentName(fragment.environment)} (out of scope)</option>`
+      const current = untested
+        ? `<option value="${fragment.environment}" selected>${environmentName(fragment.environment)} (not tested)</option>`
         : "";
       const unset = !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
-      environmentSelect.innerHTML = current + unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environment === "production" ? "Production" : "Non-Production"}</option>`).join("");
+      environmentSelect.innerHTML = current + unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environmentOption(environment)}</option>`).join("");
       environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; rerender(); scheduleSave(); };
       facts.append(environmentSelect);
     }
@@ -3488,7 +3514,7 @@
         return [fragment.text, fragment.caption].filter(Boolean).join(" ");
       };
       const fragmentIssues = finding => {
-        // An image for an environment this finding does not affect is not the tester's to complete.
+        // Affected environments: the ones whose screenshots are required rather than supporting.
         const relevant = affectedEnvironments(finding);
         const printed = contentTypesForStatus(finding.status);
         // Environments the per-environment rule already reports, so a slot serving one stays quiet.
@@ -3502,11 +3528,8 @@
           : [];
         return [...missingFragment, ...content.fragments.flatMap(fragment => {
         const issues = [];
-        // Twin of report_service.fragment_applies: a stale image is neither the tester's to finish
-        // nor ours to render, so nothing about it is reported, its caption included.
-        const staleImage = fragment.type === "image" && content.type !== "previous_proof_of_concept"
-          && Boolean(fragment.environment) && !relevant.includes(fragment.environment);
-        if (staleImage) return issues;
+        // Nothing is reported about a fragment the report leaves out, its caption included.
+        if (!fragmentApplies(fragment, finding, content.type)) return issues;
         // Twin of the in_conclusion rule in docx_report.generation_issues. Carries a fragmentId so
         // the review panel's arrow lands on the paragraph and the field is marked incomplete.
         // Nothing but the sentence counts; text either side of it is the tester's own conclusion.
@@ -3525,12 +3548,13 @@
           const cells = [...fragment.header, ...fragment.rows.flat()];
           if (cells.some(cell => !hasText(cell.runs))) issues.push({contentLabel, fragmentLabel:"table", message:"every cell is required", fragmentId:fragment.frag_id});
         }
-        if (fragment.type === "image" && (content.type === "previous_proof_of_concept" || !fragment.environment || relevant.includes(fragment.environment))) {
+        if (fragment.type === "image") {
           const environment = fragment.environment === "production" ? "Production" : fragment.environment === "non_production" ? "Non-Production" : "Unassigned";
+          const supporting = content.type === "proof_of_concept" && Boolean(fragment.environment) && !relevant.includes(fragment.environment);
           const missing = [!fragment.environment && "environment", !fragment.evidence_id && "image", !fragment.caption?.trim() && "caption"].filter(Boolean);
           // "Production evidence image required" already names this slot; listing its parts repeats it.
           const alreadyNamed = content.type === "proof_of_concept" && !fragment.evidence_id && uncovered.includes(fragment.environment);
-          if (missing.length && !alreadyNamed) issues.push({contentLabel, fragmentLabel:`${environment} evidence`, message:`requires ${missing.join(" and ")}`, fragmentId:fragment.frag_id, evidenceSlot:true});
+          if (missing.length && !alreadyNamed) issues.push({contentLabel, fragmentLabel:`${environment} ${supporting ? "supporting " : ""}evidence`, message:`requires ${missing.join(" and ")}`, fragmentId:fragment.frag_id, evidenceSlot:true});
         }
         if (!fragment.runs && !fragment.items && fragment.type !== "table" && fragment.type !== "image" && fragment.type !== "instance_title" && !fragment.text?.trim()) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"text is required", fragmentId:fragment.frag_id});
         if (placeholderPattern.test(fragmentText(fragment))) issues.push({contentLabel, fragmentLabel:optionLabel(fragment.type), message:"replace placeholder text", fragmentId:fragment.frag_id, level:"warning"});

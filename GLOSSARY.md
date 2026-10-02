@@ -13,4 +13,20 @@ The answer acceptance gives a report it will not take, naming the rule the repor
 _Avoid_: rejection
 
 **Provisioning**:
-The server completing a finding with the sections its status requires, their seed fragments, and an image slot for each environment the finding affects.
+The server completing a finding with the sections its status requires, their seed fragments, and an image slot for each affected environment.
+
+**Tested environment**:
+An environment the engagement covers, chosen on Setup.
+_Avoid_: covered environment, selected environment
+
+**Affected environment**:
+A tested environment in which a finding has at least one location.
+_Avoid_: affected location environment, located environment
+
+**Supporting image**:
+A proof-of-concept image for a tested environment the finding does not affect.
+_Avoid_: extra image, stale image
+
+**Untested-environment image**:
+An image outside Previous Proof of Concept whose environment is not a tested environment.
+_Avoid_: environment-irrelevant image, stale image, orphaned image, out-of-scope image

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pydantic import ValidationError
 
 from app import acceptance
-from app.models import Engagement, Report, Scope, ScopeTarget, Vulnerability
+from app.models import Engagement, ImageFragment, Report, Scope, ScopeTarget, Vulnerability
 from app.report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status
 from app.workspace import StaleReportError
 
@@ -129,6 +129,23 @@ class ProvisionTests(unittest.TestCase):
                 self.assertEqual([fragment.environment for fragment in proof.fragments if fragment.type == "image"], ["production"])
         remediation = next(content for content in report.vulnerabilities[1].contents if content.type == "recommended_remediation")
         self.assertEqual(remediation.fragments[0].runs[0].text, RESOLVED_REMEDIATION)
+
+    def test_an_untouched_image_slot_stays_while_its_environment_is_tested(self) -> None:
+        cases = [
+            ("tested, so it is a supporting slot", ["production", "non_production"], ["production", "non_production"]),
+            ("not tested", ["production"], ["production"]),
+        ]
+        for label, tested_environments, expected in cases:
+            with self.subTest(label):
+                report = stored_report([production_target()], [Vulnerability(uid="v_prod", scope=Scope(target_ids=["tgt_prod"]))])
+                acceptance.provision(report)
+                report.engagement.tested_environments = tested_environments
+                proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+                proof.fragments.append(ImageFragment(frag_id="f_other", type="image", environment="non_production", evidence_id=None, caption=""))
+
+                acceptance.provision(report)
+
+                self.assertEqual([fragment.environment for fragment in proof.fragments if fragment.type == "image"], expected)
 
 
 if __name__ == "__main__":

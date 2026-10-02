@@ -1070,6 +1070,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         dialog = page.locator(".vr-dialog")
         dialog.wait_for(timeout=5_000)
         self.assertIn("screenshot", dialog.inner_text().lower())
+        self.assertIn("until that environment is tested again", dialog.inner_text())
         dialog.get_by_role("button", name="Make the change anyway").click()
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
 
@@ -1086,7 +1087,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#issue-count")
         environment = page.locator(f'[data-fragment-id="{production_frag_id}"] .evidence-environment')
         self.assertEqual(environment.input_value(), "production")
-        self.assertIn("Production (out of scope)", environment.locator("option:checked").inner_text())
+        self.assertIn("Production (not tested)", environment.locator("option:checked").inner_text())
 
     def test_environment_removal_does_not_describe_an_empty_slot_as_a_screenshot(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -1172,7 +1173,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             {"production": {"api": ["POST /v1/pay"]}},
         )
 
-    def test_app_type_removal_warns_when_custom_location_evidence_stops_applying(self) -> None:
+    def test_app_type_removal_keeps_custom_location_evidence_as_a_supporting_image(self) -> None:
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
         report.engagement.tested_channels = ["web", "api"]
@@ -1204,6 +1205,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         dialog = page.locator(".vr-dialog")
         dialog.wait_for(timeout=5_000)
         self.assertIn("screenshot", dialog.inner_text().lower())
+        self.assertIn("stays in the report as a supporting image", dialog.inner_text())
         dialog.get_by_role("button", name="Remove API anyway").click()
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
 
@@ -1243,6 +1245,38 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
         self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].scope.target_ids, ["tgt_browser", "tgt_uat"])
 
+    def test_a_finding_that_loses_an_environment_can_keep_its_screenshots_as_supporting_images(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
+        finding = report.vulnerabilities[0]
+        finding.scope.target_ids = ["tgt_browser", "tgt_uat"]
+        acceptance.provision(report)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production").caption = "Production evidence caption"
+        proof.fragments.append(ImageFragment(frag_id="f_empty_production", type="image", environment="production", evidence_id=None, caption=""))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_label("Select https://prod.example.test").uncheck()
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for()
+        self.assertIn("supporting images", dialog.inner_text())
+        dialog.get_by_role("button", name="Keep as supporting images").click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id).vulnerabilities[0]
+        self.assertEqual(saved.scope.target_ids, ["tgt_uat"])
+        # The captioned screenshot stays as a supporting image; the empty Production tile goes.
+        self.assertEqual(
+            [fragment.caption for content in saved.contents for fragment in content.fragments if fragment.type == "image" and fragment.environment == "production"],
+            ["Production evidence caption"],
+        )
+
     def test_custom_location_removal_cannot_autosave_before_its_evidence_decision(self) -> None:
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
@@ -1279,7 +1313,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         endpoint.fill("")
         endpoint.blur()
         page.locator(".vr-dialog").wait_for()
-        page.get_by_role("button", name="Remove that evidence").click()
+        page.get_by_role("button", name="Remove them").click()
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
         saved = main.workspace.load(report_id).vulnerabilities[0]
         self.assertEqual(saved.scope.custom_locations, {})
@@ -1792,6 +1826,41 @@ class BrowserWorkflowTests(unittest.TestCase):
         image_cards = proof.locator(".evidence-tile")
         self.assertEqual(image_cards.count(), 3)
         self.assertEqual(proof.locator(".evidence-environment").last.input_value(), "production")
+
+    def test_a_finding_that_affects_one_environment_can_hold_a_supporting_screenshot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_browser_uat", environment="non_production", channel="web", value="https://test.example.test"))
+        main.sync_evidence_image_slots(report.vulnerabilities[0], report)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        self.assertEqual(
+            proof.locator(".evidence-environment").first.locator("option").all_inner_texts(),
+            ["Production", "Non-Production (supporting)"],
+        )
+        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        proof.locator(".evidence-environment").last.select_option("non_production")
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.environment for fragment in saved_proof.fragments if fragment.type == "image"], ["production", "non_production"])
+
+        # Reloading runs the page's own slot cleanup, which used to drop an untouched slot like this.
+        page.reload()
+        page.wait_for_selector("#issue-count")
+        supporting = page.locator(".content-block").filter(has_text="Proof of Concept").last.locator(".evidence-tile").last
+        self.assertEqual(supporting.locator(".evidence-environment").input_value(), "non_production")
+        rows = page.locator(".review-row").filter(has_text="Non-Production supporting evidence")
+        self.assertEqual(rows.count(), 0, "an untouched supporting slot was demanded")
+        supporting.locator(".evidence-caption").fill("Same response in the test environment")
+        rows.first.wait_for(state="attached")
+        self.assertIn("requires image", rows.first.inner_text())
 
     def test_stale_save_keeps_local_recovery_until_confirmed(self) -> None:
         report_id = self.ready_report()
@@ -4074,14 +4143,23 @@ class BrowserWorkflowTests(unittest.TestCase):
         def missing_rating(report, finding):
             finding.severity = None
 
-        def stale_image_for_unaffected_environment(report, finding):
-            # The finding covers production only; the lower-region image is left over from a
-            # scope change and belongs to neither side's idea of "required".
+        def untouched_supporting_slot(report, finding):
+            # The finding covers production only, so an empty non-production slot is a supporting
+            # image nobody has started: both sides leave it out rather than demand it.
             report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
             report.engagement.tested_environments = ["production", "non_production"]
             report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
             proof = next(content for content in finding.contents if content.type == "proof_of_concept")
-            proof.fragments.append(ImageFragment(frag_id="f_stale", type="image", environment="non_production", evidence_id=None, caption=""))
+            proof.fragments.append(ImageFragment(frag_id="f_supporting", type="image", environment="non_production", evidence_id=None, caption=""))
+
+        def started_supporting_image_without_an_upload(report, finding):
+            untouched_supporting_slot(report, finding)
+            proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+            next(fragment for fragment in proof.fragments if fragment.frag_id == "f_supporting").caption = "Same response in UAT"
+
+        def untested_environment_image(report, finding):
+            proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+            proof.fragments.append(ImageFragment(frag_id="f_untested", type="image", environment="non_production", evidence_id=None, caption="From before Non-Production was unticked"))
 
         # Every case above runs on the open_new finding ready_report builds, which has no
         # in_conclusion section at all. These two are the first that make the section exist, so
@@ -4130,7 +4208,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         # Scope-rule drift is invisible here: a finding with no location cannot open the editor, so
         # the loop below never reaches the comparison. Those cases live in the Findings-gate test.
-        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, stale_image_for_unaffected_environment, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss]
+        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, untouched_supporting_slot, started_supporting_image_without_an_upload, untested_environment_image, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss]
         for case in cases:
             with self.subTest(case=case.__name__):
                 report_id = self.ready_report(include_finding=True)

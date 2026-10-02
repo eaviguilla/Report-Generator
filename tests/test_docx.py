@@ -300,58 +300,95 @@ class DocxReportTests(unittest.TestCase):
                 render_report_docx(report, template, report_folder, allow_incomplete=True)
             self.assertIn("{{findings}}", str(raised.exception))
 
-    def test_image_left_behind_for_an_unaffected_environment_is_not_rendered(self) -> None:
+    def _supporting_image_report(self, report_folder: Path, tested_environments: list[str], extra_image: ImageFragment) -> Report:
+        """A production-only finding carrying one more image, labelled for the other environment."""
+        evidence_folder = report_folder / "evidence"
+        evidence_folder.mkdir()
+        buffer = png_bytes(40, 20)
+        for evidence_id in ("ev_prod", "ev_other"):
+            (evidence_folder / f"{evidence_id}.png").write_bytes(buffer)
+        now = datetime.now().astimezone()
+        windows = {
+            "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
+            "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Anytime"),
+        }
+        targets = [ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test")]
+        if "non_production" in tested_environments:
+            targets.append(ScopeTarget(target_id="t_uat", environment="non_production", channel="web", value="https://uat.example.test"))
+        report = Report(
+            report_id="r_supporting_image",
+            app_id="CI-DOCX",
+            saved_at=now,
+            engagement=Engagement(
+                app_name="Northstar Banking",
+                ci_number="CI-DOCX",
+                segment="JH",
+                report_type="annual_pentest",
+                report_date=date(2026, 9, 9),
+                tester="QA Tester",
+                tested_environments=tested_environments,
+                tested_channels=["web"],
+                non_production_label="UAT",
+                test_windows={environment: windows[environment] for environment in tested_environments},
+            ),
+            scope_targets=targets,
+            evidence={
+                evidence_id: EvidenceItem(file=f"evidence/{evidence_id}.png", original_name=f"{evidence_id}.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)
+                for evidence_id in ("ev_prod", "ev_other")
+            },
+        )
+        report.vulnerabilities = [
+            self._finding("v_prod_only", "Authorization bypass", "high", "001", ["t_prod"], [
+                ImageFragment(frag_id="f_img_prod", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
+                extra_image,
+            ]),
+        ]
+        return report
+
+    def test_a_supporting_image_prints_under_its_own_environment_heading(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)
-            evidence_folder = report_folder / "evidence"
-            evidence_folder.mkdir()
-            buffer = png_bytes(40, 20)
-            for evidence_id in ("ev_prod", "ev_stale"):
-                (evidence_folder / f"{evidence_id}.png").write_bytes(buffer)
-            now = datetime.now().astimezone()
-            report = Report(
-                report_id="r_stale_image",
-                app_id="CI-DOCX",
-                saved_at=now,
-                engagement=Engagement(
-                    app_name="Northstar Banking",
-                    ci_number="CI-DOCX",
-                    segment="JH",
-                    report_type="annual_pentest",
-                    report_date=date(2026, 9, 9),
-                    tester="QA Tester",
-                    tested_environments=["production", "non_production"],
-                    tested_channels=["web"],
-                    test_windows={
-                        "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
-                        "non_production": TestWindow(start_date=date(2026, 7, 28), end_date=date(2026, 7, 30), test_time="Anytime"),
-                    },
-                ),
-                scope_targets=[
-                    ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test"),
-                    ScopeTarget(target_id="t_uat", environment="non_production", channel="web", value="https://uat.example.test"),
-                ],
-                evidence={
-                    evidence_id: EvidenceItem(file=f"evidence/{evidence_id}.png", original_name=f"{evidence_id}.png", width_px=40, height_px=20, sha256="0" * 64, uploaded_at=now)
-                    for evidence_id in ("ev_prod", "ev_stale")
-                },
-            )
-            # The finding covers production only, but a non-production image is still attached.
-            report.vulnerabilities = [
-                self._finding("v_prod_only", "Authorization bypass", "high", "001", ["t_prod"], [
-                    ImageFragment(frag_id="f_img_prod", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
-                    ImageFragment(frag_id="f_img_stale", type="image", environment="non_production", evidence_id="ev_stale", caption="Stale lower-region response"),
-                ]),
-            ]
+            supporting = ImageFragment(frag_id="f_img_uat", type="image", environment="non_production", evidence_id="ev_other", caption="Same response in UAT")
+            report = self._supporting_image_report(report_folder, ["production", "non_production"], supporting)
             self.assertEqual(generation_issues(report), [])
 
-            template = RESOURCES / "MAIN.docx"
-            rendered = Document(BytesIO(render_report_docx(report, template, report_folder)))
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
+            paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
+            self.assertEqual(paragraph_texts.count("PROD:"), 1)
+            self.assertEqual(paragraph_texts.count("UAT:"), 1)
+            self.assertEqual(len(rendered.inline_shapes), 2)
+            self.assertIn("Same response in UAT", "\n".join(paragraph_texts))
+
+    def test_an_untested_environment_image_is_left_out_of_the_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            untested = ImageFragment(frag_id="f_img_uat", type="image", environment="non_production", evidence_id="ev_other", caption="Response from an untested UAT")
+            report = self._supporting_image_report(report_folder, ["production"], untested)
+            self.assertEqual(generation_issues(report), [])
+
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("PROD:"), 1)
             self.assertEqual(paragraph_texts.count("UAT:"), 0)
             self.assertEqual(len(rendered.inline_shapes), 1)
-            self.assertNotIn("Stale lower-region response", "\n".join(paragraph_texts))
+            self.assertNotIn("Response from an untested UAT", "\n".join(paragraph_texts))
+
+    def test_a_started_supporting_image_must_be_complete_and_an_untouched_one_is_left_out(self) -> None:
+        cases = [
+            ("untouched", None, "", []),
+            ("caption without an image", None, "Same response in UAT", ["Authorization bypass: image required for image fragment"]),
+            ("image without a caption", "ev_other", " ", ["Authorization bypass: caption required for image fragment"]),
+        ]
+        for label, evidence_id, caption, expected in cases:
+            with self.subTest(label), tempfile.TemporaryDirectory() as temporary_directory:
+                report_folder = Path(temporary_directory)
+                supporting = ImageFragment(frag_id="f_img_uat", type="image", environment="non_production", evidence_id=evidence_id, caption=caption)
+                report = self._supporting_image_report(report_folder, ["production", "non_production"], supporting)
+                self.assertEqual(generation_issues(report), expected)
+                if not expected:
+                    rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
+                    self.assertEqual([paragraph.text for paragraph in rendered.paragraphs].count("UAT:"), 0)
+                    self.assertEqual(len(rendered.inline_shapes), 1)
 
     def _retest_report(self, report_folder: Path, evidence_ids: tuple[str, ...]) -> Report:
         """A production-only finding in an engagement that also tested non-production."""

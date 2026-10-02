@@ -1,6 +1,7 @@
 # Import reads Previous Proof of Concept headings as the current engagement's environments
 
 Status: needs-triage
+From: [Supporting images are derived from a finding's locations, not stored](../../../docs/adr/0001-supporting-images-are-derived-from-locations.md)
 
 ## What happens
 
@@ -20,3 +21,8 @@ Only Proof of Concept images count as evidence of the current engagement's envir
 - Found by reading the code; not reproduced yet.
 - Retest import of web and API reports is unaffected: it takes tested environments from the scope rows only.
 - Kept separate from the supporting-image change so that a failure in either can be traced on its own.
+
+## Next steps
+
+1. `/triage`: A bug report nobody has evaluated yet.
+2. `/implement`: The cause is known. Import should skip the headings under Previous Proof of Concept.

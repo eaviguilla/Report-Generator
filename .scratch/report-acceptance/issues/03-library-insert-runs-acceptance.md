@@ -13,3 +13,8 @@ To decide: is a refusal on the Findings page over an unrelated field wanted, or 
 finding-building move?
 
 From [docs/plans/report-acceptance.md](../../../docs/plans/report-acceptance.md).
+
+## Next steps
+
+1. `/triage`: Nobody has evaluated it yet.
+2. `/grill-with-docs`: It has an open choice. Refuse an insert over an unrelated field, or check only the new finding.

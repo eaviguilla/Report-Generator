@@ -13,3 +13,8 @@ would refuse a document whose printed values the field rules reject.
 To decide: refuse at import, or keep importing and let the first save report it?
 
 From [docs/plans/report-acceptance.md](../../../docs/plans/report-acceptance.md).
+
+## Next steps
+
+1. `/triage`: Filed by the report-acceptance plan. Nobody has evaluated it yet.
+2. `/implement`: Small once agreed. Run acceptance on retest imports.

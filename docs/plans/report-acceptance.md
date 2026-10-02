@@ -1,7 +1,6 @@
 # Report acceptance: one module for what a save must pass
 
-> **Status:** in progress · 2026-10-02 · not yet committed. The code, tests and docs below are in the
-> working tree; mark this shipped with the commit that contains them.
+> **Status:** shipped · 2026-10-02 · `af37291`
 >
 > **What deviated.**
 > - `save_report` now hands `save_if_current` the stored revision instead of `client_saved_at or

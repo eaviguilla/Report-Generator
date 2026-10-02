@@ -635,6 +635,12 @@ class ReportApiTests(unittest.TestCase):
         }
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
         self.assertEqual(self.client.get(f"/reports/{report_id}/findings").status_code, 200)
+        # A report with no findings can be generated, so Content opens for it.
+        self.assertEqual(self.client.get(f"/reports/{report_id}/edit", follow_redirects=False).status_code, 200)
+
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = [{"uid": "v_gate", "title": "Finding without a location", "likelihood": "low", "impact": "low", "severity": "low", "status": "open_new", "scope": {"mode": "custom"}}]
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
         self.assertEqual(self.client.get(f"/reports/{report_id}/edit", follow_redirects=False).headers["location"], f"/reports/{report_id}/findings?incomplete=findings")
 
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
@@ -2064,6 +2070,26 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(again.json()["filename"], second_path.name)
         self.assertTrue(second_path.is_file())
         self.assertTrue(output_path.is_file())
+
+    def test_a_report_with_no_findings_generates_only_when_the_request_confirms_it(self) -> None:
+        """A page that still shows a finding sends no confirmation, so a report that lost its last
+        finding in another tab is refused instead of printed without the tester agreeing."""
+        report_id = self._generatable_report()
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["vulnerabilities"] = []
+        self.assertEqual(self.client.put(f"/reports/{report_id}", json=report).status_code, 200)
+        word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
+        word.start()
+        self.addCleanup(word.stop)
+        for method in ("get", "post"):
+            with self.subTest(method=method):
+                send = getattr(self.client, method)
+                refused = send(f"/reports/{report_id}/generate")
+                self.assertEqual(refused.status_code, 422)
+                self.assertEqual(refused.json()["error"]["code"], "no_findings_unconfirmed")
+                self.assertEqual(refused.json()["detail"]["message"], main.NO_FINDINGS_UNCONFIRMED)
+                confirmed = send(f"/reports/{report_id}/generate", params={"confirm_no_findings": "true"})
+                self.assertEqual(confirmed.status_code, 200)
 
     def test_library_rejects_invalid_documents(self) -> None:
         path = self.root / "invalid-library.json"

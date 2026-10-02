@@ -124,10 +124,12 @@ second time.
 Every column but the first is a **per-finding** value: `finding.title`,
 `finding.severity`, `finding.cvss_score`, `finding.cvss_vector`. The CVSS pair
 is held on the finding, not on the engagement, so a report prints as many pairs
-as it has findings. A report with **no** findings still gets one cloned row with
-all five cells replaced by the empty string, because leaving the prototype
-placeholders in place would fail the unresolved-placeholder check at the end of
-generation.
+as it has findings. A report with **no** findings gets one cloned row reading
+`N/A` in all five cells, with every colour removed so the Severity cell does not
+keep the prototype's. Leaving the prototype placeholders in place would fail the
+unresolved-placeholder check at the end of generation, and the importer reads
+this row back as no findings (see
+[A report with no findings](#a-report-with-no-findings)).
 
 **`{{section-number}}` becomes a Word `REF` field, never a number counted in
 Python.** `_populate_component_findings` bookmarks each finding-title paragraph
@@ -284,6 +286,46 @@ Detail sections are generated dynamically:
   `SCOPE_WRAP_CHARACTERS` (84) for the web and API scope tables.
 - Previous Proof of Concept and In Conclusion exist only in retest finding
   components.
+
+## A report with no findings
+
+A report with no findings of any status prints a fixed layout instead of the
+findings body. The decisions are in `docs/plans/no-findings-report.md` and
+`docs/adr/0002-no-findings-report-is-derived-and-confirmed-per-request.md`.
+
+- The Findings summary table gets one row: `NO_FINDINGS_TITLE`
+  (`(No vulnerability found)`, in `app/docx_import.py`), then `N/A` for
+  Likelihood, Impact, Severity, ID and Status. No cell is coloured. The three
+  rating cells are set to 12 pt like any rating, because their prototype token
+  run is 10 pt.
+- `resources/severity_titles/no_finding.docx` takes the place of every severity
+  section at `{{findings}}`. It holds the TESTING RESULT heading in Report
+  Heading 1, so the heading is numbered and listed in the table of contents like
+  a severity heading, and a paragraph holding `{{testing_result}}`.
+  `_populate_component_findings` fills that tag with `TESTING_RESULT_PARAGRAPH`
+  and gives the first paragraph a page break before it, as it does a severity
+  section. The paragraph's look comes from the file; the code supplies only the
+  words.
+- The Asia Section table gets its one `N/A` row.
+- The three template sentences that mention findings (the executive summary's
+  pointer to the Findings Summary, the CVSS appendix pointer, and the Findings
+  Summary introduction) print unchanged.
+
+`no_finding.docx` is authored in Word by the user. Like every component it may
+use only styles the four masters define and may hold no relationship in its
+body. It must carry no tag except `{{testing_result}}`, because metadata tags
+such as `{{app-name}}` are replaced before the findings body is inserted and
+would be left unresolved.
+
+`generation_issues` no longer asks for a finding. Generating a report with no
+findings instead needs the tester's confirmation on the request (see
+`docs/ROUTES.md`).
+
+Reading it back, `_summary_rows` returns no rows when the table's only row is
+the placeholder, and `_findings` drops the Section table's lone all-`N/A` row
+when the summary held none, so both import modes produce a draft with zero
+findings. The TESTING RESULT heading is a Report Heading 1 that does not start
+with "Appendix:", so the body scan passes over it.
 
 ## Severity Review Tickets, in the retest finding component
 

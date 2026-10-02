@@ -700,7 +700,7 @@
     const notice = document.querySelector("#finding-validation-note");
     if (notice) {
       notice.hidden = false;
-      notice.textContent = "Add at least one complete finding before continuing to Content.";
+      notice.textContent = "Complete every finding before continuing to Content.";
     }
     // Reveals the live per-finding count too, so the sentence above stops being the only signal and
     // starts naming what is missing. setup() declares its own #findings handle long after this runs.
@@ -853,6 +853,9 @@
   document.querySelector("#generate-report")?.addEventListener("click", async event => {
     const button = event.currentTarget;
     if (button.dataset.busy === "true") return;
+    const noFindings = !report.vulnerabilities.length;
+    // "default" rather than "primary" so the dialog focuses Cancel, and a second Enter cannot generate.
+    if (noFindings && !await window.vrDialog.confirm({title:"This report has no findings", message:"Generate a report with no findings?", confirmLabel:"Generate with no findings", cancelLabel:"Cancel", tone:"default"})) return;
     const label = button.textContent;
     // The busy labels are shorter; hold the idle width so nothing in the bar moves.
     button.style.minWidth = `${button.getBoundingClientRect().width}px`;
@@ -868,7 +871,7 @@
     }
     button.textContent = "Generating...";
     try {
-      const response = await fetch(`/reports/${reportId}/generate`, {method:"POST"});
+      const response = await fetch(`/reports/${reportId}/generate${noFindings ? "?confirm_no_findings=true" : ""}`, {method:"POST"});
       if (!response.ok) throw await diagnostics.fromResponse(response, "generate_report_to_folder", "Generation failed");
       const generated = await response.json();
       if (document.querySelector("#app-diagnostics")?.dataset.operation === "generate_report_to_folder") diagnostics.clear();
@@ -1817,9 +1820,15 @@
       let findings = 0;
       let supporting = 0;
       let untested = 0;
+      const becomingUntested = report.engagement.tested_environments.filter(environment => !testedAfter.includes(environment));
       (report.vulnerabilities || []).forEach(finding => {
         const scope = finding.scope || {};
         const selected = scope.target_ids || [];
+        (finding.contents || []).filter(content => content.type !== "previous_proof_of_concept")
+          .flatMap(content => content.fragments || [])
+          .filter(fragment => fragment.type === "image" && becomingUntested.includes(fragment.environment)
+            && (fragment.evidence_id || fragment.caption?.trim()))
+          .forEach(() => { untested += 1; });
         if (!selected.some(targetId => targetIds.has(targetId))) return;
         findings += 1;
         const kept = scopeEnvironments({target_ids:selected.filter(targetId => !targetIds.has(targetId))});
@@ -1831,8 +1840,9 @@
         (finding.contents || []).forEach(content => {
           if (content.type === "previous_proof_of_concept") return;
           (content.fragments || []).filter(fragment => fragment.type === "image"
-            && lost.includes(fragment.environment) && (fragment.evidence_id || fragment.caption?.trim()))
-            .forEach(fragment => { if (testedAfter.includes(fragment.environment)) supporting += 1; else untested += 1; });
+            && lost.includes(fragment.environment) && testedAfter.includes(fragment.environment)
+            && (fragment.evidence_id || fragment.caption?.trim()))
+            .forEach(() => { supporting += 1; });
         });
       });
       return {findings, supporting, untested};
@@ -2786,7 +2796,7 @@
         assessment: [finding.likelihood, finding.impact, finding.severity, finding.status].map(value => !value),
         location: !scopeHasLocation(finding)
       })).filter(finding => finding.title || finding.assessment.some(Boolean) || finding.location);
-      if (!report.vulnerabilities.length || incomplete.length) {
+      if (incomplete.length) {
         if (reveal) {
           findingBody.dataset.validationAttempted = "true";
           incomplete.forEach(finding => {
@@ -2801,7 +2811,6 @@
           });
           const firstRow = incomplete.length ? findingBody.children[incomplete[0].index * 2] : null;
           firstRow?.scrollIntoView({behavior:"smooth", block:"center"});
-          if (!report.vulnerabilities.length) document.querySelector("#add-finding")?.focus({preventScroll:true});
           setSaveState(SAVE_STATES.UNSAVED, "Enter a finding name, complete the highlighted fields, and select or add a location for every finding");
           updateFindingSummary();
         }
@@ -3052,7 +3061,7 @@
         : "";
       const unset = !fragment.environment ? '<option value="" selected>Select an environment</option>' : "";
       environmentSelect.innerHTML = current + unset + imageEnvironments.map(environment => `<option value="${environment}" ${fragment.environment === environment ? "selected" : ""}>${environmentOption(environment)}</option>`).join("");
-      environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; rerender(); scheduleSave(); };
+      environmentSelect.onchange = () => { fragment.environment = environmentSelect.value || null; syncEvidenceImageSlots(finding); rerender(); scheduleSave(); };
       facts.append(environmentSelect);
     }
     const size = document.createElement("small");
@@ -3683,7 +3692,7 @@
       };
       panel.innerHTML = rows.length
         ? groups.map(renderGroup).join("")
-        : '<div class="review-empty">Every finding is complete. The report is ready to generate.</div>';
+        : `<div class="review-empty">${report.vulnerabilities.length ? "Every finding is complete." : "No findings to complete."} The report is ready to generate.</div>`;
       const foldAllReview = document.querySelector("#review-fold-all");
       const reviewGroups = [...panel.querySelectorAll(".review-group")];
       const updateFoldAllReview = () => {
@@ -3803,16 +3812,9 @@
       nav.innerHTML = "";
       pane.innerHTML = "";
       if (!findings.length) {
-        pane.innerHTML = "<section><h1>No findings yet</h1><p>Add a vulnerability to begin its content.</p><button class=\"add-vulnerability\" type=\"button\">Add vulnerability</button></section>";
-        pane.querySelector(".add-vulnerability").onclick = () => {
-          const newFinding = {uid:id("v"), title:"", severity:"informational", status:"open_new", scope:{mode:"custom",target_ids:[],location_values:{},custom_locations:{}}, contents:[]};
-          provision(newFinding);
-          report.vulnerabilities.push(newFinding);
-          render();
-          scheduleSave();
-          document.getElementById(`finding-${newFinding.uid}`)?.scrollIntoView({behavior:"smooth", block:"start"});
-          document.getElementById(`finding-${newFinding.uid}`)?.querySelector(".edit-title")?.click();
-        };
+        // Findings are added on the Findings page only, so this page offers no way to add one.
+        pane.innerHTML = "<section><h1>No findings</h1><p>This report has no findings. The Word report will show (No vulnerability found) in the findings table and the testing result paragraph in place of the findings sections.</p></section>";
+        updateReadinessPanel();
         return;
       }
       const navHeading = document.createElement("div");

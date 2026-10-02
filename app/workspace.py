@@ -18,6 +18,7 @@ from .report_service import INVALID_FILENAME_CHARACTERS, RESOLVED_REMEDIATION
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 
 RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}
+EVIDENCE_UNDO_FOLDER = ".undo"
 
 
 class StaleReportError(RuntimeError):
@@ -328,7 +329,7 @@ class Workspace:
             if draft_path is None:
                 raise FileNotFoundError(report.report_id)
             evidence_root = draft_path.parent / "evidence"
-            existing_bytes = sum(path.stat().st_size for path in evidence_root.glob("*.png")) if evidence_root.is_dir() else 0
+            existing_bytes = sum(path.stat().st_size for path in evidence_root.rglob("*.png")) if evidence_root.is_dir() else 0
             if existing_bytes + len(contents) > evidence_limit:
                 raise ValueError("Report evidence exceeds the configured limit")
             original_file = draft_path.parent / relative_file
@@ -345,6 +346,7 @@ class Workspace:
 
     def _save_unlocked(self, report: Report) -> Path:
         existing = self.find_path(report.report_id)
+        recoverable_evidence = self._fragment_evidence_files(Report.model_validate(read_json(existing))) if existing is not None else set()
         desired = self.apps_root / app_folder_name(report) / report_folder_name(report) / "draft.json"
         path = existing or desired
         if existing is not None:
@@ -364,17 +366,49 @@ class Workspace:
         report.folder_name_hint = FolderHint(app_folder=path.parent.parent.name, report_folder=path.parent.name)
         now = datetime.now().astimezone()
         report.saved_at = max(now, report.saved_at + timedelta(microseconds=1))
+        self._restore_undo_evidence(path.parent, report)
         atomic_write_json(path, report.model_dump(mode="json", by_alias=True))
-        self._drop_orphan_evidence(path.parent, report)
+        self._drop_orphan_evidence(path.parent, report, recoverable_evidence)
         return path
 
     @staticmethod
-    def _drop_orphan_evidence(report_root: Path, report: Report) -> None:
-        """Delete evidence files the draft stopped referencing, such as after a library replace."""
+    def _fragment_evidence_files(report: Report) -> set[str]:
+        evidence_ids = {
+            fragment.evidence_id
+            for finding in report.vulnerabilities
+            for content in finding.contents
+            for fragment in content.fragments
+            if getattr(fragment, "evidence_id", None)
+        }
+        return {Path(report.evidence[evidence_id].file).name for evidence_id in evidence_ids if evidence_id in report.evidence}
+
+    @staticmethod
+    def _restore_undo_evidence(report_root: Path, report: Report) -> None:
+        evidence_root = report_root / "evidence"
+        undo_root = evidence_root / EVIDENCE_UNDO_FOLDER
+        if not undo_root.is_dir():
+            return
+        for evidence in report.evidence.values():
+            active = evidence_root / Path(evidence.file).name
+            archived = undo_root / active.name
+            if not active.exists() and archived.is_file():
+                archived.replace(active)
+        if not any(undo_root.iterdir()):
+            undo_root.rmdir()
+
+    @staticmethod
+    def _drop_orphan_evidence(report_root: Path, report: Report, recoverable_evidence: set[str]) -> None:
+        """Remove inactive evidence while keeping previously attached files available to Undo."""
         evidence_root = report_root / "evidence"
         if not evidence_root.is_dir():
             return
         referenced = {Path(evidence.file).name for evidence in report.evidence.values()}
         for stored in evidence_root.glob("*.png"):
-            if stored.name not in referenced:
+            if stored.name in referenced:
+                continue
+            if stored.name in recoverable_evidence:
+                undo_root = evidence_root / EVIDENCE_UNDO_FOLDER
+                undo_root.mkdir(exist_ok=True)
+                stored.replace(undo_root / stored.name)
+            else:
                 stored.unlink(missing_ok=True)

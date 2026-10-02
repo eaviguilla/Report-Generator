@@ -70,6 +70,8 @@ ERROR_LOG_PATH = DATA / "vulnreport-errors.log"
 # Shown to the tester as-is; relative only when the data folder sits inside the project.
 ERROR_LOG_LABEL = str(ERROR_LOG_PATH.relative_to(ROOT) if ERROR_LOG_PATH.is_relative_to(ROOT) else ERROR_LOG_PATH)
 STALE_REPORT_DETAIL = "This report changed in another browser tab. Choose whether to save your version or load the latest version."
+# A page that still shows a finding sends no confirmation, so this is how it learns the last one went.
+NO_FINDINGS_UNCONFIRMED = "This report has no findings. Reload the page and press Generate again to confirm."
 
 
 def configure_error_logging() -> None:
@@ -494,9 +496,9 @@ def export_report(report_id: str):
 
 
 @app.get("/reports/{report_id}/generate")
-def generate_report(report_id: str):
+def generate_report(report_id: str, confirm_no_findings: bool = False):
     """Render and download a complete report through the canonical Word template."""
-    report, _, contents, _ = finalized_report(report_id)
+    report, _, contents, _ = finalized_report(report_id, confirm_no_findings=confirm_no_findings)
     filename = report_export_filename(report, ".docx")
     return Response(
         content=contents,
@@ -506,19 +508,21 @@ def generate_report(report_id: str):
 
 
 @app.post("/reports/{report_id}/generate")
-def generate_report_to_folder(report_id: str):
+def generate_report_to_folder(report_id: str, confirm_no_findings: bool = False):
     """Render and save a complete report into the shared generated folder."""
-    report, _, _, output_path = finalized_report(report_id, save_to_folder=True)
+    report, _, _, output_path = finalized_report(report_id, save_to_folder=True, confirm_no_findings=confirm_no_findings)
     return {"filename": output_path.name, "path": str(output_path), "folder": str(GENERATED)}
 
 
-def finalized_report(report_id: str, *, save_to_folder: bool = False) -> tuple[Report, Path, bytes, Path]:
+def finalized_report(report_id: str, *, save_to_folder: bool = False, confirm_no_findings: bool = False) -> tuple[Report, Path, bytes, Path]:
     """Validate and Word-finalize one stored report."""
     try:
         with workspace.locked_report(report_id) as (report, draft_path):
             issues = generation_issues(report)
             if issues:
                 raise HTTPException(422, {"message": "Complete the report before generating it", "issues": issues})
+            if not report.vulnerabilities and not confirm_no_findings:
+                raise HTTPException(422, {"message": NO_FINDINGS_UNCONFIRMED, "code": "no_findings_unconfirmed"})
             contents = render_report_docx(
                 report,
                 main_template_path(report, ROOT / "resources"),
@@ -733,7 +737,7 @@ def edit(request: Request, report_id: str):
     report = report_or_404(report_id)
     if not setup_is_complete(report):
         return RedirectResponse(f"/reports/{report_id}/setup?incomplete=setup", status_code=303)
-    if not report.vulnerabilities or not all(finding_is_complete(vulnerability, report) for vulnerability in report.vulnerabilities):
+    if not all(finding_is_complete(vulnerability, report) for vulnerability in report.vulnerabilities):
         return RedirectResponse(f"/reports/{report_id}/findings?incomplete=findings", status_code=303)
     report_payload = report.model_dump(mode="json", by_alias=True)
     report_payload["_unicode_character_ranges"] = unicode_character_ranges()

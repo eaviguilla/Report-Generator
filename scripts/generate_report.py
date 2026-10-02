@@ -16,10 +16,13 @@ def main() -> int:
     parser.add_argument("-t", "--template", type=Path, help="Defaults to the master the app would pick")
     parser.add_argument("-o", "--output", type=Path)
     parser.add_argument("--allow-incomplete", action="store_true", help="Render missing evidence as visible placeholders")
+    parser.add_argument("--no-findings", action="store_true", help="Confirm that a report with no findings should be generated")
     arguments = parser.parse_args()
 
     try:
         report = workspace.load(arguments.report_id)
+        if not report.vulnerabilities and not arguments.no_findings:
+            parser.error("This report has no findings. Pass --no-findings to generate a report with no findings.")
         draft_path = workspace.find_path(arguments.report_id)
         if draft_path is None:
             raise FileNotFoundError(arguments.report_id)

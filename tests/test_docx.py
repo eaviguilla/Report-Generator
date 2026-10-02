@@ -17,6 +17,7 @@ from PIL import Image
 from app.docx_report import (
     LOCATION_WRAP_CHARACTERS,
     SCOPE_WRAP_CHARACTERS,
+    TESTING_RESULT_PARAGRAPH,
     ReportGenerationError,
     _metadata,
     _wrap_long_value,
@@ -25,6 +26,7 @@ from app.docx_report import (
     render_report_docx,
 )
 from app.docx_captions import flatten_section_number_fields
+from app.docx_import import NO_FINDINGS_TITLE
 from app.report_service import provision, sync_evidence_image_slots
 from tests.support import numbering_details, off_border_pixels, png_bytes
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, Segment, TableFragment, TestAccount, TestWindow, Vulnerability
@@ -1172,13 +1174,16 @@ class DocxReportTests(unittest.TestCase):
         table headers and tokens, and every one of them is a hard precondition."""
         resources = RESOURCES
         for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia"), ("web", "GDT"), ("thick_client", "GDT"), ("web", "GFT"), ("thick_client", "GFT")):
-            with self.subTest(channel=channel, segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
-                report_folder = Path(temporary_directory)
-                report = self._component_report(report_folder, channel, segment, [
-                    ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
-                ])
-                self.assertEqual(generation_issues(report), [])
-                render_report_docx(report, main_template_path(report, resources), report_folder)
+            for has_findings in (True, False):
+                with self.subTest(channel=channel, segment=segment, has_findings=has_findings), tempfile.TemporaryDirectory() as temporary_directory:
+                    report_folder = Path(temporary_directory)
+                    report = self._component_report(report_folder, channel, segment, [
+                        ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
+                    ])
+                    if not has_findings:
+                        report.vulnerabilities = []
+                    self.assertEqual(generation_issues(report), [])
+                    render_report_docx(report, main_template_path(report, resources), report_folder)
 
     def test_component_scope_fills_the_binaries_table_production_first(self) -> None:
         resources = RESOURCES
@@ -1217,6 +1222,53 @@ class DocxReportTests(unittest.TestCase):
             table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Component")
             self.assertEqual([(row.cells[0].text, row.cells[1].text) for row in table.rows[1:]], [("N/A", "N/A")])
             self.assertIn("Mobile", "\n".join(paragraph.text for paragraph in rendered.paragraphs))
+
+    def _no_findings_document(self, report_folder: Path, segment: str = "JH"):
+        report = self._component_report(report_folder, "web", segment, [
+            ScopeTarget(target_id="t_prod", environment="production", channel="web", value="https://prod.example.test"),
+        ])
+        report.vulnerabilities = []
+        return Document(BytesIO(render_report_docx(report, main_template_path(report, RESOURCES), report_folder)))
+
+    def test_a_report_with_no_findings_prints_one_plain_summary_row(self) -> None:
+        """The rating columns would keep the template's 10 pt token run, and a row that rates nothing
+        has no rating colour to show."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            rendered = self._no_findings_document(Path(temporary_directory))
+            summary = next(table for table in rendered.tables if table.cell(0, 0).text == "Findings")
+            self.assertEqual(
+                [[cell.text for cell in row.cells] for row in summary.rows[1:]],
+                [[NO_FINDINGS_TITLE, "N/A", "N/A", "N/A", "N/A", "N/A"]],
+            )
+            for index, cell in enumerate(summary.rows[1].cells):
+                run = next(run for run in cell.paragraphs[0].runs if run.text)
+                self.assertIsNone(run.font.color.rgb, f"column {index} is coloured")
+                if index in (1, 2, 3):
+                    self.assertEqual(run.font.size, Pt(12), f"column {index} kept the token's size")
+
+    def test_a_report_with_no_findings_prints_the_testing_result_in_place_of_the_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            rendered = self._no_findings_document(Path(temporary_directory))
+            paragraphs = [paragraph for paragraph in rendered.paragraphs if paragraph.text.strip()]
+            result = next(index for index, paragraph in enumerate(paragraphs) if paragraph.text == TESTING_RESULT_PARAGRAPH)
+            heading = paragraphs[result - 1]
+            self.assertEqual(heading.style.style_id, "ReportHeading1")
+            self.assertIsNotNone(heading._p.find(qn("w:pPr")).find(qn("w:pageBreakBefore")), "the section does not start a page")
+            severity_headings = [
+                paragraph.text for paragraph in paragraphs
+                if paragraph.style.style_id == "ReportHeading1" and paragraph.text.endswith("Findings")
+            ]
+            self.assertEqual(severity_headings, [])
+
+    def test_an_asia_report_with_no_findings_prints_one_plain_section_row(self) -> None:
+        """The empty row this used to print would not import back, and its Severity cell kept the
+        template's colour."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            rendered = self._no_findings_document(Path(temporary_directory), "Asia")
+            table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Section")
+            self.assertEqual([[cell.text for cell in row.cells] for row in table.rows[1:]], [["N/A"] * 5])
+            self.assertEqual(list(table.rows[1]._tr.iter(qn("w:color"))), [], "an N/A cell kept a colour")
+            self.assertEqual(list(table.rows[1]._tr.iter(qn("w:instrText"))), [], "an N/A cell holds a field")
 
     def _asia_multi_finding_document(self, report_folder: Path):
         report = self._component_report(report_folder, "thick_client", "Asia", [

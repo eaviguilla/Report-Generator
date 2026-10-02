@@ -55,6 +55,8 @@ STATUS_BY_LABEL = {label: status for status, label in STATUS_LABELS.items()}
 # A label this app does not know falls back to this rather than refusing the document, so a report
 # written by an older version or edited by hand still imports.
 FALLBACK_STATUS = "open_previously_discovered"
+# The title of the one summary row a report with no findings prints. docx_report writes it.
+NO_FINDINGS_TITLE = "(No vulnerability found)"
 IMPORT_MODES = {"editable", "retest"}
 REPORT_TYPE_BY_LABEL = {label: value for value, label in REPORT_TYPE_LABELS.items()}
 FIGURE_PREFIX = re.compile(r"^Figure\s+\d+\s*[.:\-]?\s*")
@@ -642,9 +644,11 @@ def _summary_rows(document) -> list[dict]:
     table = _find_table(document, "Findings")
     if table is None:
         raise ReportImportError("This document has no findings summary table.")
+    printed = [[cell.text.strip() for cell in row.cells] for row in table.rows[1:]]
+    if len(printed) == 1 and printed[0][:6] == [NO_FINDINGS_TITLE, *["N/A"] * 5]:
+        return []
     rows = []
-    for row in table.rows[1:]:
-        cells = [cell.text.strip() for cell in row.cells]
+    for cells in printed:
         if len(cells) < 6 or not cells[0]:
             continue
         rows.append({
@@ -804,6 +808,9 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
     if cvss_table is not None and any(len(row.cells) < 5 for row in cvss_table.rows[1:]):
         raise ReportImportError("The CVSS table has an invalid Section row.")
     unclaimed_cvss = list(cvss_table.rows[1:]) if cvss_table is not None else []
+    # Beside the placeholder summary row, this row names no finding for a heading to claim.
+    if not summary_rows and [[cell.text.strip() for cell in row.cells][:5] for row in unclaimed_cvss] == [["N/A"] * 5]:
+        unclaimed_cvss = []
     findings, dropped, rewritten = [], [], []
     for position, (index, title) in enumerate(starts):
         stop = len(body)

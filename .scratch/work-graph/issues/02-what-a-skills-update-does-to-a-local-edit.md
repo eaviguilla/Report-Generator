@@ -1,7 +1,7 @@
 # What a mattpocock/skills update does to a skill edited here
 
 Type: research
-Status: resolved
+Status: wontfix
 Merged into: [How the architecture review files its items](07-how-the-architecture-review-files-its-items.md)
 Map: [Observatory and the architecture review](../map.md)
 

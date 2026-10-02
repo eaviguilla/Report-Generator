@@ -1,6 +1,6 @@
 # Open (Resolved on Non-Prod), username spaces, and N/A as a bulleted list
 
-> **Status:** shipped · 2026-09-21 · `e998ab5`
+> **Status:** done · 2026-09-21 · `e998ab5`
 >
 > All seventeen agreed steps landed. Four things deviated, and the first is the one worth reading.
 >

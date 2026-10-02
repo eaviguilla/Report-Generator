@@ -9,7 +9,7 @@ A spec, written with `/to-spec`, for two pieces of tooling:
 - the **observatory**: a page generated from this repo's work items that shows them as linked nodes, with a detail panel, next steps, and a copy button for each next step;
 - the **architecture review**, `/improve-codebase-architecture`, changed so that it files its recommendations into `.scratch/` as review items, each with a status and next steps.
 
-The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the spec, because the user asked for it. The spec still covers what that build left: the official statuses in every file, the rules that keep next steps and links current, and the architecture review change. Building those starts after this map closes, through `/to-tickets` and `/implement`.
+The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the spec, because the user asked for it. The official statuses and the rules that keep next steps and links current followed the same day. The spec now covers only the architecture review change, built after this map closes through `/to-tickets` and `/implement`.
 
 ## Notes
 
@@ -54,7 +54,7 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 
 - Other sessions work in this same checkout. Never edit their uncommitted files and never switch this checkout's branch.
 - Never push unless the user asks in that turn.
-- Until the build moves them to the official statuses, this map's tickets keep the tracker's current words (`open`, `claimed`, `resolved`), because `/wayfinder` reads them from `docs/agents/issue-tracker.md`.
+- This map's tickets use the official statuses, which `docs/agents/issue-tracker.md` defines for `/wayfinder`.
 
 **Assets.**
 
@@ -83,4 +83,4 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 ## Next steps
 
 1. `/wayfinder`: One question is still under Not yet specified: whether the `.out-of-scope/` files that `/triage` writes become stars.
-2. `/to-spec`: Once that is settled or ruled out, write the spec for what the observatory build left and for the architecture review change.
+2. `/to-spec`: Once that is settled or ruled out, write the spec for the architecture review change.

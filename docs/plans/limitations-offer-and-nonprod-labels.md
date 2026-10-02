@@ -1,6 +1,6 @@
 # Limitations suggestion, and non-production labels as free text
 
-> **Status:** shipped · 2026-09-17 · `330d7d9`
+> **Status:** done · 2026-09-17 · `330d7d9`
 
 Two changes to the Setup page, coupled by one non-obvious constraint: the second writes the
 label into the first's field, so the label's legal characters are bounded by the Limitations

@@ -20,14 +20,15 @@ Keep the evidence links in the file. Keep the summary short.
 ## A plan is not evidence
 
 `docs/plans/` describes what someone intended, which is not always what shipped. Each plan carries a
-status line: `planning`, `agreed`, `in progress`, `shipped`, `superseded` or `abandoned`.
+status line from `docs/agents/issue-tracker.md`: `needs-info`, `ready-for-agent`, `in-progress`, `done`
+or `wontfix`.
 
 - Never report a plan's contents as current behaviour. Read the source and say what the source does.
-- Treat even `shipped` as a hint about where to look, not as proof. Plans are backfilled and edited
+- Treat even `done` as a hint about where to look, not as proof. Plans are backfilled and edited
   by hand, and a status can be stale or simply wrong.
-- A `shipped` plan's deviation note is the most useful part: it records where execution departed
+- A `done` plan's deviation note is the most useful part: it records where execution departed
   from the plan, which is exactly where the code will surprise you.
-- If you find that the code contradicts a plan marked `shipped`, say so in your report. That is a
+- If you find that the code contradicts a plan marked `done`, say so in your report. That is a
   finding, not a detail.
 
 ## Constraints

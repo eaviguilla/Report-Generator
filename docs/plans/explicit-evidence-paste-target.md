@@ -1,6 +1,6 @@
 # Explicit evidence paste target
 
-> **Status:** shipped · 2026-09-21 · `e998ab5`
+> **Status:** done · 2026-09-21 · `e998ab5`
 
 ## Request
 

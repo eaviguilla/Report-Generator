@@ -1,6 +1,6 @@
 # GDT segment and Closed status
 
-> **Status:** shipped · 2026-09-22 · `e998ab5`
+> **Status:** done · 2026-09-22 · `e998ab5`
 
 ## Request
 

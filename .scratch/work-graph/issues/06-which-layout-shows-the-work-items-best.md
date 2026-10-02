@@ -1,7 +1,7 @@
 # Which layout shows the work items best
 
 Type: prototype
-Status: resolved
+Status: done
 Blocked by: 03
 Map: [Observatory and the architecture review](../map.md)
 

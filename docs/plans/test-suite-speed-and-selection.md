@@ -1,6 +1,6 @@
 # Test suite: speed, honesty, and running only the tests a change needs
 
-> **Status:** shipped · 2026-09-29 · `5bb2c65`
+> **Status:** done · 2026-09-29 · `5bb2c65`
 >
 > **What deviated.** Merging `overrides.css` was the previous change; this one found that tests wrote
 > into the real `data/` (every test error was appended to the user's error log), which became step 1.

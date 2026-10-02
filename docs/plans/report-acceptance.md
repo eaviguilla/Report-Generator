@@ -1,6 +1,6 @@
 # Report acceptance: one module for what a save must pass
 
-> **Status:** shipped · 2026-10-02 · `af37291`
+> **Status:** done · 2026-10-02 · `af37291`
 >
 > **What deviated.**
 > - `save_report` now hands `save_if_current` the stored revision instead of `client_saved_at or

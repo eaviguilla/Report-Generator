@@ -1,7 +1,7 @@
 # What a work item is, and how a link is recorded
 
 Type: grilling
-Status: resolved
+Status: done
 Map: [Observatory and the architecture review](../map.md)
 
 ## Question

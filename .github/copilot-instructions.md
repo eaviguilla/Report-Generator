@@ -34,6 +34,9 @@ document matching the house template. No database, no frontend framework, no bui
 - **Data:** `data/apps/<app>/<month>_<type>_<id>/draft.json` + `draft.bak.json` + `evidence/*.png`.
   Real drafts — never delete anything under `data/`.
 - **Tests:** `tests/` (unittest; `test_browser.py` is Playwright). Dev deps in `requirements-dev.txt`.
+- **Observatory:** `py -3 tools/observatory/observatory.py` (`python3` on macOS) draws the work items in
+  `docs/plans/`, `.scratch/` and `docs/adr/` as a star map, with next steps to copy, and opens it. It is
+  planning tooling, not part of the app, and neither release ships it.
 
 Read before changing these areas:
 
@@ -70,14 +73,15 @@ checkout.
 
 # Implementing a plan
 
-`docs/plans/` holds one document per change, each opening with a status line: `planning`, `agreed`,
-`in progress`, `shipped`, `superseded` or `abandoned`.
+`docs/plans/` holds one document per change, each opening with a status line from the seven in
+`docs/agents/issue-tracker.md`: `needs-info` while it is worked out, `ready-for-agent` once agreed,
+`in-progress`, `done`, or `wontfix` when it was superseded or abandoned.
 
 **If you implement a plan, you update its document in the same change.** Nobody else will, and a
-plan that still reads `agreed` after it shipped is indistinguishable from one that was never built.
+plan that still reads `ready-for-agent` after it shipped is indistinguishable from one that was never built.
 
 - Tick the checkboxes in *Agreed plan* as each step lands.
-- Set the status to `shipped`, with the date and the commit.
+- Set the status to `done`, with the date and the commit.
 - Write one short paragraph on **what deviated** — a step dropped, a requirement discovered while
   building, a different solution than the one agreed. This is the part people read later; the
   agreed steps only tell them what was expected, not what happened.
@@ -86,9 +90,12 @@ If you implement something a plan covers without following that plan, say so the
 contradicted by the code is worse than no plan, because the `loremaster` and anyone reading it will
 take it as fact.
 
-- Mark a plan `shipped` only with the commit that contains its change. A plan marked `shipped` whose
-  code is missing is worse than one still marked `agreed`: check with `git log -S` on a symbol the
+- Mark a plan `done` only with the commit that contains its change. A plan marked `done` whose
+  code is missing is worse than one still marked `ready-for-agent`: check with `git log -S` on a symbol the
   plan adds.
+- While a plan is open, keep its `## Next steps` list current. Put a `From:` line inside its status
+  blockquote when you make it from another item, and a `Merged into:` line, with `wontfix`, when another
+  item takes it over. `docs/agents/issue-tracker.md` has the details.
 - Plans run to about 3,400 lines. Do not read one whole: list its `## ` headings, then read only
   `## Answers` and `## Agreed plan`. The code and `docs/DATA_MAP.md` outrank a plan.
 

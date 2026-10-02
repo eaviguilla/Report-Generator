@@ -18,13 +18,14 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 - How it works: `docs/ARCHITECTURE.md`. Data contract: `docs/DATA_MAP.md` (§12 rules that exist twice, §13 sharp edges). Routes: `docs/ROUTES.md`. Word tokens: `docs/DOCX_TEMPLATE.md`.
 - `data/` holds real drafts: never delete or edit anything under it. The Word masters are `resources/*.docx`.
 - Traps load by file path from `.claude/rules/`. Those files are generated from `.github/instructions/*.instructions.md` (the Copilot rules): edit the `.github` file, then run `.venv/bin/python scripts/sync_ai_rules.py`. `tests/test_ai_rules_sync.py` fails when they drift.
+- Work items (plans, `.scratch/` issues and maps, decision records): `.venv/bin/python tools/observatory/observatory.py` draws them as a star map with next steps to copy. Their statuses, `From:`, `Blocked by:` and `Merged into:` lines and `## Next steps` lists follow `docs/agents/issue-tracker.md`.
 
 ## Rules
 - Every bug fix gets a regression test. Before each test run, state its scope in one line; `relevant_tests.py` prints it.
 - Do not modify `resources/*.docx` or other binary templates without asking.
 - Word automation (`pythoncom`, `win32com`) stays in `app/docx_captions.py`; `msvcrt` stays behind its existing guards in `app/workspace.py` and `app/init.py`.
-- `docs/plans/` is 25 files of up to 3,400 lines each. Never Read one whole: `grep -n '^## '` it, then Read only `## Answers` and `## Agreed plan`. A plan is a dated record: trust the code and `docs/DATA_MAP.md` over it, and run `git log -S` on a symbol the plan adds before believing a `shipped` status.
-- Implementing a plan: update its status and deviations in the same change, and mark it `shipped` only with the commit that contains the change.
+- `docs/plans/` is 25 files of up to 3,400 lines each. Never Read one whole: `grep -n '^## '` it, then Read only `## Answers` and `## Agreed plan`. A plan is a dated record: trust the code and `docs/DATA_MAP.md` over it, and run `git log -S` on a symbol the plan adds before believing a `done` status.
+- Implementing a plan: update its status and deviations in the same change, and mark it `done` only with the commit that contains the change.
 - More process rules: `.github/copilot-instructions.md` ("Implementing a plan", "Running tests in this repo", "Pushing changes"). Ignore its "Talking to me" section; my global style applies.
 - `docs/FORM_STATE_PLAN.md` is superseded research, not the shipped design.
 

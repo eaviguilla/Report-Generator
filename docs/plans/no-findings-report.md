@@ -1,6 +1,6 @@
 # No-findings report: generate a report that has no findings
 
-> **Status:** in progress · 2026-10-02 · built and tested on macOS, not yet committed. The Word
+> **Status:** in-progress · 2026-10-02 · built and tested on macOS, not yet committed. The Word
 > output still needs a check on Windows, where Word repaginates and numbers the TESTING RESULT
 > heading.
 >

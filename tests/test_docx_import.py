@@ -1382,6 +1382,18 @@ class ImportRouteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Scope reconciliation would alter imported locations"):
             main.finalize_editable_import(payload)
 
+    def test_editable_preflight_names_invalid_fields_before_scope_reconciliation_loss(self) -> None:
+        """Acceptance checks fields before the import compares locations, so failing both names the fields."""
+        payload, _evidence, _summary = parse_report_docx(self._docx(), mode="editable")
+        duplicate = copy.deepcopy(payload["scope_targets"][0])
+        duplicate["target_id"] = "tgt_duplicate"
+        payload["scope_targets"].append(duplicate)
+        payload["vulnerabilities"][0]["scope"]["target_ids"].append("tgt_duplicate")
+        payload["engagement"]["app_name"] = "Bad/App"
+
+        with self.assertRaisesRegex(ValueError, "^Imported report contains fields that cannot be saved: Application name"):
+            main.finalize_editable_import(payload)
+
     def test_editable_import_rolls_back_when_an_evidence_write_fails(self) -> None:
         with patch("app.workspace.atomic_write_bytes", side_effect=OSError("disk full")):
             response = self._import("report.docx", self._docx(), "editable")

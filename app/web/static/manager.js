@@ -187,19 +187,19 @@
       }
       const summary = result.summary || {};
       const notices = [];
+      const labels = Object.fromEntries(vocabulary.statuses);
       if (result.mode === "retest") {
         const rewritten = summary.statuses_rewritten || [];
         const dropped = summary.dropped_resolved || [];
         if (rewritten.length) {
-          notices.push(`${rewritten.length} Open New finding${rewritten.length === 1 ? " was" : "s were"} changed to Previously Discovered for retesting: ${rewritten.join(", ")}.`);
+          notices.push(`${rewritten.length} ${labels.open_new} finding${rewritten.length === 1 ? " was" : "s were"} changed to ${labels.open_previously_discovered} for retesting: ${rewritten.join(", ")}.`);
         }
         if (dropped.length) {
-          notices.push(`${dropped.length} Resolved or Closed finding${dropped.length === 1 ? " was" : "s were"} not included: ${dropped.join(", ")}.`);
+          notices.push(`${dropped.length} ${labels.resolved} or ${labels.closed} finding${dropped.length === 1 ? " was" : "s were"} not included: ${dropped.join(", ")}.`);
         }
       }
       notices.push(...(summary.warnings || []), ...(summary.normalizations || []));
       const findingCount = summary.retained ?? 0;
-      const labels = Object.fromEntries(vocabulary.statuses);
       const statusCounts = Object.entries(summary.status_counts || {})
         .filter(([, count]) => count)
         .map(([key, count]) => `${count} ${labels[key] || key}`)

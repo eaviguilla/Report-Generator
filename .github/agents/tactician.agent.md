@@ -62,7 +62,7 @@ Work through this list explicitly. Report each as a real risk, or as checked and
 | Request/response asymmetry | Does the client send a field the server does not return, like `scope_text`? |
 | Rule drift | Is a rule being added on one side only? |
 | Navigation trap | Does a new required field block a page the user must pass through to fill it in? |
-| Derived-state fight | Will `provision_report` overwrite on save what the browser just set? |
+| Derived-state fight | Will `acceptance.provision` overwrite on save what the browser just set? |
 | Backup exhaustion | Does this write twice in quick succession, consuming the single `draft.bak.json`? |
 
 ### 4. Sequence the work

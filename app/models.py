@@ -305,8 +305,8 @@ def _migrate_poc_variant(vulnerability):
 def normalise_scope_modes(report_mapping) -> None:
     """Freeze a retired scope mode into the explicit target IDs it resolved to, **in place**.
 
-    Mutating rather than returning a copy is the contract: two of the three call sites hold the
-    mapping that later reaches disk, so a fresh dict would be silently discarded. Resolution order
+    Mutating rather than returning a copy is the contract: `Workspace.repair_duplicate_fragment_ids`
+    writes the very mapping it passes in, so a fresh dict would be silently discarded. Resolution order
     matches docx_report's non-custom branch, so a migrated finding prints the locations it always
     printed. Resolving from scope_targets is also what filters out stale IDs, which were never
     validated while the mode was not custom.

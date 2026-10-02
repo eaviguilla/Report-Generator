@@ -63,8 +63,11 @@ an address at any point.
 ### Saving
 
 The tester never presses save. About five seconds after they stop typing, the browser sends the
-whole report to the local server. FastAPI receives it, Pydantic checks it, and it is written to
-disk. The previous version is kept as a backup, so the last good copy always survives.
+whole report to the local server, which runs it through **acceptance** (`app/acceptance.py`).
+Acceptance checks it, with Pydantic for its shape and the app's own rules for the rest, and either
+refuses it, naming the rule it broke, or completes the parts the server owns, such as the sections
+each finding's status requires. Only then is it written to disk. The previous version is kept as a
+backup, so the last good copy always survives.
 
 Three things protect the work:
 
@@ -143,9 +146,9 @@ Editable import creates a new report from the document's visible semantics; it d
 the original hidden draft, IDs, or upload metadata. Ambiguous scope is placed in visible review
 targets and named in warnings. Unsupported structure or values that would be lost reject the whole
 import. **python-docx** performs the structural read, while **Pillow** verifies bounded embedded PNGs.
-Before the one workspace write, the server runs the same scope reconciliation, field validation,
-and provisioning rules used by an ordinary save and proves that a second pass does not alter the
-imported user content. The manager shows counts, transformations, and warnings before opening Setup
+Before the one workspace write, the server runs the report through acceptance, exactly as an
+ordinary save does, and proves that a second provisioning pass does not alter the imported user
+content. The manager shows counts, transformations, and warnings before opening Setup
 or revealing the new report in the list.
 
 ## Platform requirements

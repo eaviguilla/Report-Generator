@@ -21,13 +21,14 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import ValidationError
 from starlette.requests import ClientDisconnect
 
-from app.models import Content, EvidenceItem, LibraryRef, Report, Scope, Vulnerability, normalise_scope_modes
+from app.models import Content, EvidenceItem, LibraryRef, Report, Scope, Vulnerability
 from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
+from . import acceptance
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, main_template_path, render_report_docx
 from .library import Library
 from .docx_import import ReportImportLimitError, parse_report_docx
-from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_input_issues, finding_is_complete, provision, reconcile_targets, report_export_filename, scope_text_from_targets, setup_input_issues, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
+from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_is_complete, provision, report_export_filename, scope_text_from_targets, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
 from .storage import atomic_write_bytes
 from .vocabulary import client_vocabulary
 from .workspace import StaleReportError, Workspace, app_id_for
@@ -264,13 +265,6 @@ async def read_json_object(request: Request) -> dict:
     except ClientDisconnect as error:
         raise HTTPException(400, "Request body was interrupted") from error
     return await run_in_threadpool(decode_json_object, contents)
-
-
-def provision_report(report: Report) -> None:
-    """Apply server-owned finding defaults outside the event loop."""
-    for vulnerability in report.vulnerabilities:
-        provision(vulnerability)
-        sync_evidence_image_slots(vulnerability, report)
 
 
 def expected_revision(request: Request, fallback: datetime) -> datetime:
@@ -593,29 +587,27 @@ def _provisioned_projection(report: Report) -> dict:
 
 
 def finalize_editable_import(payload: dict) -> tuple[dict, list[str]]:
-    """Run an editable DOCX through the ordinary first-save rules without writing it."""
+    """Run an editable DOCX through acceptance without writing it, refusing any change to what it imported."""
     prior = Report.model_validate(payload)
     imported_user = _editable_user_projection(prior)
     candidate = prior.model_dump(mode="json", by_alias=True)
     candidate["scope_text"] = scope_text_from_targets(prior.scope_targets)
-    removed_references = reconcile_targets(candidate, prior)
-    if removed_references:
-        raise ValueError(f"Recovered scope would strand: {', '.join(removed_references)}")
-    normalise_scope_modes(candidate)
-    report = Report.model_validate(candidate)
+    try:
+        report = acceptance.check(prior, candidate)
+    except acceptance.ScopeTargetRemoved as error:
+        raise ValueError(f"Recovered scope would strand: {', '.join(error.findings)}") from error
+    except acceptance.InvalidFields as error:
+        raise ValueError("Imported report contains fields that cannot be saved: " + "; ".join([*error.setup_issues, *error.finding_issues])) from error
     if _editable_user_projection(report) != imported_user:
         raise ValueError("Scope reconciliation would alter imported locations")
-    issues = [*setup_input_issues(report.engagement), *finding_input_issues(report)]
-    if issues:
-        raise ValueError("Imported report contains fields that cannot be saved: " + "; ".join(issues))
 
     before_provision = _provisioned_projection(report)
-    provision_report(report)
+    acceptance.provision(report)
     if _editable_user_projection(report) != imported_user:
         raise ValueError("Server provisioning would alter imported user content")
     after_provision = _provisioned_projection(report)
     normalizations = [] if before_provision == after_provision else ["Server-owned empty editor placeholders were added."]
-    provision_report(report)
+    acceptance.provision(report)
     if _provisioned_projection(report) != after_provision:
         raise ValueError("Imported report does not reach a stable provisioned state")
     return report.model_dump(mode="json", by_alias=True), normalizations
@@ -750,14 +742,14 @@ def edit(request: Request, report_id: str):
 
 @app.put("/reports/{report_id}")
 async def save_report(report_id: str, request: Request):
-    """Validate, provision, and atomically save the browser's current report draft."""
+    """Run the browser's current report through acceptance and save it atomically."""
     prior = await run_in_threadpool(report_or_404, report_id)
     payload = await read_json_object(request)
+    payload["report_id"] = report_id
+    payload["app_id"] = prior.app_id
     try:
-        client_saved_at = datetime.fromisoformat(payload.get("saved_at", ""))
-    except (TypeError, ValueError):
-        client_saved_at = None
-    if client_saved_at and client_saved_at != prior.saved_at:
+        report = await run_in_threadpool(acceptance.check, prior, payload)
+    except StaleReportError:
         detail = await run_in_threadpool(stale_report_detail, report_id)
         return api_error_response(
             request,
@@ -765,49 +757,38 @@ async def save_report(report_id: str, request: Request):
             detail,
             code="stale_report",
         )
-    try:
-        removed_references = await run_in_threadpool(reconcile_targets, payload, prior)
-    except ValueError as error:
+    except acceptance.InvalidScope as error:
         return api_error_response(request, 422, str(error), code="invalid_scope")
-    if removed_references:
-        names = ", ".join(removed_references)
+    except acceptance.ScopeTargetRemoved as error:
         return api_error_response(
             request,
             422,
-            f"Restore the removed scope target or give another affected location to: {names}.",
+            f"Restore the removed scope target or give another affected location to: {', '.join(error.findings)}.",
             code="referenced_scope_removed",
         )
-    payload["report_id"] = report_id
-    payload["app_id"] = prior.app_id
-    # After reconcile_targets, so a legacy finding resolves against the targets this save just
-    # wrote rather than the ones it replaced.
-    normalise_scope_modes(payload)
-    try:
-        report = await run_in_threadpool(Report.model_validate, payload)
     except ValidationError as error:
         return api_error_response(request, 422, error.errors(include_context=False), code="invalid_report")
-    input_issues = await run_in_threadpool(setup_input_issues, report.engagement)
-    if input_issues:
+    except acceptance.InvalidFields as error:
+        if error.setup_issues:
+            return api_error_response(
+                request,
+                422,
+                {"message": "Correct the invalid Setup fields", "issues": error.setup_issues},
+                code="invalid_setup",
+            )
+        # Its own code: invalid_setup's message sends the tester to a page that does not hold the field.
         return api_error_response(
             request,
             422,
-            {"message": "Correct the invalid Setup fields", "issues": input_issues},
-            code="invalid_setup",
-        )
-    # Its own code: invalid_setup's message sends the tester to a page that does not hold the field.
-    finding_issues = await run_in_threadpool(finding_input_issues, report)
-    if finding_issues:
-        return api_error_response(
-            request,
-            422,
-            {"message": "Correct the invalid finding fields", "issues": finding_issues},
+            {"message": "Correct the invalid finding fields", "issues": error.finding_issues},
             code="invalid_finding",
         )
     if report.app_id == "unnamed":
         report.app_id = app_id_for(report.engagement)
-    await run_in_threadpool(provision_report, report)
+    await run_in_threadpool(acceptance.provision, report)
     try:
-        path = await run_in_threadpool(workspace.save_if_current, report, client_saved_at or prior.saved_at)
+        # acceptance.check has already refused any other revision the body named.
+        path = await run_in_threadpool(workspace.save_if_current, report, prior.saved_at)
     except StaleReportError:
         detail = await run_in_threadpool(stale_report_detail, report_id)
         return api_error_response(

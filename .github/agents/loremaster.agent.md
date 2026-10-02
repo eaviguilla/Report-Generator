@@ -44,7 +44,7 @@ status line: `planning`, `agreed`, `in progress`, `shipped`, `superseded` or `ab
 1. Read `docs/DATA_MAP.md` first to orient and find the relevant function and field names.
 2. **Verify against source before answering.** Open the functions the map names. The map records line numbers as hints and they drift; the names are what you match on.
 3. If the source contradicts the map, the source wins. Say so explicitly in your answer, then update the affected section of `docs/DATA_MAP.md` and bump its "Last verified" line.
-4. Trace the full path when a question spans layers. A question about saving is not answered until you have covered: browser state object, PUT body, route handler, `main.provision_report`, `Workspace` lock, `save_if_current`, `atomic_write_json`, and what comes back in the response.
+4. Trace the full path when a question spans layers. A question about saving is not answered until you have covered: browser state object, PUT body, route handler, `acceptance.check` and `acceptance.provision`, `Workspace` lock, `save_if_current`, `atomic_write_json`, and what comes back in the response.
 
 ## Files that define the answer
 

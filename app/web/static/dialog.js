@@ -6,8 +6,9 @@
 
   const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
   let openDialog = null;
+  const afterClose = [];
 
-  const ask = ({title, message, list, actions}) => new Promise(resolve => {
+  const ask = ({title, message, list, copy, actions}) => new Promise(resolve => {
     // A second prompt would trap focus behind the first, so settle the open one first.
     if (openDialog) openDialog.settle("cancel");
 
@@ -43,6 +44,29 @@
       panel.append(items);
     }
 
+    if (copy) {
+      const row = document.createElement("div");
+      row.className = "vr-dialog-copy";
+      const text = document.createElement("code");
+      text.textContent = copy.text;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "subtle";
+      button.textContent = copy.label;
+      button.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(copy.text);
+          button.textContent = "Copied";
+        } catch {
+          // Select the text instead, so Ctrl+C still copies it.
+          getSelection().selectAllChildren(text);
+          button.textContent = "Copy failed";
+        }
+      };
+      row.append(text, button);
+      panel.append(row);
+    }
+
     const buttonRow = document.createElement("div");
     buttonRow.className = "vr-dialog-actions";
     panel.append(buttonRow);
@@ -54,6 +78,7 @@
       backdrop.remove();
       if (returnFocusTo?.isConnected) returnFocusTo.focus();
       resolve(key);
+      afterClose.splice(0).forEach(run => run());
     };
     const handle = {settle};
 
@@ -100,7 +125,12 @@
       {key: "cancel", label: cancelLabel, cancel: true},
     ]}).then(key => key === "confirm");
 
-  window.vrDialog = {ask, confirm};
+  // A notice that arrives on its own waits here, because ask() would answer an open prompt with Cancel.
+  const whenClosed = async () => {
+    while (openDialog) await new Promise(run => afterClose.push(run));
+  };
+
+  window.vrDialog = {ask, confirm, whenClosed};
 
   // Escapes text before it is inserted into generated HTML markup. null and undefined become "".
   const escapeHtml = value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");

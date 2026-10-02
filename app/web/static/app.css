@@ -258,8 +258,11 @@ input[data-path*="scope"],
 .vr-dialog h2 { margin: 0 0 10px; color: var(--ink); font-size: 14px; }
 .vr-dialog p { margin: 0 0 8px; color: var(--ink-soft); font-size: 11px; line-height: 1.5; }
 .vr-dialog ul { margin: 0 0 10px; padding-left: 18px; color: var(--ink); font-size: 11px; line-height: 1.6; }
+.vr-dialog-copy { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.vr-dialog-copy code { flex: 1; min-width: 0; color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
+.vr-dialog-copy button { flex: none; }
 .vr-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.vr-dialog-actions button { padding: 5px 12px; font-size: 11px; }
+.vr-dialog-actions button, .vr-dialog-copy button { padding: 5px 12px; font-size: 11px; }
 .vr-dialog-actions .danger { border-color: var(--danger); }
 
 @media (max-width: 1050px) {

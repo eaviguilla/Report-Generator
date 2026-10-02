@@ -854,6 +854,8 @@
     const button = event.currentTarget;
     if (button.dataset.busy === "true") return;
     const label = button.textContent;
+    // The busy labels are shorter; hold the idle width so nothing in the bar moves.
+    button.style.minWidth = `${button.getBoundingClientRect().width}px`;
     button.dataset.busy = "true";
     button.disabled = true;
     button.textContent = pendingSave || savedRevision < saveRevision ? "Saving..." : "Generating...";
@@ -861,6 +863,7 @@
       delete button.dataset.busy;
       button.textContent = label;
       button.disabled = false;
+      button.style.minWidth = "";
       return;
     }
     button.textContent = "Generating...";
@@ -872,17 +875,19 @@
       button.textContent = "Generate Report";
       delete button.dataset.busy;
       button.disabled = false;
-      const status = document.querySelector("#generate-status");
-      if (status) {
-        status.hidden = false;
-        status.textContent = `Your Word report is ready. Look for "${generated.filename}" inside the app's "generated" folder.`;
-        status.title = generated.path;
-      }
+      button.style.minWidth = "";
+      window.vrDialog.whenClosed().then(() => window.vrDialog.ask({
+        title: "Your Word report is ready",
+        message: `Look for "${generated.filename}" inside the app's "generated" folder.`,
+        copy: {text: generated.path, label: "Copy path"},
+        actions: [{key: "ok", label: "OK", tone: "primary"}],
+      }));
     } catch (error) {
       showOperationError(error, "generate_report_to_folder", "Generation failed");
       delete button.dataset.busy;
       button.textContent = label;
       button.disabled = false;
+      button.style.minWidth = "";
     }
   });
   document.querySelectorAll(".back-link").forEach(link => link.addEventListener("click", async event => {

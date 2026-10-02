@@ -37,7 +37,7 @@ same change.
 | GET | `/reports/{id}/setup` | Setup workflow page |
 | GET | `/reports/{id}/findings` | Findings workflow page |
 | GET | `/reports/{id}/edit` | Content workflow page |
-| PUT | `/reports/{id}` | Validate, provision, and atomically save report JSON |
+| PUT | `/reports/{id}` | Run acceptance (`app/acceptance.py`), then atomically save report JSON |
 | DELETE | `/reports/{id}` | Delete a report and its evidence |
 | POST | `/reports/{id}/duplicate` | Copy a report and its evidence with a fresh ID |
 | PATCH | `/reports/{id}/name` | Rename the application label in the manager |
@@ -82,9 +82,9 @@ returns `422`.
 Retest rewrites retained findings to Previously Discovered, promotes the source
 Proof of Concept to Previous Proof of Concept, seeds a fresh proof, and reports
 rewritten/dropped findings. Editable retains all known statuses and printed
-sections. Before its one `Workspace.import_report` call, the route validates,
-reconciles seeded Setup scope, applies save validators, provisions in memory,
-and proves a second provision pass is stable. Parser resource-limit failures
+sections. Before its one `Workspace.import_report` call, the route validates the
+parsed report, seeds Setup scope from its targets, runs it through acceptance in
+memory, and proves a second provision pass is stable. Parser resource-limit failures
 return `413`; malformed or lossy imports return `422` before persistence.
 
 Successful DOCX responses add `source: "docx"`, the selected `mode`, and a

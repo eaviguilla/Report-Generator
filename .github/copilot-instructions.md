@@ -7,7 +7,8 @@ document matching the house template. No database, no frontend framework, no bui
 
 - **Start:** `py -3 app/init.py` (on macOS, `python3 app/init.py`; after the first run `.venv/bin/python app/init.py` works too). It creates `.venv`, installs
   `requirements.txt` when its hash changes, and serves `app.main:app` on the first free port 8765–8799.
-- **Server:** `app/main.py` (FastAPI routes) → `app/report_service.py` (provisioning, scope
+- **Server:** `app/main.py` (FastAPI routes) → `app/acceptance.py` (what a save must pass, in order,
+  and the parts the server completes) → `app/report_service.py` (provisioning, scope
   reconciliation, page gates) → `app/workspace.py` (locking, folders, load/save) →
   `app/storage.py` (atomic JSON writes). Schema is `app/models.py` (Pydantic, schema 1.4).
 - **Browser:** `app/web/templates/*.html` embed the report as JSON, and every page also carries the

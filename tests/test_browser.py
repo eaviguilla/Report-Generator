@@ -20,12 +20,12 @@ from PIL import Image
 from playwright.sync_api import expect, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 
-from app import main
+from app import acceptance, main
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import COMPONENT_SCOPE_SYMBOLS, finding_input_issues, invalid_character_issue, setup_input_issues, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from tests.support import png_bytes, use_temp_workspace
-from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
+from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
 
 
 # Tests wait for "Saved" constantly, and the app autosaves after 5 s idle, so most of that wait was the
@@ -1225,7 +1225,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         finding.scope.target_ids = ["tgt_browser", "tgt_uat"]
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production").caption = "Production evidence caption"
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -1251,7 +1251,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
         finding = report.vulnerabilities[0]
         finding.scope = Scope(mode="custom", target_ids=["tgt_uat"], custom_locations={"production": {"web": ["POST /prod"]}})
-        main.provision_report(report)
+        acceptance.provision(report)
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production").caption = "Production evidence caption"
         main.workspace.save(report)
@@ -1900,7 +1900,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         source = main.workspace.load(source_id)
         finding = source.vulnerabilities[0]
         finding.status = "open_resolved_on_non_prod"
-        main.provision_report(source)
+        acceptance.provision(source)
         main.workspace.save(source)
         document = render_report_docx(
             source,
@@ -3142,7 +3142,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         finding.library_ref = LibraryRef(library_id="VDB-036", source_id="VDB-036", inserted_at=report.saved_at)
         finding.poc_variants = ["web"]
         finding.poc_variant_declined = []
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3154,7 +3154,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         report = main.workspace.load(report_id)
         report.vulnerabilities[0].scope = Scope(mode="custom", target_ids=["tgt_browser"])
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -3188,7 +3188,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ImageFragment(frag_id="f_empty_a", type="image", environment="production"),
             ImageFragment(frag_id="f_empty_b", type="image", environment="production"),
         ])
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3213,7 +3213,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         finding.library_ref = LibraryRef(library_id="VDB-036", source_id="VDB-036", inserted_at=report.saved_at)
         finding.poc_variants = ["web"]
         finding.poc_variant_declined = []
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3336,7 +3336,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         main.provision(finding)
         previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
         next(fragment for fragment in previous.fragments if fragment.type == "numbered_list").items[0].runs = [Run(text="Last year's step")]
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3377,7 +3377,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report, finding = self._complete_finding(report_id)
         finding.status = "open_previously_discovered"
         main.provision(finding)
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3408,7 +3408,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         history.caption = "Original response"
         report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data).hexdigest(), uploaded_at=report.saved_at)
         (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data)
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3490,7 +3490,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         finding.library_ref = LibraryRef(library_id="VDB-043", source_id="VDB-043", inserted_at=report.saved_at)
         finding.poc_variants = []
         finding.poc_variant_declined = []
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3517,7 +3517,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         history.caption = "Original non-production response"
         report.evidence["ev_history"] = EvidenceItem(file="evidence/ev_history.png", original_name="history.png", width_px=2, height_px=2, sha256=hashlib.sha256(image_data).hexdigest(), uploaded_at=report.saved_at)
         (main.workspace.find_path(report_id).parent / "evidence" / "ev_history.png").write_bytes(image_data)
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
         self.assertEqual(
             next(fragment for fragment in previous.fragments if fragment.type == "image").environment,
@@ -3607,7 +3607,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ListItem(runs=[Run(text="Observe the balance of another user.")]),
             ListItem(runs=[]),
         ]
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3645,7 +3645,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             type="note",
             runs=[Run(text="First note line\nLast note line\n")],
         ))
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -3666,7 +3666,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ListItem(runs=[Run(text="Log in as a standard user.")]),
             ListItem(runs=[Run(text="Observe the balance of another user.")]),
         ]
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3698,7 +3698,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ListItem(runs=[Run(text="Log in as a standard user.")]),
             ListItem(runs=[Run(text="Observe the balance of another user.")]),
         ]
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -3759,7 +3759,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items = [
             ListItem(runs=[Run(text="Observe the balance of another user.")]),
         ]
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -3806,7 +3806,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 finding.status = "open_previously_discovered"
                 conclusion = self._fill_retest_history(report, finding)
                 conclusion.fragments[0].runs = change(conclusion.fragments[0].runs)
-                main.provision_report(report)
+                acceptance.provision(report)
                 main.workspace.save(report)
 
                 expected_issue = f"{finding.title}: in_conclusion still holds the default sentence"
@@ -4043,7 +4043,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         finding.poc_variant_declined = []
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items = [ListItem(runs=[])]
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -4137,7 +4137,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 report, finding = self._complete_finding(report_id)
                 case(report, finding)
                 # Mirror the save route so both sides judge the same canonical state.
-                main.provision_report(report)
+                acceptance.provision(report)
                 main.workspace.save(report)
 
                 server_issues = generation_issues(main.workspace.load(report_id))
@@ -4177,7 +4177,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 report, finding = self._complete_finding(report_id)
                 report.engagement.segment = segment
                 finding.status = status
-                main.provision_report(report)
+                acceptance.provision(report)
                 main.workspace.save(report)
 
                 self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -4215,7 +4215,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 report, finding = self._complete_finding(report_id)
                 report.engagement.segment = segment
                 finding.status = status
-                main.provision_report(report)
+                acceptance.provision(report)
                 main.workspace.save(report)
 
                 page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -4251,7 +4251,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         report.engagement.segment = "Asia"
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         self.page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -4276,7 +4276,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.engagement.segment = "Asia"
         finding.cvss_score = ""
         finding.cvss_vector = ""
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -4293,7 +4293,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.engagement.segment = "Asia"
         finding.cvss_score = "9.8"
         finding.cvss_vector = "CVSS:3.1/AV:N"
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -4315,7 +4315,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.engagement.segment = "Asia"
         finding.cvss_score = "9.8"
         finding.cvss_vector = "CVSS:3.1/AV:N"
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -4344,7 +4344,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.engagement.segment = "Asia"
         finding.cvss_score = "9.8"
         finding.cvss_vector = "CVSS:3.1/AV:N"
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
 
         page = self.page
@@ -4394,7 +4394,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 report_id = self.ready_report(include_finding=True)
                 report, finding = self._complete_finding(report_id)
                 case(finding)
-                main.provision_report(report)
+                acceptance.provision(report)
                 main.workspace.save(report)
 
                 stored = main.workspace.load(report_id)
@@ -4767,7 +4767,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.engagement.segment = "Asia"
         finding.cvss_score = "9.8"
         finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        main.provision_report(report)
+        acceptance.provision(report)
         main.workspace.save(report)
         server_issues = generation_issues(main.workspace.load(report_id))
         self.assertEqual(server_issues, [], "fixture must itself be generation-clean")
@@ -4808,7 +4808,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         result = self.page.get_by_role("dialog")
         result.get_by_role("heading", name="Imported as retest draft").wait_for()
         self.assertIn(
-            "1 Open New finding was changed to Previously Discovered for retesting: Browser finding.",
+            f"1 {STATUS_LABELS['open_new']} finding was changed to {STATUS_LABELS['open_previously_discovered']} for retesting: Browser finding.",
             result.text_content(),
         )
         result.get_by_role("button", name="Open Setup").click()

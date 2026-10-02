@@ -1,6 +1,6 @@
 # Add vulns to the library
 
-> **Status:** planning · 2026-09-22
+> **Status:** needs-info · 2026-09-22
 
 ## Request
 

@@ -1,6 +1,6 @@
 # Split the release into a Burp build and a default build
 
-> **Status:** in progress
+> **Status:** in-progress
 
 ## Request
 "I want to have 2 package release scripts so that I can release a burp extension or the default

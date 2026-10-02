@@ -1,7 +1,7 @@
 # Which next steps a work item suggests, and what the copy button copies
 
 Type: grilling
-Status: resolved
+Status: done
 Map: [Observatory and the architecture review](../map.md)
 
 ## Question

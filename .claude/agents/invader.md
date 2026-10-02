@@ -112,7 +112,7 @@ so. An honest empty result is worth more than a padded list.
 ## When a fix contradicts a shipped plan
 
 A bug you fix may be behaviour some plan in `docs/plans/` deliberately described. If a plan marked
-`shipped` now says something the code no longer does, append one line to that plan's status note
+`done` now says something the code no longer does, append one line to that plan's status note
 saying what changed and why. Leaving it is how a plan quietly becomes a lie that the next reader —
 or the loremaster — takes as fact.
 

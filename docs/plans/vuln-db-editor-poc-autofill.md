@@ -1,6 +1,6 @@
 # Vulnerability library editor with proof-of-concept autofill
 
-> **Status:** shipped · 2026-09-14 · `059fe05`
+> **Status:** done · 2026-09-14 · `059fe05`
 
 ## Request
 

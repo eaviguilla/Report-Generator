@@ -1,7 +1,7 @@
 # How the architecture review files its items
 
 Type: grilling
-Status: resolved
+Status: done
 Map: [Observatory and the architecture review](../map.md)
 
 ## Question

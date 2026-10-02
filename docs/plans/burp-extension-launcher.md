@@ -9,7 +9,7 @@
 > window in Edge or Chrome, and the window and the app stop together. The "Browser" choice below, and the
 > advice to use the usual browser, describe the earlier design.
 
-> **Status:** in progress · 2026-09-30 · Steps 1–7 are built and their tests pass here (242 Python
+> **Status:** in-progress · 2026-09-30 · Steps 1–7 are built and their tests pass here (242 Python
 > tests, 4 skipped); Step 8 (checks on Windows and inside a real Burp) and Step 9's close-out are still
 > to do.
 >

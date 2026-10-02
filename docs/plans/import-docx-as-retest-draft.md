@@ -1,6 +1,6 @@
 # Import a generated DOCX as a retest draft
 
-> **Status:** shipped · 2026-09-15 · `95b6769`
+> **Status:** done · 2026-09-15 · `95b6769`
 
 ## Request
 
@@ -803,7 +803,7 @@ Mobile-scope reports import with empty scope and are blocked on Setup until the 
 
 ## Follow-up plan - editable DOCX import option
 
-> **Status:** planning
+> **Status:** needs-info
 
 ### Understanding
 

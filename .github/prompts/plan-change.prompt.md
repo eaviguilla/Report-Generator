@@ -76,7 +76,7 @@ Structure, in order:
 ```markdown
 # <Change name>
 
-> **Status:** planning · <today's date>
+> **Status:** needs-info · <today's date>
 
 ## Request
 <the user's ask, verbatim>
@@ -92,16 +92,16 @@ Structure, in order:
 
 ### The status line
 
-One of `planning`, `agreed`, `in progress`, `shipped`, `superseded`, `abandoned`. Set it to
-`planning` when you create the file and to `agreed` when you write *Agreed plan*. Anything past that
+One of the statuses in `docs/agents/issue-tracker.md`. Set it to
+`needs-info` when you create the file and to `ready-for-agent` when you write *Agreed plan*. Anything past that
 belongs to whoever implements it, not to this prompt.
 
-When a plan reaches `shipped`, the line carries the commit and a short prose note of anything that
+When a plan reaches `done`, the line carries the commit and a short prose note of anything that
 deviated from the plan — a step dropped, a requirement discovered during execution, a different
 solution than the one agreed. The deviations are the part worth reading later:
 
 ```markdown
-> **Status:** shipped · 2026-09-15 · `acd047a`
+> **Status:** done · 2026-09-15 · `acd047a`
 >
 > Steps 0-8 done, except step 0's parity tests, which became three behavioural browser tests.
 > One requirement was added during execution and is not described below: unchecking an app type
@@ -130,11 +130,12 @@ solution than the one agreed. The deviations are the part worth reading later:
 **Settle it.** Write *Agreed plan*: the ordered steps, each with its files, its test, and the invariant it protects. This section must be readable on its own, without the rounds above it.
 
 Write each step as an unticked checkbox, `- [ ] **Step N — ...**`, so the document can later show how
-far it got. Then set the status line to `agreed`.
+far it got. Then set the status line to `ready-for-agent`, and end the file with a `## Next steps` list,
+usually `/implement`, as `docs/agents/issue-tracker.md` describes.
 
 ## Rules for you as coordinator
 
-- **Open the file with a status line and close it with one.** `planning` on creation, `agreed` once
+- **Open the file with a status line and close it with one.** `needs-info` on creation, `ready-for-agent` once
   *Agreed plan* is written. A plan with no status is one nobody can tell the state of six months on.
 
 - **Do not arbitrate.** When the two disagree, `loremaster` wins on what the code does and `tactician` wins on what to do about it. If they conflict on fact, open the file yourself and settle it with a quote.

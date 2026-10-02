@@ -1,7 +1,7 @@
 # Does a spec or map take its status from its tickets?
 
 Type: grilling
-Status: resolved
+Status: done
 Blocked by: 03
 Map: [Observatory and the architecture review](../map.md)
 

@@ -1,6 +1,6 @@
 # Back to Setup without blockers
 
-> **Status:** shipped · 2026-09-16 · `e7b843a`
+> **Status:** done · 2026-09-16 · `e7b843a`
 
 ## Request
 

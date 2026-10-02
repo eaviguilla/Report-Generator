@@ -1,6 +1,6 @@
 # The Burp build opens the app window
 
-> **Status:** in progress · 2026-10-03 · Built, and its checks pass on macOS. The Windows checks in step 5 are open.
+> **Status:** in-progress · 2026-10-03 · Built, and its checks pass on macOS. The Windows checks in step 5 are open.
 
 ## Request
 

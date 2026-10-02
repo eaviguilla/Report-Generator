@@ -1,6 +1,6 @@
 # Thick Client app type, component scope, and the MAIN_THICK_MOBILE template
 
-> **Status:** shipped · 2026-09-17 · `8430e84`
+> **Status:** done · 2026-09-17 · `8430e84`
 
 ## Request
 

@@ -2,7 +2,8 @@
 
 Type: grilling
 Status: resolved
-Map: [Work graph and the architecture review agent](../map.md)
+Merged into: [Which next steps a work item suggests, and what the copy button copies](01-next-steps-and-the-copied-command.md)
+Map: [Observatory and the architecture review](../map.md)
 
 ## Question
 

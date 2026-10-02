@@ -2,7 +2,7 @@
 
 Type: grilling
 Status: resolved
-Map: [Work graph and the architecture review agent](../map.md)
+Map: [Observatory and the architecture review](../map.md)
 
 ## Question
 
@@ -33,6 +33,7 @@ Settled with the user on 2026-10-02, through `/grill-with-docs`.
 
 - `/<skill> <item> context: <item> <item>`, and nothing else. Paths are relative to the repository root. The item file names only the skill; the page adds the paths.
 - The context is the items one step up, the ones the item came from: an issue's plan or spec, a ticket's map, a plan's review item. Not the items made from it, and not code files, which the item's own file already names. An item with nothing above it gets no `context:` part.
+- [What a work item is, and how a link is recorded](03-what-a-work-item-is-and-how-a-link-is-recorded.md) later added two more kinds of item to the context: the ones blocking an item and the ones merged into it.
 - `context:` stops a skill from taking a context file for the work. `/implement`'s only instruction is "Implement the work described by the user in the spec or tickets", so given bare paths it could build a whole plan instead of the one issue.
 - The same text works in Claude Code and in Copilot.
 

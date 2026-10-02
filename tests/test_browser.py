@@ -21,6 +21,7 @@ from playwright.sync_api import expect, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 
 from app import acceptance, main
+from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import COMPONENT_SCOPE_SYMBOLS, finding_input_issues, invalid_character_issue, setup_input_issues, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
@@ -768,6 +769,43 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(saved.engagement.app_owner, "Recovered owner")
         self.assertEqual([finding.title for finding in saved.vulnerabilities], ["Browser finding"])
 
+    def test_recovery_restore_preserves_an_empty_supporting_tile(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        main.workspace.save(report)
+
+        recovered = main.workspace.load(report_id)
+        proof = next(content for content in recovered.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        supporting = ImageFragment(
+            frag_id="f_recovered_supporting",
+            type="image",
+            environment="non_production",
+        )
+        proof.fragments.append(supporting)
+        recovered_payload = recovered.model_dump(mode="json", by_alias=True)
+
+        page = self.page
+        self.plant_recovery_draft(recovered_payload, "edit", "supporting-tile")
+        self.restore_recovery_draft()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        saved_proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        saved_supporting = next(fragment for fragment in saved_proof.fragments if fragment.frag_id == supporting.frag_id)
+        self.assertEqual((saved_supporting.environment, saved_supporting.evidence_id, saved_supporting.caption), (
+            "non_production", None, "",
+        ))
+        page.reload()
+        page.wait_for_selector(f'.evidence-tile[data-fragment-id="{supporting.frag_id}"]')
+        tile = page.locator(f'.evidence-tile[data-fragment-id="{supporting.frag_id}"]')
+        self.assertEqual(tile.locator(".evidence-environment").input_value(), "non_production")
+        self.assertEqual(page.locator(".review-row").filter(has_text="Non-Production supporting evidence").count(), 0)
+
     def test_a_second_component_row_lands_as_its_own_target(self) -> None:
         """The two boxes are paired by line index, so a row is that pairing made visible. A second row
         has to reach the draft as its own target, and removing a row has to take that target with it."""
@@ -975,6 +1013,65 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertFalse(page.get_by_label("Test Thick Client").is_checked())
         self.assertEqual(page.get_by_role("textbox", name="Mobile Component", exact=True).first.input_value(), "")
 
+    def test_component_swap_keeps_lost_location_evidence_as_supporting(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["web", "thick_client"]
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.extend([
+            ScopeTarget(target_id="tgt_thick", environment="production", channel="thick_client", value="Acme.exe", description="Desktop client"),
+            ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"),
+        ])
+        finding = report.vulnerabilities[0]
+        finding.scope.target_ids = ["tgt_thick", "tgt_uat"]
+        acceptance.provision(report)
+
+        image_data = png_bytes(2, 2)
+        evidence_id = "ev_component_swap"
+        evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
+        evidence_path.parent.mkdir(exist_ok=True)
+        evidence_path.write_bytes(image_data)
+        report.evidence[evidence_id] = EvidenceItem(
+            file=f"evidence/{evidence_id}.png",
+            original_name="component-swap.png",
+            width_px=2,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        production_image = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        production_image.evidence_id = evidence_id
+        production_image.caption = "Desktop response retained after Mobile swap"
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Test Mobile").check()
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertIn("Replace Thick Client with Mobile?", dialog.inner_text())
+        self.assertIn("One screenshot stays in the report as a supporting image", dialog.inner_text())
+        dialog.get_by_role("button", name="Switch to Mobile anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.tested_channels, ["web", "mobile"])
+        self.assertFalse(any(target.channel == "thick_client" for target in saved.scope_targets))
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_uat"])
+        saved_proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        supporting = next(fragment for fragment in saved_proof.fragments if fragment.type == "image" and fragment.evidence_id == evidence_id)
+        self.assertEqual(supporting.environment, "production")
+        self.assertTrue(evidence_path.exists())
+        rendered = Document(BytesIO(render_report_docx(
+            saved,
+            main_template_path(saved, Path(__file__).resolve().parent.parent / "resources"),
+            main.workspace.find_path(report_id).parent,
+            allow_incomplete=True,
+        )))
+        self.assertIn("Desktop response retained after Mobile swap", "\n".join(paragraph.text for paragraph in rendered.paragraphs))
+
     def test_component_swap_warns_before_discarding_an_unsaved_row(self) -> None:
         report_id = self.ready_report()
         report = main.workspace.load(report_id)
@@ -1122,6 +1219,146 @@ class BrowserWorkflowTests(unittest.TestCase):
         saved = main.workspace.load(report_id)
         saved_proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
         self.assertNotIn(production_image.frag_id, [fragment.frag_id for fragment in saved_proof.fragments])
+
+    def test_environment_warning_counts_required_and_supporting_images_that_stop_printing(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        required_finding = report.vulnerabilities[0]
+        required_finding.title = "Required UAT evidence"
+        required_finding.scope.target_ids = ["tgt_browser", "tgt_uat"]
+        supporting_finding = Vulnerability(
+            uid="v_supporting_uat",
+            title="Supporting UAT evidence",
+            likelihood="low",
+            impact="low",
+            severity="low",
+            status="open_new",
+            scope={"mode": "custom", "target_ids": ["tgt_browser"]},
+        )
+        main.provision(supporting_finding)
+        report.vulnerabilities.append(supporting_finding)
+        acceptance.provision(report)
+        supporting_proof = next(content for content in supporting_finding.contents if content.type == "proof_of_concept")
+        supporting_proof.fragments.append(ImageFragment(
+            frag_id="f_supporting_uat", type="image", environment="non_production",
+            evidence_id="ev_supporting_uat", caption="Supporting UAT response",
+        ))
+        required_proof = next(content for content in required_finding.contents if content.type == "proof_of_concept")
+        required_image = next(fragment for fragment in required_proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        required_image.evidence_id = "ev_required_uat"
+        required_image.caption = "Required UAT response"
+
+        image_data = png_bytes(2, 2)
+        evidence_root = main.workspace.find_path(report_id).parent / "evidence"
+        evidence_root.mkdir(exist_ok=True)
+        for evidence_id in ("ev_required_uat", "ev_supporting_uat"):
+            (evidence_root / f"{evidence_id}.png").write_bytes(image_data)
+            report.evidence[evidence_id] = EvidenceItem(
+                file=f"evidence/{evidence_id}.png",
+                original_name=f"{evidence_id}.png",
+                width_px=2,
+                height_px=2,
+                sha256=hashlib.sha256(image_data).hexdigest(),
+                uploaded_at=report.saved_at,
+            )
+        main.workspace.save(report)
+
+        def rendered_text() -> str:
+            stored = main.workspace.load(report_id)
+            document = Document(BytesIO(render_report_docx(
+                stored,
+                main_template_path(stored, Path(__file__).resolve().parent.parent / "resources"),
+                main.workspace.find_path(report_id).parent,
+                allow_incomplete=True,
+            )))
+            return "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+        self.assertIn("Required UAT response", rendered_text())
+        self.assertIn("Supporting UAT response", rendered_text())
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Non-Production", exact=True).uncheck()
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertIn(
+            "2 screenshots keep their environment and files, but stop appearing in the report",
+            dialog.inner_text(),
+        )
+        dialog.get_by_role("button", name="Make the change anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertNotIn("Required UAT response", rendered_text())
+        self.assertNotIn("Supporting UAT response", rendered_text())
+
+        page.get_by_label("Non-Production", exact=True).check()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertIn("Required UAT response", rendered_text())
+        self.assertIn("Supporting UAT response", rendered_text())
+
+    def test_scope_target_rename_keeps_its_screenshot_as_supporting(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        finding = report.vulnerabilities[0]
+        finding.scope.target_ids = ["tgt_browser", "tgt_uat"]
+        acceptance.provision(report)
+
+        image_data = png_bytes(2, 2)
+        evidence_id = "ev_renamed_scope"
+        evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
+        evidence_path.parent.mkdir(exist_ok=True)
+        evidence_path.write_bytes(image_data)
+        report.evidence[evidence_id] = EvidenceItem(
+            file=f"evidence/{evidence_id}.png",
+            original_name="renamed-scope.png",
+            width_px=2,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        production_image = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        production_image.evidence_id = evidence_id
+        production_image.caption = "Response from the renamed Production target"
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        production_scope = page.get_by_role("textbox", name="Web", exact=True).nth(0)
+        production_scope.fill("https://renamed.example.test")
+        production_scope.press("Tab")
+        dialog = page.locator(".vr-dialog")
+        dialog.wait_for(timeout=5_000)
+        self.assertIn("One screenshot stays in the report as a supporting image", dialog.inner_text())
+        dialog.get_by_role("button", name="Change them anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(
+            [(target.environment, target.value) for target in saved.scope_targets],
+            [("production", "https://renamed.example.test"), ("non_production", "https://uat.example.test")],
+        )
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_uat"])
+        saved_proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        supporting = next(fragment for fragment in saved_proof.fragments if fragment.type == "image" and fragment.evidence_id == evidence_id)
+        self.assertEqual(supporting.environment, "production")
+        self.assertTrue(evidence_path.exists())
+        rendered = Document(BytesIO(render_report_docx(
+            saved,
+            main_template_path(saved, Path(__file__).resolve().parent.parent / "resources"),
+            main.workspace.find_path(report_id).parent,
+            allow_incomplete=True,
+        )))
+        self.assertIn("Response from the renamed Production target", "\n".join(paragraph.text for paragraph in rendered.paragraphs))
 
     def test_unchecking_an_app_type_confirms_then_clears_it_from_every_finding(self) -> None:
         """Dropping an app type deletes its scope targets and every affected location and additional
@@ -1276,6 +1513,131 @@ class BrowserWorkflowTests(unittest.TestCase):
             [fragment.caption for content in saved.contents for fragment in content.fragments if fragment.type == "image" and fragment.environment == "production"],
             ["Production evidence caption"],
         )
+
+    def test_undo_after_removing_location_screenshots_restores_the_png(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
+        finding = report.vulnerabilities[0]
+        finding.scope.target_ids = ["tgt_browser", "tgt_uat"]
+        acceptance.provision(report)
+
+        image_data = png_bytes(2, 2)
+        evidence_id = "ev_scope_undo"
+        report_folder = main.workspace.find_path(report_id).parent
+        evidence_path = report_folder / "evidence" / f"{evidence_id}.png"
+        evidence_path.parent.mkdir(exist_ok=True)
+        evidence_path.write_bytes(image_data)
+        report.evidence[evidence_id] = EvidenceItem(
+            file=f"evidence/{evidence_id}.png",
+            original_name="scope-undo.png",
+            width_px=2,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        production_image = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        production_image.evidence_id = evidence_id
+        production_image.caption = "Production response"
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_label("Select https://prod.example.test").uncheck()
+        page.locator(".vr-dialog").get_by_role("button", name="Remove them").click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertFalse(evidence_path.exists(), "removing the screenshot did not prune its file")
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+
+        restored = main.workspace.load(report_id)
+        self.assertEqual(restored.vulnerabilities[0].scope.target_ids, ["tgt_browser", "tgt_uat"])
+        restored_proof = next(content for content in restored.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        restored_image = next(fragment for fragment in restored_proof.fragments if fragment.type == "image" and fragment.evidence_id == evidence_id)
+        self.assertEqual(restored_image.environment, "production")
+        self.assertIn(evidence_id, restored.evidence)
+        self.assertTrue(evidence_path.exists(), "undo restored a reference to a PNG the preceding save deleted")
+
+        with page.expect_navigation():
+            page.locator("#redo-button").click()
+        removed_again = main.workspace.load(report_id)
+        self.assertEqual(removed_again.vulnerabilities[0].scope.target_ids, ["tgt_uat"])
+        self.assertFalse(any(
+            getattr(fragment, "evidence_id", None) == evidence_id
+            for content in removed_again.vulnerabilities[0].contents
+            for fragment in content.fragments
+        ), "redo did not remove the screenshot tile")
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        restored_again = main.workspace.load(report_id)
+        self.assertEqual(restored_again.vulnerabilities[0].scope.target_ids, ["tgt_browser", "tgt_uat"])
+        self.assertIn(evidence_id, restored_again.evidence)
+        self.assertTrue(evidence_path.exists(), "a second undo could not restore the archived PNG")
+
+    def test_undo_redo_after_keeping_a_supporting_image_preserves_its_png(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
+        finding = report.vulnerabilities[0]
+        finding.scope.target_ids = ["tgt_browser", "tgt_uat"]
+        acceptance.provision(report)
+
+        image_data = png_bytes(2, 2)
+        evidence_id = "ev_scope_keep"
+        report_folder = main.workspace.find_path(report_id).parent
+        evidence_path = report_folder / "evidence" / f"{evidence_id}.png"
+        evidence_path.parent.mkdir(exist_ok=True)
+        evidence_path.write_bytes(image_data)
+        report.evidence[evidence_id] = EvidenceItem(
+            file=f"evidence/{evidence_id}.png",
+            original_name="scope-keep.png",
+            width_px=2,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        production_image = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        production_image.evidence_id = evidence_id
+        production_image.caption = "Production response"
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_label("Select https://prod.example.test").uncheck()
+        page.locator(".vr-dialog").get_by_role("button", name="Keep as supporting images").click()
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        supporting = main.workspace.load(report_id)
+        self.assertEqual(supporting.vulnerabilities[0].scope.target_ids, ["tgt_uat"])
+        self.assertIn(evidence_id, supporting.evidence)
+        self.assertTrue(evidence_path.exists())
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        required_again = main.workspace.load(report_id)
+        self.assertEqual(required_again.vulnerabilities[0].scope.target_ids, ["tgt_browser", "tgt_uat"])
+        self.assertIn(evidence_id, required_again.evidence)
+        self.assertTrue(evidence_path.exists())
+
+        with page.expect_navigation():
+            page.locator("#redo-button").click()
+        supporting_again = main.workspace.load(report_id)
+        self.assertEqual(supporting_again.vulnerabilities[0].scope.target_ids, ["tgt_uat"])
+        supporting_proof = next(content for content in supporting_again.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        supporting_image = next(fragment for fragment in supporting_proof.fragments if fragment.type == "image" and fragment.evidence_id == evidence_id)
+        self.assertEqual(supporting_image.environment, "production")
+        self.assertIn(evidence_id, supporting_again.evidence)
+        self.assertTrue(evidence_path.exists())
 
     def test_custom_location_removal_cannot_autosave_before_its_evidence_decision(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -1827,6 +2189,43 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(image_cards.count(), 3)
         self.assertEqual(proof.locator(".evidence-environment").last.input_value(), "production")
 
+    def test_switching_the_only_required_image_to_supporting_adds_a_required_slot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_browser_uat", environment="non_production", channel="web", value="https://test.example.test"))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        required_tile = proof.locator(".evidence-tile").first
+        required_tile.locator(".evidence-caption").fill("Production response moved to supporting")
+        required_tile.locator('input[type="file"]').set_input_files(
+            {"name": "required-to-supporting.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)}
+        )
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        proof.locator(".evidence-tile.has-evidence .evidence-environment").select_option("non_production")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(proof.locator(".evidence-tile").count(), 2, "the page did not add a replacement Production tile")
+        self.assertEqual(
+            proof.locator(".evidence-environment").evaluate_all("selects => selects.map(select => select.value)"),
+            ["non_production", "production"],
+        )
+        self.assertTrue(page.get_by_text("Production evidence image required", exact=True).is_visible())
+
+        proof.locator(".evidence-tile.has-evidence .evidence-environment").select_option("production")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(proof.locator(".evidence-tile").count(), 2)
+        delete_buttons = proof.locator('button[aria-label^="Delete screenshot"]')
+        self.assertFalse(delete_buttons.nth(1).is_disabled(), "the now-extra empty tile cannot be deleted")
+        delete_buttons.nth(1).click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(proof.locator(".evidence-tile").count(), 1)
+        self.assertTrue(proof.get_by_role("button", name="Delete screenshot 1").is_disabled())
+
     def test_a_finding_that_affects_one_environment_can_hold_a_supporting_screenshot(self) -> None:
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
@@ -1861,6 +2260,105 @@ class BrowserWorkflowTests(unittest.TestCase):
         supporting.locator(".evidence-caption").fill("Same response in the test environment")
         rows.first.wait_for(state="attached")
         self.assertIn("requires image", rows.first.inner_text())
+
+    def test_supporting_tile_survives_conflict_resolution_before_upload(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_browser_uat", environment="non_production", channel="web", value="https://test.example.test"))
+        main.workspace.save(report)
+
+        stale_page = self.page
+        stale_page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
+        current_page = self.context.new_page()
+        stale_page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        current_page.goto(f"{self.base_url}/reports/{report_id}/edit")
+
+        stale_proof = stale_page.locator(".content-block").filter(has_text="Proof of Concept").last
+        stale_proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        supporting_tile = stale_proof.locator(".evidence-tile").last
+        supporting_tile.locator(".evidence-environment").select_option("non_production")
+        supporting_tile.locator(".evidence-caption").fill("Supporting response after conflict")
+
+        current_page.locator(".content-block").filter(has_text="Description").locator(".rich").first.fill("Current tab edit")
+        current_page.get_by_role("button", name="Save").click()
+        current_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+
+        stale_page.get_by_role("button", name="Save").click()
+        conflict = stale_page.locator("#app-diagnostics")
+        conflict.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+        conflict.get_by_role("button", name="Save my version").click()
+        stale_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+
+        supporting_tile = stale_page.locator(".content-block").filter(has_text="Proof of Concept").last.locator(".evidence-tile").last
+        self.assertEqual(supporting_tile.locator(".evidence-environment").input_value(), "non_production")
+        self.assertEqual(supporting_tile.locator(".evidence-caption").input_value(), "Supporting response after conflict")
+        supporting_tile.locator('input[type="file"]').set_input_files(
+            {"name": "supporting.png", "mimeType": "image/png", "buffer": png_bytes(3, 3)}
+        )
+        stale_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_browser"])
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        supporting = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.caption == "Supporting response after conflict")
+        self.assertEqual(supporting.environment, "non_production")
+        self.assertIsNotNone(supporting.evidence_id)
+        evidence = saved.evidence[supporting.evidence_id]
+        self.assertTrue((main.workspace.find_path(report_id).parent / evidence.file).is_file())
+        current_page.close()
+
+    def test_supporting_upload_waits_for_its_in_flight_autosave(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_browser_uat", environment="non_production", channel="web", value="https://test.example.test"))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                let held = false;
+                window.releaseSupportingSave = null;
+                window.fetch = (input, init = {}) => {
+                    if (!held && String(input).endsWith(`/reports/${reportId}`) && init.method === "PUT") {
+                        held = true;
+                        return new Promise(resolve => {
+                            window.releaseSupportingSave = () => originalFetch(input, init).then(resolve);
+                        });
+                    }
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        supporting_tile = proof.locator(".evidence-tile").last
+        supporting_tile.locator(".evidence-environment").select_option("non_production")
+        supporting_fragment_id = supporting_tile.get_attribute("data-fragment-id")
+        page.wait_for_function("window.releaseSupportingSave !== null", timeout=5_000)
+
+        supporting_tile.locator('input[type="file"]').set_input_files(
+            {"name": "supporting-in-flight.png", "mimeType": "image/png", "buffer": png_bytes(3, 3)}
+        )
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.request.method == "POST"):
+            page.evaluate("window.releaseSupportingSave()")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        supporting = next(fragment for fragment in proof.fragments if fragment.frag_id == supporting_fragment_id)
+        self.assertEqual(supporting.environment, "non_production")
+        self.assertIsNotNone(supporting.evidence_id)
+        production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        self.assertIsNone(production.evidence_id, "the upload attached to the required tile instead")
+        evidence = saved.evidence[supporting.evidence_id]
+        self.assertTrue((main.workspace.find_path(report_id).parent / evidence.file).is_file())
 
     def test_stale_save_keeps_local_recovery_until_confirmed(self) -> None:
         report_id = self.ready_report()
@@ -2451,6 +2949,56 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Previous: Setup").click()
         page.wait_for_url(f"**/reports/{report_id}/setup")
 
+    def test_content_with_no_findings_says_what_will_print_and_offers_no_add_button(self) -> None:
+        """Findings are added on the Findings page only. Content kept an add button for this state
+        while the server never let a report reach it."""
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.wait_for_selector("#finding-summary b")
+        page.get_by_role("button", name="Next: Content").click()
+        page.wait_for_url(f"**/reports/{report_id}/edit")
+
+        pane = page.locator("#finding-editor")
+        expect(pane.get_by_role("heading", name="No findings")).to_be_visible()
+        expect(pane).to_contain_text(NO_FINDINGS_TITLE)
+        self.assertEqual(pane.get_by_role("button").count(), 0)
+        expect(page.locator("#editor-notifications")).to_have_text("No findings to complete. The report is ready to generate.")
+
+    def test_generating_a_report_with_no_findings_asks_first(self) -> None:
+        """A report with no findings tells the reader nothing was found, so it is generated only once
+        the tester says so, and the request carries that answer for the server to check."""
+        word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
+        word.start()
+        self.addCleanup(word.stop)
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        generate = page.get_by_role("button", name="Generate Report")
+        expect(generate).to_be_enabled()
+        generate_requests = []
+        page.on("request", lambda request: "/generate" in request.url and generate_requests.append(request.url))
+
+        generate.click()
+        dialog = page.locator(".vr-dialog")
+        expect(dialog.get_by_role("heading")).to_have_text("This report has no findings")
+        expect(dialog.locator("p")).to_have_text("Generate a report with no findings?")
+        expect(dialog.get_by_role("button", name="Cancel")).to_be_focused()
+        # A second Enter lands on Cancel, so it cannot generate the report.
+        page.keyboard.press("Enter")
+        expect(dialog).to_have_count(0)
+
+        generate.click()
+        with page.expect_response(lambda response: "/generate" in response.url) as generated:
+            dialog.get_by_role("button", name="Generate with no findings").click()
+        self.assertEqual(generated.value.status, 200)
+        # Exactly one request, so Cancel sent nothing.
+        self.assertEqual(generate_requests, [f"{self.base_url}/reports/{report_id}/generate?confirm_no_findings=true"])
+        page.get_by_role("dialog", name="Your Word report is ready").wait_for()
+        rendered = Document(generated.value.json()["path"])
+        summary = next(table for table in rendered.tables if table.cell(0, 0).text == "Findings")
+        self.assertEqual(summary.rows[1].cells[0].text, NO_FINDINGS_TITLE)
+
     def test_a_bounce_from_content_names_the_missing_fields(self) -> None:
         """The bounce used to show one fixed sentence that never updated. It now reveals the same
         per-finding count the Next button does, so the tester can see what is actually missing."""
@@ -2465,7 +3013,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         note = page.locator("#finding-validation-note")
         note.wait_for()
         self.assertIn("severity", note.inner_text().lower())
-        self.assertNotIn("Add at least one complete finding", note.inner_text())
+        self.assertNotIn("Complete every finding before continuing to Content", note.inner_text())
 
     def test_matching_a_library_title_applies_metadata_without_a_confirm(self) -> None:
         """Title, likelihood, impact, severity, and library_ref apply immediately and silently on a
@@ -3272,6 +3820,46 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(highlighted.count(), 1)
         self.assertEqual(highlighted.get_attribute("data-fragment-id"), target_id)
 
+    def test_supporting_evidence_readiness_arrow_targets_the_tile_and_gates_generate(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        supporting = ImageFragment(
+            frag_id="f_readiness_supporting",
+            type="image",
+            environment="non_production",
+            caption="Supporting caption awaiting its image",
+        )
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        proof.fragments.append(supporting)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        row = page.locator(".review-row").filter(has_text="Non-Production supporting evidence").filter(has_text="requires image")
+        self.assertEqual(row.count(), 1)
+        generate = page.get_by_role("button", name="Generate Report")
+        self.assertTrue(generate.is_disabled())
+
+        row.get_by_role("button", name="Go to Proof of Concept").click()
+        tile = page.locator(f'.evidence-tile[data-fragment-id="{supporting.frag_id}"]')
+        page.wait_for_selector(f'.evidence-tile[data-fragment-id="{supporting.frag_id}"].is-review-target')
+        self.assertTrue(tile.evaluate("node => node === document.activeElement"))
+        tile.locator('input[type="file"]').set_input_files({
+            "name": "readiness-supporting.png",
+            "mimeType": "image/png",
+            "buffer": png_bytes(2, 2),
+        })
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        page.wait_for_selector('#issue-count[data-state="ready"]', timeout=5_000)
+        self.assertEqual(row.count(), 0)
+        self.assertFalse(generate.is_disabled())
+
     def test_unchecking_a_location_in_the_page_withdraws_that_app_types_offer(self) -> None:
         """The same narrowing done through the Findings page, which is how a tester actually does it."""
         report_id = self.ready_report(include_finding=True)
@@ -3327,6 +3915,63 @@ class BrowserWorkflowTests(unittest.TestCase):
                     [content.type for content in stored.contents],
                     ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept", "in_conclusion"],
                 )
+
+    def test_status_round_trip_preserves_a_supporting_image(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        finding = report.vulnerabilities[0]
+        acceptance.provision(report)
+
+        image_data = png_bytes(2, 2)
+        evidence_id = "ev_status_supporting"
+        evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
+        evidence_path.parent.mkdir(exist_ok=True)
+        evidence_path.write_bytes(image_data)
+        report.evidence[evidence_id] = EvidenceItem(
+            file=f"evidence/{evidence_id}.png",
+            original_name="status-supporting.png",
+            width_px=2,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        supporting = ImageFragment(
+            frag_id="f_status_supporting", type="image", environment="non_production",
+            evidence_id=evidence_id, caption="Supporting response through status changes",
+        )
+        proof.fragments.append(supporting)
+        main.workspace.save(report)
+
+        def assert_supporting_survives(expected_status: str) -> None:
+            saved = main.workspace.load(report_id)
+            saved_finding = saved.vulnerabilities[0]
+            self.assertEqual(saved_finding.status, expected_status)
+            saved_proof = next(content for content in saved_finding.contents if content.type == "proof_of_concept")
+            saved_image = next(fragment for fragment in saved_proof.fragments if fragment.type == "image" and fragment.frag_id == supporting.frag_id)
+            self.assertEqual((saved_image.environment, saved_image.evidence_id, saved_image.caption), (
+                "non_production", evidence_id, "Supporting response through status changes",
+            ))
+            self.assertIn(evidence_id, saved.evidence)
+            self.assertTrue(evidence_path.exists())
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        saved_put = lambda response: response.request.method == "PUT" and response.url.endswith(f"/reports/{report_id}")
+        status = page.locator("#findings tr").first.locator("select").last
+        with page.expect_response(saved_put):
+            status.select_option("open_previously_discovered")
+        assert_supporting_survives("open_previously_discovered")
+
+        status = page.locator("#findings tr").first.locator("select").last
+        with page.expect_response(saved_put):
+            status.select_option("open_new")
+        assert_supporting_survives("open_new")
 
     def test_switching_from_resolved_to_closed_removes_only_generated_remediation(self) -> None:
         """Closed shares Resolved's five sections but must not carry the app-generated claim that
@@ -3524,6 +4169,78 @@ class BrowserWorkflowTests(unittest.TestCase):
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
         self.assertEqual(proof.locator(".poc-offer").count(), 1)
         self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].poc_variants, [])
+
+    def _assert_library_variant_preserves_supporting_image(self, button_name: str, keeps_tester_step: bool) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        finding = report.vulnerabilities[0]
+        entry = main.library.get("VDB-015")
+        finding.title = entry["title"]
+        finding.library_ref = LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=report.saved_at)
+        finding.poc_variants = []
+        finding.poc_variant_declined = []
+        acceptance.provision(report)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        steps.items[0].runs = [Run(text="Existing tester step")]
+
+        image_data = png_bytes(2, 2)
+        evidence_id = f"ev_library_{'merge' if keeps_tester_step else 'replace'}"
+        evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
+        evidence_path.parent.mkdir(exist_ok=True)
+        evidence_path.write_bytes(image_data)
+        report.evidence[evidence_id] = EvidenceItem(
+            file=f"evidence/{evidence_id}.png",
+            original_name=f"{evidence_id}.png",
+            width_px=2,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        supporting = ImageFragment(
+            frag_id=f"f_library_{'merge' if keeps_tester_step else 'replace'}",
+            type="image",
+            environment="non_production",
+            evidence_id=evidence_id,
+            caption="Supporting response beside library steps",
+        )
+        proof.fragments.append(supporting)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        offer = page.locator(".content-block").filter(has_text="Proof of Concept").last.locator(".poc-offer")
+        self.assertEqual(offer.count(), 1)
+        offer.get_by_role("button", name=button_name, exact=True).click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        saved_finding = saved.vulnerabilities[0]
+        saved_proof = next(content for content in saved_finding.contents if content.type == "proof_of_concept")
+        saved_image = next(fragment for fragment in saved_proof.fragments if fragment.type == "image" and fragment.frag_id == supporting.frag_id)
+        self.assertEqual((saved_image.environment, saved_image.evidence_id, saved_image.caption), (
+            "non_production", evidence_id, "Supporting response beside library steps",
+        ))
+        step_text = [
+            run.text
+            for fragment in saved_proof.fragments if fragment.type == "numbered_list"
+            for item in fragment.items for run in item.runs
+        ]
+        self.assertEqual("Existing tester step" in step_text, keeps_tester_step)
+        self.assertEqual(saved_finding.poc_variants, ["web"])
+        self.assertIn(evidence_id, saved.evidence)
+        self.assertTrue(evidence_path.exists())
+
+    def test_replacing_library_steps_preserves_a_supporting_image(self) -> None:
+        self._assert_library_variant_preserves_supporting_image("Use saved steps", False)
+
+    def test_merging_library_steps_preserves_a_supporting_image(self) -> None:
+        self._assert_library_variant_preserves_supporting_image("Add below", True)
 
     def test_poc_add_below_does_not_cross_an_intervening_note(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -4206,9 +4923,13 @@ class BrowserWorkflowTests(unittest.TestCase):
             finding.cvss_score = "9.8"
             finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 
+        # The editor opens for a report with no findings, so both sides must call it ready.
+        def no_findings(report, finding):
+            report.vulnerabilities = []
+
         # Scope-rule drift is invisible here: a finding with no location cannot open the editor, so
         # the loop below never reaches the comparison. Those cases live in the Findings-gate test.
-        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, untouched_supporting_slot, started_supporting_image_without_an_upload, untested_environment_image, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss]
+        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, untouched_supporting_slot, started_supporting_image_without_an_upload, untested_environment_image, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss, no_findings]
         for case in cases:
             with self.subTest(case=case.__name__):
                 report_id = self.ready_report(include_finding=True)
@@ -4445,42 +5166,46 @@ class BrowserWorkflowTests(unittest.TestCase):
         client is laxer than the server the tester is bounced straight back, and if it is stricter
         they are stranded on a report the server would have accepted."""
 
-        def selected_target(finding):
+        def selected_target(report, finding):
             finding.scope = Scope(mode="custom", target_ids=["tgt_browser"])
 
-        def typed_endpoint_only(finding):
+        def typed_endpoint_only(report, finding):
             finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["https://typed.example.test/admin"]}})
 
-        def comment_only(finding):
+        def comment_only(report, finding):
             finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["# ask the owner which host"]}})
 
-        def whitespace_only(finding):
+        def whitespace_only(report, finding):
             finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["   ", "\t"]}})
 
-        def outside_coverage(finding):
+        def outside_coverage(report, finding):
             # Non-production is not tested on this report, so the line resolves to nothing.
             finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"non_production": {"web": ["https://uat.example.test"]}})
 
-        def comment_beside_a_real_endpoint(finding):
+        def comment_beside_a_real_endpoint(report, finding):
             finding.scope = Scope(mode="custom", target_ids=[], custom_locations={"production": {"web": ["# the note", "https://real.example.test"]}})
 
-        def nothing_at_all(finding):
+        def nothing_at_all(report, finding):
             finding.scope = Scope(mode="custom", target_ids=[])
 
-        for case in [selected_target, typed_endpoint_only, comment_only, whitespace_only, outside_coverage, comment_beside_a_real_endpoint, nothing_at_all]:
+        # The gate counts findings as well as checking them: none at all is a report the tester may generate.
+        def no_findings(report, finding):
+            report.vulnerabilities = []
+
+        for case in [selected_target, typed_endpoint_only, comment_only, whitespace_only, outside_coverage, comment_beside_a_real_endpoint, nothing_at_all, no_findings]:
             with self.subTest(case=case.__name__):
                 report_id = self.ready_report(include_finding=True)
                 report, finding = self._complete_finding(report_id)
-                case(finding)
+                case(report, finding)
                 acceptance.provision(report)
                 main.workspace.save(report)
 
                 stored = main.workspace.load(report_id)
-                server_allows = main.finding_is_complete(stored.vulnerabilities[0], stored)
+                server_allows = all(main.finding_is_complete(item, stored) for item in stored.vulnerabilities)
 
                 page = self.page
                 page.goto(f"{self.base_url}/reports/{report_id}/findings")
-                page.wait_for_selector("#findings tr")
+                page.wait_for_selector("#finding-summary b")
                 # Watch for the navigation request, not the resulting URL: when the client is laxer
                 # than the server it still fires the request and the server's redirect hides it, so
                 # the landing page looks identical whether or not the two agree. A refusal marks the
@@ -4693,6 +5418,78 @@ class BrowserWorkflowTests(unittest.TestCase):
         text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
         self.assertIn("Browser finding", text)
         self.assertNotIn("{{", text)
+
+    def test_editable_import_restores_a_supporting_image_from_generated_docx(self) -> None:
+        word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
+        word.start()
+        self.addCleanup(word.stop)
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        report.engagement.report_date = date(2026, 1, 3)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 4))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"
+        ))
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        image_data = png_bytes(3, 2)
+        evidence_id = "ev_import_supporting"
+        evidence_path = main.workspace.find_path(report_id).parent / "evidence" / f"{evidence_id}.png"
+        evidence_path.write_bytes(image_data)
+        report.evidence[evidence_id] = EvidenceItem(
+            file=f"evidence/{evidence_id}.png",
+            original_name="import-supporting.png",
+            width_px=3,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        proof.fragments.append(ImageFragment(
+            frag_id="f_import_supporting",
+            type="image",
+            environment="non_production",
+            evidence_id=evidence_id,
+            caption="Supporting response survives editable import",
+        ))
+        main.workspace.save(report)
+        self.assertEqual(generation_issues(report), [])
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        with page.expect_response(lambda response: response.url.endswith(f"/reports/{report_id}/generate") and response.request.method == "POST") as generated_response:
+            page.get_by_role("button", name="Generate Report").click()
+        generated = generated_response.value.json()
+        generated_path = Path(generated["path"])
+        self.assertTrue(generated_path.is_file())
+
+        page.goto(f"{self.base_url}/")
+        page.locator("#import-report").set_input_files({
+            "name": generated_path.name,
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "buffer": generated_path.read_bytes(),
+        })
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_role("button", name="Import as editable draft").click()
+        result = page.get_by_role("dialog")
+        result.get_by_role("heading", name="Imported as editable draft").wait_for(timeout=15_000)
+        result.get_by_role("button", name="Open Setup").click()
+        page.wait_for_url("**/reports/*/setup")
+        imported_id = page.url.split("/reports/")[1].split("/")[0]
+
+        imported = main.workspace.load(imported_id)
+        imported_finding = imported.vulnerabilities[0]
+        imported_proof = next(content for content in imported_finding.contents if content.type == "proof_of_concept")
+        imported_image = next(
+            fragment for fragment in imported_proof.fragments
+            if fragment.type == "image" and fragment.caption == "Supporting response survives editable import"
+        )
+        targets = {target.target_id: target for target in imported.scope_targets}
+        affected = {targets[target_id].environment for target_id in imported_finding.scope.target_ids}
+        self.assertNotIn("non_production", affected, "the imported supporting image became an affected location")
+        self.assertEqual(imported_image.environment, "non_production")
+        self.assertIsNotNone(imported_image.evidence_id)
+        imported_evidence = imported.evidence[imported_image.evidence_id]
+        self.assertTrue((main.workspace.find_path(imported_id).parent / imported_evidence.file).is_file())
 
     def test_list_textareas_show_markers_and_store_non_empty_lines(self) -> None:
         report_id = self.ready_report(include_finding=True)

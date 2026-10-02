@@ -12,6 +12,14 @@ _Avoid_: save rules, intake, accepting a draft
 The answer acceptance gives a report it will not take, naming the rule the report broke, such as a stale save, a removed scope target or an invalid Setup field.
 _Avoid_: rejection
 
+**Finding**:
+One entry in a report about a vulnerability, with its severity, status and affected locations. A Resolved or Closed finding is still a finding.
+_Avoid_: vulnerability, when meaning the entry in the report
+
+**No-findings report**:
+A report with no findings of any status: nothing new, previously discovered, resolved or closed.
+_Avoid_: clean report, empty report, no-vulnerability report, report type
+
 **Provisioning**:
 The server completing a finding with the sections its status requires, their seed fragments, and an image slot for each affected environment.
 

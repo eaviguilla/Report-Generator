@@ -43,8 +43,8 @@ same change.
 | PATCH | `/reports/{id}/name` | Rename the application label in the manager |
 | POST | `/reports/{id}/repair` | Repair duplicate fragment IDs in a legacy draft |
 | GET | `/reports/{id}/export` | Download a ZIP containing draft JSON and evidence |
-| GET | `/reports/{id}/generate` | Render and download a completed DOCX report |
-| POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder |
+| GET | `/reports/{id}/generate` | Render and download a completed DOCX report; a report with no findings needs `?confirm_no_findings=true` |
+| POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder. A report with no findings needs `?confirm_no_findings=true` |
 | POST | `/reports/import` | Classify and import a ZIP, evidence-free legacy JSON, or generated DOCX with a new report ID |
 | GET | `/library/search?q=` | Search the offline vulnerability library |
 | POST | `/reports/{id}/library/{library_id}` | Insert a library finding, with the proof-of-concept steps matching the finding's app types |
@@ -67,7 +67,11 @@ DOCX generation uses one of the four `resources/MAIN*.docx` masters, chosen by
 composes severity-title, finding-type, and fragment documents. A template
 without an exact `{{findings}}` anchor paragraph is rejected; there is no second
 renderer. The route rejects incomplete content or missing environment evidence
-with `422`.
+with `422`. It also rejects a report with no findings unless the request carries
+`confirm_no_findings=true` (`422`, code `no_findings_unconfirmed`). The Content
+page's Generate dialog adds it, and `scripts/generate_report.py` takes
+`--no-findings` for the same purpose. Nothing about the confirmation is saved
+(`docs/adr/0002-no-findings-report-is-derived-and-confirmed-per-request.md`).
 
 ### Report import protocol
 
@@ -99,7 +103,7 @@ directory, but the sequence is not a cross-file transaction.
 |---|---|---|
 | `/reports/{id}/*` | Report exists and is valid | Missing: `404`; invalid legacy draft: navigable `422` |
 | `/reports/{id}/findings` | Segment, app name, report type, tester, selected environments, complete dates, and a target per environment | 303 to Setup with an explanatory banner |
-| `/reports/{id}/edit` | Findings gate plus at least one complete finding | 303 to Findings with an explanatory banner |
+| `/reports/{id}/edit` | Findings gate plus every finding complete; a report with no findings passes | 303 to Findings with an explanatory banner |
 | `PUT /reports/{id}` | Valid schema and no unsafe state transition | `422` naming the validation or repair action |
 | `PUT /reports/{id}` | `saved_at` matches persisted version | `409` directing the tester to reload |
 
@@ -147,8 +151,8 @@ Run these after navigation or persistence changes:
 2. Open `/new`; verify the redirect is a real Setup URL.
 3. Directly open Findings for an incomplete report; verify redirect to Setup and
    its visible explanation.
-4. Directly open Content without a complete finding; verify redirect to Findings
-   and its visible explanation.
+4. Directly open Content with an incomplete finding; verify redirect to Findings
+   and its visible explanation. A report with no findings opens Content.
 5. Request a missing report in a browser; verify the 404 page links home.
 6. Save concurrently through two workspace instances; verify exactly one stale
   writer receives `409` and retains browser recovery state.

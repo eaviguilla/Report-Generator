@@ -33,7 +33,7 @@ from app.models import (
     Vulnerability,
 )
 from .docx_captions import add_native_image_captions, center_paragraph, paragraph_style_id
-from .docx_import import FINDING_HEADING_STYLE, INSTANCE_PREFIX
+from .docx_import import FINDING_HEADING_STYLE, INSTANCE_PREFIX, NO_FINDINGS_TITLE
 from .docx_components import (
     RATING_FONT_COLORS,
     clone_component_elements,
@@ -68,6 +68,17 @@ SEVERITY_COMPONENT_FILES = {
     "low": "low_severity.docx",
     "informational": "informatinal_severity.docx",
 }
+# Takes the place of every severity section in a report with no findings.
+NO_FINDINGS_COMPONENT_FILE = "no_finding.docx"
+TESTING_RESULT_PARAGRAPH = (
+    "The penetration testing activities were completed in accordance with the agreed scope and methodology. "
+    "During the assessment, no vulnerabilities were identified that met the criteria for reporting. "
+    "The security controls evaluated during testing operated effectively and no exploitable weaknesses were discovered. "
+    "While this assessment did not identify any reportable findings at the time of testing, this does not constitute "
+    "a guarantee that the application is free from all vulnerabilities. "
+    "Security remains an ongoing process, and regular testing and monitoring are recommended to maintain a strong "
+    "security posture."
+)
 FRAGMENT_COMPONENT_FILES = {
     "paragraph": ("paragraph_fragment.docx", "paragraph-fragment"),
     "numbered_list": ("numbered_fragment.docx", "numbered-list-fragment"),
@@ -90,8 +101,6 @@ class ReportGenerationError(ValueError):
 def generation_issues(report: Report) -> list[str]:
     """Return report-completeness issues that should block final DOCX output."""
     issues = setup_issues(report)
-    if not report.vulnerabilities:
-        issues.append("at least one finding")
     for finding in report.vulnerabilities:
         label = finding.title or "Untitled finding"
         if not finding_is_complete(finding, report):
@@ -516,6 +525,11 @@ def _populate_summary_table(document: DocumentType, report: Report) -> None:
                 font_color=font_color,
                 font_size_pt=12 if font_color is not None else None,
             )
+    if not report.vulnerabilities:
+        row = _append_prototype_row(table, prototypes["informational"])
+        for index, (cell, value) in enumerate(zip(row.cells, [NO_FINDINGS_TITLE, *["N/A"] * 5])):
+            # The rating columns always print at 12 pt; with no rating there is no colour to add.
+            _replace_cell_placeholder(cell, value, font_size_pt=12 if index in (1, 2, 3) else None)
 
 
 def _element_text(element) -> str:
@@ -616,9 +630,12 @@ def _populate_cvss_table(document: DocumentType, rendered: list[tuple[Vulnerabil
         _replace_cell_placeholder(row.cells[3], finding.cvss_score)
         _replace_cell_placeholder(row.cells[4], finding.cvss_vector)
     if not rendered:
-        _append_prototype_row(table, prototype)
-        for index in range(5):
-            _replace_cell_placeholder(table.rows[1].cells[index], "")
+        row = _append_prototype_row(table, prototype)
+        for cell in row.cells:
+            _replace_cell_placeholder(cell, "N/A")
+            # The prototype colours its severity token, and N/A has no severity to show.
+            for color in list(cell._tc.iter(qn("w:color"))):
+                color.getparent().remove(color)
 
 
 def _populate_component_findings(
@@ -682,6 +699,17 @@ def _populate_component_findings(
         if heading is not None:
             set_page_break_before(heading)
         for element in severity_elements:
+            anchor.addprevious(element)
+    if not report.vulnerabilities:
+        testing_result = clone_component_elements(
+            document,
+            component_root / "severity_titles" / NO_FINDINGS_COMPONENT_FILE,
+        )
+        replace_component_token(testing_result, "testing_result", TESTING_RESULT_PARAGRAPH)
+        heading = next((element for element in testing_result if element.tag == qn("w:p")), None)
+        if heading is not None:
+            set_page_break_before(heading)
+        for element in testing_result:
             anchor.addprevious(element)
     anchor.getparent().remove(anchor)
     return rendered_order

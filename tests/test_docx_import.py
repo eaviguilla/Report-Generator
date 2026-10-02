@@ -358,6 +358,24 @@ class FragmentRecognitionTests(unittest.TestCase):
             finding = payload["vulnerabilities"][0]
             self.assertEqual((finding["cvss_score"], finding["cvss_vector"]), ("", ""))
 
+    def test_a_report_with_no_findings_imports_as_a_draft_with_none(self) -> None:
+        """Next year's pentest starts by importing this one, and no finding section claims the
+        placeholder rows a no-findings report prints."""
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        for segment in ("JH", "Asia"):
+            for mode in ("editable", "retest"):
+                with self.subTest(segment=segment, mode=mode), tempfile.TemporaryDirectory() as temporary_directory:
+                    folder = Path(temporary_directory)
+                    report = self._report(folder)
+                    report.engagement.segment = segment
+                    report.vulnerabilities = []
+                    document = render_report_docx(report, main_template_path(report, resources), folder)
+
+                    payload, evidence, summary = parse_report_docx(document, mode=mode)
+                    self.assertEqual(payload["vulnerabilities"], [])
+                    self.assertEqual(evidence, {})
+                    self.assertEqual(summary["retained"], 0)
+
     def _non_production_report(self, folder: Path, label: str) -> Report:
         """The production fixture never prints a non-production heading, so it cannot catch a
         mislabelled round trip."""

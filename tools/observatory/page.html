@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observatory</title>
+<!-- Template: tools/observatory/observatory.py puts the work items in place of the data mark and writes observatory.html. -->
+<style>
+:root {
+  --bg: #05070d; --surface: #0a0f1d; --ink: #e2e8f0; --muted: #94a3b8; --line: #1e293b; --panel: 360px;
+  --blocked: #f87171; --merged: #e879f9; --cue: #4ade80; --warn: #fbbf24;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg);
+  display: grid; grid-template-columns: minmax(0, 1fr) var(--panel); grid-template-rows: auto minmax(0, 1fr);
+}
+code { font-family: var(--mono); font-size: 12px; }
+button { font: inherit; color: inherit; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.linkish { all: unset; cursor: pointer; color: #93c5fd; text-align: left; }
+.linkish:hover { text-decoration: underline; }
+
+/* header and legend */
+header.top { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 20px; padding: 8px 16px; background: #070b16; border-bottom: 1px solid #131b2e; }
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand b { font-size: 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12px; }
+.lg-group { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.lk, .lg-star { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.chip {
+  --st: #94a3b8; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; line-height: 18px; white-space: nowrap;
+  color: color-mix(in srgb, var(--st) 75%, white); background: color-mix(in srgb, var(--st) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--st) 50%, var(--surface));
+}
+.chip .g { font-size: 10px; }
+
+#stage { position: relative; overflow: hidden; min-height: 0; }
+#panel { overflow: auto; min-height: 0; background: var(--surface); border-left: 1px solid #131b2e; padding: 14px 18px 40px; }
+.empty-note { padding: 24px; color: var(--muted); }
+
+/* star map */
+.g-wrap { position: absolute; inset: 0; }
+.g-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; background: radial-gradient(ellipse 120% 90% at 30% 20%, #101a3a 0%, #070b18 55%, #03050b 100%); }
+.g-svg:active { cursor: grabbing; }
+.g-top { position: absolute; top: 8px; left: 10px; right: 10px; display: flex; pointer-events: none; }
+.g-hud { font-size: 12px; color: #cbd5e1; background: rgb(6 10 22 / .75); border: 1px solid var(--line); border-radius: 10px; padding: 5px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; pointer-events: auto; }
+.g-hud button { cursor: pointer; border: 1px solid #334155; background: #0f172a; color: var(--ink); border-radius: 6px; padding: 0 8px; font-size: 12px; }
+.hud-hint { color: var(--muted); }
+.hud-warn { color: var(--warn); }
+.hud-count { display: inline-flex; align-items: center; gap: 5px; }
+.hud-bar { width: 80px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.hud-bar i { display: block; height: 100%; background: linear-gradient(90deg, #22c55e, #bbf7d0); }
+.mini-star { --c: #fff; --g: #fff; width: 12px; height: 12px; flex: none; border-radius: 50%; background: radial-gradient(circle, #fff 0 12%, var(--c) 22%, color-mix(in srgb, var(--g) 55%, transparent) 40%, transparent 70%); }
+.mini-star.rec { background: none; width: auto; height: auto; color: var(--c); font-size: 12px; line-height: 1; }
+.sf, .nebula, .const-name, .mote { pointer-events: none; }
+.sf2 { animation: twinkle 6s ease-in-out infinite alternate; }
+.const-name { font-size: 10px; letter-spacing: .24em; text-transform: uppercase; fill: color-mix(in srgb, var(--nc) 55%, white); opacity: .6; }
+.edge .line { fill: none; stroke: var(--ln); stroke-width: 1.2; stroke-opacity: .55; }
+.edge .arrow { fill: var(--ln); }
+.edge.from { --ln: #8fa3c7; }
+.edge.blocked.active { --ln: #f87171; }
+.edge.blocked:not(.active) { --ln: #4b5a72; }
+.edge.merged { --ln: #e879f9; }
+.edge.blocked .line { stroke-dasharray: 6 5; }
+.edge.blocked.active .line { stroke-width: 1.8; stroke-opacity: .95; }
+.edge.merged .line { stroke-dasharray: 0.1 5; stroke-linecap: round; stroke-width: 2.4; stroke-opacity: .9; }
+.mote { fill: #e2e8f0; }
+.star, .slabel { cursor: pointer; }
+.star .glow, .star .orbit, .star .cage, .star .sel, .star .haze { transform-box: fill-box; transform-origin: center; }
+.st-ready-for-agent .glow, .st-ready-for-human .glow { animation: breathe 2.8s ease-in-out infinite; }
+.st-needs-triage .core { animation: flicker 3.6s ease-in-out infinite; }
+.haze { fill: none; stroke: #a78bfa; stroke-opacity: .3; stroke-width: 5; animation: haze 5s ease-in-out infinite; }
+.orbit { animation: spin 9s linear infinite; }
+.orbit.o2 { animation-duration: 15s; animation-direction: reverse; }
+.orbit .ring { fill: none; stroke: #fdba74; stroke-opacity: .5; stroke-width: 1; stroke-dasharray: 2 4; }
+.orbit .moon { fill: #fed7aa; }
+.cage { fill: none; stroke: #f87171; stroke-width: 1.4; stroke-dasharray: 4 3; animation: spin 20s linear infinite; }
+.lg-group .cage { animation: none; }
+.star.blocked .glow { opacity: .28; animation: none; }
+.cue-ring { fill: none; stroke: #4ade80; stroke-opacity: .75; stroke-width: 1.2; }
+.cue-tick { font-size: 9px; font-weight: 700; fill: #4ade80; text-anchor: middle; }
+.husk { fill: none; stroke: #71717a; stroke-width: 1; }
+.hit { fill: transparent; }
+.sel { fill: none; stroke: transparent; stroke-width: 1.5; }
+.star.selected .sel { stroke: #fff; animation: flare .5s ease-out; }
+.bob { animation: bob 7s ease-in-out infinite; }
+.slabel { font-size: var(--fs, 12px); fill: var(--lc); paint-order: stroke; stroke: #050811; stroke-width: 3px; stroke-linejoin: round; }
+.slabel.top { font-size: calc(var(--fs, 12px) * 1.09); font-weight: 700; }
+.slabel.finished { opacity: .62; }
+.slabel.selected { font-weight: 700; }
+.slabel .w { fill: var(--blocked); font-weight: 700; }
+.slabel .m { fill: var(--merged); }
+.slabel .x { fill: var(--warn); }
+.star.dim, .slabel.dim, .edge.dim { opacity: .12; }
+@keyframes twinkle { from { opacity: .5; } to { opacity: 1; } }
+@keyframes breathe { 0%, 100% { transform: scale(.86); opacity: .8; } 50% { transform: scale(1.12); opacity: 1; } }
+@keyframes flicker { 0%, 100% { opacity: 1; } 38% { opacity: .5; } 44% { opacity: .95; } 72% { opacity: .7; } }
+@keyframes haze { 0%, 100% { transform: scale(.92); stroke-opacity: .2; } 50% { transform: scale(1.12); stroke-opacity: .4; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes flare { from { transform: scale(2.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes bob { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(0, -2px); } }
+@media (prefers-reduced-motion: reduce) { .g-svg, .g-svg * { animation: none !important; } }
+
+/* panel */
+.p-empty { color: var(--muted); padding-top: 24px; }
+.p-head { display: flex; justify-content: space-between; align-items: center; }
+.p-type { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+.p-close { all: unset; cursor: pointer; font-size: 20px; line-height: 1; padding: 0 4px; color: var(--muted); }
+.p-title { font-size: 18px; line-height: 1.25; margin: 4px 0 6px; }
+.p-path { margin-bottom: 8px; }
+.p-path code { color: var(--muted); overflow-wrap: anywhere; }
+.p-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; background: #e2e8f0; color: #0a0f1d; }
+.banner { margin: 8px 0; padding: 7px 10px; border-radius: 6px; font-size: 13px; }
+.banner.blocked { background: repeating-linear-gradient(135deg, #160a0d 0 6px, #241014 6px 12px); border: 1px solid #7f1d1d; }
+.banner.merged { background: #1b1030; border: 1px solid #86198f; }
+.banner.cue { background: #0a1f14; border: 1px dashed #22c55e; }
+.banner.warn { background: #22190a; border: 1px solid #92400e; color: #fcd34d; }
+.banner ul { margin: 4px 0 0; padding-left: 18px; }
+.p-desc { margin: 10px 0; }
+#panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#panel h3 .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.steps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.steps li { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.steps li.main { border: 2px solid #cbd5e1; }
+.s-head { display: flex; gap: 8px; align-items: center; }
+.s-head .skill { font-size: 13px; font-weight: 700; }
+.s-reason { margin: 4px 0 6px; font-size: 13px; }
+.s-cmd { display: flex; gap: 6px; align-items: flex-start; background: #111a2e; border-radius: 6px; padding: 6px; }
+.s-cmd code { flex: 1; font-size: 11px; overflow-wrap: anywhere; }
+.copy { flex: none; cursor: pointer; border: 1px solid #e2e8f0; background: #e2e8f0; color: #0a0f1d; border-radius: 6px; padding: 2px 10px; font-size: 12px; }
+.copy-out { font-size: 12px; color: var(--cue); min-height: 1em; margin: 6px 0 0; }
+.copy-out.bad { color: var(--blocked); }
+.none { color: var(--warn); font-weight: 600; }
+.rel { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.rel li { display: flex; gap: 6px; align-items: baseline; }
+.rel .why { display: block; color: var(--muted); font-size: 12px; }
+.dot { --st: #94a3b8; width: 9px; height: 9px; border-radius: 50%; background: var(--st); flex: none; display: inline-block; }
+.dot.fin { background: var(--surface); border: 2px solid var(--st); }
+.dot.rec { border-radius: 2px; background: #2a2210; border: 1.5px dashed var(--st); }
+.dot.off { background: transparent; border: 1px dashed var(--muted); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><b>Observatory</b><span class="muted small" id="built"></span></div>
+  <div class="legend" id="legend"></div>
+</header>
+<main id="stage" aria-label="Work items"></main>
+<aside id="panel" aria-label="Selected item"></aside>
+<script>
+"use strict";
+
+const DATA = /*OBSERVATORY_DATA*/null;
+
+// ---------- vocabulary ----------
+
+const STATUS = {
+  "needs-triage":    { label: "Needs triage",    glyph: "!" },
+  "needs-info":      { label: "Needs info",      glyph: "?" },
+  "ready-for-agent": { label: "Ready for agent", glyph: "A" },
+  "ready-for-human": { label: "Ready for human", glyph: "H" },
+  "in-progress":     { label: "In progress",     glyph: "▸" },
+  "done":            { label: "Done",            glyph: "✓" },
+  "wontfix":         { label: "Won't fix",       glyph: "✕" },
+};
+const RECORD = { label: "Decision record", glyph: "§" };
+const TYPES = { review: "Review item", plan: "Plan", spec: "Spec", map: "Wayfinder map", ticket: "Wayfinder ticket", issue: "Issue", adr: "Decision record" };
+// Each status is a kind of star: core and glow paint it, label tints its name, chip tints the panel.
+const SKY = {
+  "needs-triage":    { core: "#f8fafc", glow: "#cbd5e1", label: "#e2e8f0", chip: "#e2e8f0" },
+  "needs-info":      { core: "#ddd6fe", glow: "#8b5cf6", label: "#ddd6fe", chip: "#a78bfa" },
+  "ready-for-agent": { core: "#a5f3fc", glow: "#06b6d4", label: "#a5f3fc", chip: "#22d3ee" },
+  "ready-for-human": { core: "#fef08a", glow: "#eab308", label: "#fef08a", chip: "#facc15" },
+  "in-progress":     { core: "#fed7aa", glow: "#f97316", label: "#fdba74", chip: "#fb923c" },
+  "done":            { core: "#bbf7d0", glow: "#16a34a", label: "#9cc7ad", chip: "#4ade80" },
+  "wontfix":         { core: "#a1a1aa", glow: "#3f3f46", label: "#8b8b94", chip: "#a1a1aa" },
+  record:            { core: "#fef3c7", glow: "#d6b370", label: "#e9dbb0", chip: "#e7c27d" },
+};
+// How far each kind of star's light reaches, in core radii.
+const GLOW = { "needs-triage": 4.5, "needs-info": 6.5, "ready-for-agent": 7.5, "ready-for-human": 7.5, "in-progress": 6.5, done: 4, wontfix: 0, record: 3.5 };
+const NEBULA = ["#6366f1", "#14b8a6", "#a855f7", "#3b82f6", "#ec4899", "#0ea5e9", "#f59e0b", "#22c55e"];
+
+// ---------- the items ----------
+
+const VIEW = DATA ? DATA.items : [];
+const BY = Object.fromEntries(VIEW.map(i => [i.id, i]));
+const state = { item: null };
+let redraw = null, POS = null, GRAPH_T = null;
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const isRecord = i => i.type === "adr";
+const isFinished = i => !isRecord(i) && (i.status === "done" || i.status === "wontfix");
+const madeFrom = i => VIEW.filter(k => k.from.includes(i.id));
+const look = i => (isRecord(i) ? RECORD : STATUS[i.status]);
+const skyKey = i => (isRecord(i) ? "record" : i.status);
+const tint = i => SKY[skyKey(i)].chip;
+const hash = s => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+const MOTION = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function cueOf(i) {
+  if (isRecord(i)) return null;
+  const ks = madeFrom(i).filter(k => !isRecord(k));
+  if (!ks.length) return null;
+  const fin = ks.filter(isFinished).length;
+  return { fin, total: ks.length, all: fin === ks.length };
+}
+
+function command(i, step) {
+  const ctx = i.context.map(c => c.path);
+  return `/${step.skill} ${i.path}` + (ctx.length ? ` context: ${ctx.join(" ")}` : "");
+}
+
+function links() {
+  const out = [];
+  for (const i of VIEW) {
+    for (const f of i.from) out.push({ kind: "from", source: f, target: i.id });
+    for (const b of i.blockedBy) out.push({ kind: "blocked", source: b, target: i.id, active: !isFinished(BY[b]) && !isRecord(BY[b]) });
+    if (i.mergedInto) out.push({ kind: "merged", source: i.id, target: i.mergedInto });
+  }
+  return out;
+}
+
+// Threads: items joined by any link. The item with nothing above it is the top.
+const THREADS = (() => {
+  const up = {};
+  VIEW.forEach(i => { up[i.id] = i.id; });
+  const find = x => (up[x] === x ? x : (up[x] = find(up[x])));
+  links().forEach(l => { up[find(l.source)] = find(l.target); });
+  const groups = new Map();
+  VIEW.forEach(i => { const r = find(i.id); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(i.id); });
+  const list = [...groups.values()].map(ids => ({ ids, top: ids.find(id => !BY[id].from.length) || ids[0] }));
+  list.sort((a, b) => b.ids.length - a.ids.length);
+  list.forEach((t, k) => { t.nebula = NEBULA[k % NEBULA.length]; });
+  return list;
+})();
+const THREAD_OF = {};
+THREADS.forEach(t => t.ids.forEach(id => { THREAD_OF[id] = t; }));
+const isTop = i => THREAD_OF[i.id].top === i.id && THREAD_OF[i.id].ids.length > 1;
+
+const waitText = i => i.waitsFor.map(w => w.ref).join(", ");
+// Rough label widths, so labels push each other apart and the clouds cover them.
+const LABEL_W = Object.fromEntries(VIEW.map(i => {
+  let n = i.short.length;
+  if (i.waitsFor.length) n += 13 + waitText(i).length;
+  if (i.mergedRef) n += 15 + i.mergedRef.ref.length;
+  if (i.warnings.length) n += 13;
+  return [i.id, n * 6.6 + 8];
+}));
+
+// ---------- layout ----------
+
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Each thread gets its own small force layout, then the threads are packed in rows, so groups never overlap.
+function layoutThread(t, rnd) {
+  const n = t.ids.length;
+  const N = t.ids.map((id, k) => {
+    const a = (k / n) * Math.PI * 2;
+    return { id, w: LABEL_W[id], vx: 0, vy: 0, x: n > 1 ? Math.cos(a) * 110 + (rnd() - 0.5) * 30 : 0, y: n > 1 ? Math.sin(a) * 80 + (rnd() - 0.5) * 30 : 0 };
+  });
+  const at = Object.fromEntries(N.map((p, k) => [p.id, k]));
+  const E = [];
+  t.ids.forEach(id => {
+    const i = BY[id];
+    i.from.forEach(f => E.push([at[f], at[id], 1]));
+    i.blockedBy.forEach(b => E.push([at[b], at[id], 0.3]));
+    if (i.mergedInto) E.push([at[id], at[i.mergedInto], 0.3]);
+  });
+  const STEPS = 600;
+  for (let s = 0; s < STEPS && n > 1; s++) {
+    const heat = 1 - s / STEPS;
+    for (let a = 0; a < n; a++) {
+      for (let b = a + 1; b < n; b++) {
+        const A = N[a], B = N[b];
+        let dx = B.x - A.x, dy = B.y - A.y;
+        const d2 = Math.max(dx * dx + dy * dy, 25), d = Math.sqrt(d2), f = 3800 / d2;
+        dx /= d; dy /= d;
+        A.vx -= dx * f; A.vy -= dy * f; B.vx += dx * f; B.vy += dy * f;
+        const ox = Math.min(A.x + A.w + 24, B.x + B.w + 24) - Math.max(A.x - 16, B.x - 16), oy = 34 - Math.abs(B.y - A.y);
+        if (ox > 0 && oy > 0) { const sgn = B.y >= A.y ? 1 : -1; A.vy -= sgn * oy * 0.08; B.vy += sgn * oy * 0.08; }
+      }
+    }
+    for (const [a, b, w] of E) {
+      const A = N[a], B = N[b];
+      let dx = B.x - A.x, dy = B.y - A.y;
+      const d = Math.max(Math.hypot(dx, dy), 1), f = (d - 128) * 0.03 * w;
+      dx /= d; dy /= d;
+      A.vx += dx * f; A.vy += dy * f; B.vx -= dx * f; B.vy -= dy * f;
+    }
+    for (const p of N) {
+      p.vx -= p.x * 0.01; p.vy -= p.y * 0.01;
+      p.vx *= 0.55; p.vy *= 0.55;
+      p.x += p.vx * (0.25 + heat); p.y += p.vy * (0.25 + heat);
+    }
+  }
+  return N;
+}
+
+// Rows of thread boxes, with the row width that lets the whole map fill a stage of this width-to-height ratio.
+function forceLayout(aspect) {
+  const rnd = mulberry32(7), PAD = 46, GAP = 24;
+  const boxes = THREADS.map(t => {
+    const N = layoutThread(t, rnd);
+    const x0 = Math.min(...N.map(p => p.x - 16)) - PAD, x1 = Math.max(...N.map(p => p.x + 20 + p.w)) + PAD;
+    const y0 = Math.min(...N.map(p => p.y - 16)) - PAD, y1 = Math.max(...N.map(p => p.y + 16)) + PAD;
+    return { N, x0, y0, w: x1 - x0, h: y1 - y0 };
+  });
+  const shelf = rowW => {
+    let x = 0, y = 0, rowH = 0, W = 0;
+    const at = boxes.map(b => {
+      if (x > 0 && x + b.w > rowW) { x = 0; y += rowH + GAP; rowH = 0; }
+      const spot = [x, y];
+      x += b.w + GAP; rowH = Math.max(rowH, b.h); W = Math.max(W, x - GAP);
+      return spot;
+    });
+    return { at, k: Math.min(aspect / W, 1 / (y + rowH)) };
+  };
+  let best = null;
+  const total = boxes.reduce((s, b) => s + b.w + GAP, 0);
+  for (let rowW = Math.max(...boxes.map(b => b.w)); rowW <= total; rowW += 20) {
+    const s = shelf(rowW);
+    if (!best || s.k > best.k) best = s;
+  }
+  const pos = {};
+  boxes.forEach((b, k) => b.N.forEach(p => { pos[p.id] = { x: best.at[k][0] + p.x - b.x0, y: best.at[k][1] + p.y - b.y0 }; }));
+  return pos;
+}
+
+// Room the map leaves for the counts bar at the top.
+function graphRoom(svg) {
+  const r = svg.getBoundingClientRect(), bar = svg.parentElement.querySelector(".g-top").getBoundingClientRect();
+  return { r, top: bar.bottom - r.top + 12, bottom: 24 };
+}
+
+function fitGraph(svg) {
+  const { r, top, bottom } = graphRoom(svg), ids = Object.keys(POS), h = Math.max(100, r.height - top - bottom);
+  const x0 = Math.min(...ids.map(id => POS[id].x)) - 48, x1 = Math.max(...ids.map(id => POS[id].x + 20 + LABEL_W[id])) + 16;
+  const y0 = Math.min(...ids.map(id => POS[id].y)) - 48, y1 = Math.max(...ids.map(id => POS[id].y)) + 48;
+  const k = Math.min(r.width / (x1 - x0), h / (y1 - y0), 1.4);
+  return { k, k0: k, x: (r.width - (x1 - x0) * k) / 2 - x0 * k, y: top + (h - (y1 - y0) * k) / 2 - y0 * k, user: false };
+}
+
+// ---------- drawing ----------
+
+function starR(i) {
+  const base = isTop(i) ? 6.5 : ["plan", "spec", "map"].includes(i.type) ? 5.5 : 4.5;
+  return i.status === "wontfix" ? base * 0.6 : isFinished(i) ? base * 0.75 : base;
+}
+
+function sparkle(s) {
+  const k = s * 0.22;
+  return `M0,${-s} L${k},${-k} L${s},0 L${k},${k} L0,${s} L${-k},${k} L${-s},0 L${-k},${-k} Z`;
+}
+
+function skyDefs() {
+  let d = "";
+  for (const [k, s] of Object.entries(SKY)) {
+    d += `<radialGradient id="glow-${k}"><stop offset="0" stop-color="${s.glow}" stop-opacity=".8"/><stop offset=".35" stop-color="${s.glow}" stop-opacity=".2"/><stop offset="1" stop-color="${s.glow}" stop-opacity="0"/></radialGradient>`
+      + `<radialGradient id="core-${k}"><stop offset="0" stop-color="#fff"/><stop offset=".3" stop-color="${s.core}"/><stop offset=".7" stop-color="${s.core}" stop-opacity=".75"/><stop offset="1" stop-color="${s.core}" stop-opacity="0"/></radialGradient>`;
+  }
+  THREADS.forEach((t, k) => {
+    d += `<radialGradient id="neb-${k}"><stop offset="0" stop-color="${t.nebula}" stop-opacity=".2"/><stop offset=".5" stop-color="${t.nebula}" stop-opacity=".07"/><stop offset="1" stop-color="${t.nebula}" stop-opacity="0"/></radialGradient>`;
+  });
+  const rnd = mulberry32(42);
+  [[40, 0.6, 0.45, 230], [18, 0.9, 0.65, 270], [8, 1.3, 0.95, 310]].forEach(([n, size, a, tile], k) => {
+    let dots = "";
+    for (let s = 0; s < n; s++) dots += `<circle cx="${(rnd() * tile).toFixed(1)}" cy="${(rnd() * tile).toFixed(1)}" r="${(size * (0.6 + rnd() * 0.8)).toFixed(2)}" fill="#fff" fill-opacity="${(a * (0.5 + rnd() * 0.5)).toFixed(2)}"/>`;
+    d += `<pattern id="sf-${k}" width="${tile}" height="${tile}" patternUnits="userSpaceOnUse">${dots}</pattern>`;
+  });
+  return `<defs>${d}</defs>`;
+}
+
+function starSVG(i) {
+  const p = POS[i.id], key = skyKey(i), R = starR(i), fin = isFinished(i), cue = cueOf(i), gr = R * GLOW[key];
+  const cls = ["star", "st-" + key, fin ? "finished" : "", i.waitsFor.length ? "blocked" : ""].join(" ");
+  let h = `<g class="${cls}" data-id="${esc(i.id)}" transform="translate(${p.x},${p.y})"><g class="bob" style="animation-delay:-${hash(i.id) % 7000}ms">`;
+  if (gr) h += `<circle class="glow" r="${gr}" fill="url(#glow-${key})"/>`;
+  if (key === "needs-info") h += `<circle class="haze" r="${R + 8}"/>`;
+  if (key === "in-progress") h += `<g class="orbit"><circle class="ring" r="${R + 7}"/><circle class="moon" cx="${R + 7}" r="1.5"/></g><g class="orbit o2"><circle class="ring" r="${R + 13}"/></g>`;
+  if (i.waitsFor.length) h += `<circle class="cage" r="${R + 6}"/>`;
+  if (cue && cue.all && !fin) h += `<circle class="cue-ring" r="${R + 10}"/><text class="cue-tick" x="${(R + 10) * 0.75}" y="${3 - (R + 10) * 0.75}">✓</text>`;
+  h += isRecord(i) ? `<path class="core" d="${sparkle(R * 2)}" fill="url(#core-record)"/>` : `<circle class="core" r="${R * 1.35}" fill="url(#core-${key})"/>`;
+  if (key === "wontfix") h += `<circle class="husk" r="${R * 2}"/>`;
+  return h + `<circle class="sel" r="${R + 16}"/><circle class="hit" r="${Math.max(13, R + 7)}"/></g></g>`;
+}
+
+function labelSVG(i) {
+  const p = POS[i.id];
+  let t = esc(i.short);
+  if (i.waitsFor.length) t += `<tspan class="w"> · waits for ${esc(waitText(i))}</tspan>`;
+  if (i.mergedRef) t += `<tspan class="m"> · merged into ${esc(i.mergedRef.ref)}</tspan>`;
+  if (i.warnings.length) t += `<tspan class="x"> · check file</tspan>`;
+  const cls = ["slabel", "bob", isTop(i) ? "top" : "", isFinished(i) ? "finished" : ""].join(" ");
+  return `<text class="${cls}" data-id="${esc(i.id)}" x="${p.x + starR(i) + 10}" y="${p.y + 4}" style="--lc:${SKY[skyKey(i)].label};animation-delay:-${hash(i.id) % 7000}ms">${t}</text>`;
+}
+
+function edgeSVG(l) {
+  const a = POS[l.source], b = POS[l.target];
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  const bow = Math.min(36, len * 0.14) * (l.kind === "blocked" ? -1 : 1);
+  const cx = (a.x + b.x) / 2 - (dy / len) * bow, cy = (a.y + b.y) / 2 + (dx / len) * bow;
+  const d = `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`;
+  const mx = 0.25 * a.x + 0.5 * cx + 0.25 * b.x, my = 0.25 * a.y + 0.5 * cy + 0.25 * b.y;
+  const on = l.kind === "blocked" && l.active;
+  // Dots drift along a came-from line into an item that is still open, so the live end of a thread moves.
+  const live = l.kind === "from" && !isFinished(BY[l.target]) && !isRecord(BY[l.target]);
+  const motes = live && MOTION ? [0, 0.5].map(o => `<circle class="mote" r="1.3"><animateMotion dur="4.5s" begin="${(-o * 4.5).toFixed(2)}s" repeatCount="indefinite" path="${d}"/></circle>`).join("") : "";
+  return `<g class="edge ${l.kind}${on ? " active" : ""}" data-s="${esc(l.source)}" data-t="${esc(l.target)}"><path class="line" d="${d}"/>`
+    + `<path class="arrow" d="M4,0 L-3.5,3.2 L-3.5,-3.2 Z" transform="translate(${mx},${my}) rotate(${(Math.atan2(dy, dx) * 180) / Math.PI})"/>${motes}</g>`;
+}
+
+function nebulaSVG(t, k) {
+  if (t.ids.length < 2) return "";
+  const pts = t.ids.map(id => POS[id]);
+  const blobs = t.ids.map(id => `<circle cx="${POS[id].x + LABEL_W[id] * 0.3}" cy="${POS[id].y}" r="${70 + (hash(id) % 30)}" fill="url(#neb-${k})"/>`).join("");
+  const x = Math.min(...pts.map(p => p.x)) - 10, y = Math.min(...pts.map(p => p.y)) - 44;
+  const name = BY[t.top].short.split(" · ").pop();
+  return `<g class="nebula">${blobs}</g><text class="const-name" x="${x}" y="${y}" style="--nc:${t.nebula}">${esc(name)}</text>`;
+}
+
+function miniStar(k) {
+  const s = SKY[k];
+  return k === "record" ? `<span class="mini-star rec" style="--c:${s.core}">✦</span>` : `<span class="mini-star" style="--c:${s.core};--g:${s.glow}"></span>`;
+}
+
+function hudHTML() {
+  const work = VIEW.filter(i => !isRecord(i)), fin = work.filter(isFinished).length;
+  const counts = Object.keys(STATUS).map(k => [k, work.filter(i => i.status === k).length]).filter(([, n]) => n);
+  const warned = VIEW.filter(i => i.warnings.length).length;
+  return `<span><b>${work.length - fin}</b> open, <b>${fin}</b> finished</span>`
+    + `<span class="hud-bar" title="${fin} of ${work.length} finished"><i style="width:${work.length ? Math.round((100 * fin) / work.length) : 0}%"></i></span>`
+    + counts.map(([k, n]) => `<span class="hud-count">${miniStar(k)}${n} ${esc(STATUS[k].label.toLowerCase())}</span>`).join("")
+    + `<span class="hud-count">${miniStar("record")}${VIEW.filter(isRecord).length} decision records</span>`
+    + (warned ? `<span class="hud-warn">${warned} file${warned > 1 ? "s" : ""} to check</span>` : "")
+    + `<span class="hud-hint">Scroll to zoom, drag to pan.</span><button class="fit">Fit</button>`;
+}
+
+function skyLegend() {
+  const st = Object.keys(STATUS).map(k => `<span class="lg-star">${miniStar(k)}${esc(STATUS[k].label)}</span>`).join("")
+    + `<span class="lg-star">${miniStar("record")}Decision record</span>`;
+  const ln = (cls, label) => `<span class="lk"><svg width="34" height="10"><g class="edge ${cls}"><path class="line" d="M1,5 H33"/></g></svg>${label}</span>`;
+  const ring = (cls, label) => `<span class="lk"><svg width="18" height="18" viewBox="-9 -9 18 18"><circle class="${cls}" r="6"/></svg>${label}</span>`;
+  return `<span class="lg-group">${st}</span>`
+    + `<span class="lg-group">${ln("from", "came from")}${ln("blocked active", "blocks, still open")}${ln("blocked", "blocked, now clear")}${ln("merged", "merged into")}</span>`
+    + `<span class="lg-group">${ring("cage", "waits for another item")}${ring("cue-ring", "everything made from it finished")}</span>`;
+}
+
+function renderGraph(stage) {
+  stage.innerHTML = `<div class="g-wrap"><svg class="g-svg" xmlns="http://www.w3.org/2000/svg">${skyDefs()}`
+    + [0, 1, 2].map(k => `<rect class="sf sf${k}" width="100%" height="100%" fill="url(#sf-${k})"/>`).join("")
+    + `<g class="vp"><g class="nebulae"></g><g class="edges"></g><g class="stars"></g><g class="labels"></g></g></svg>`
+    + `<div class="g-top"><div class="g-hud">${hudHTML()}</div></div></div>`;
+  const svg = stage.querySelector("svg"), vp = svg.querySelector(".vp");
+  if (!POS) { const { r, top, bottom } = graphRoom(svg); POS = forceLayout(r.width / Math.max(100, r.height - top - bottom)); }
+  if (!GRAPH_T || !GRAPH_T.user) GRAPH_T = fitGraph(svg);
+  const T = GRAPH_T;
+  const apply = () => {
+    vp.setAttribute("transform", `translate(${T.x},${T.y}) scale(${T.k})`);
+    // Labels grow and shrink more slowly than the map, so they stay readable at any zoom.
+    vp.style.setProperty("--fs", `${(12 * Math.pow(T.k0 / T.k, 0.6)).toFixed(2)}px`);
+    // The three star layers move slower than the map, so the sky has depth when you pan.
+    [0.1, 0.22, 0.4].forEach((f, k) => svg.querySelector(`#sf-${k}`).setAttribute("patternTransform", `translate(${(T.x * f).toFixed(1)},${(T.y * f).toFixed(1)})`));
+  };
+  const refit = () => { Object.assign(T, fitGraph(svg)); apply(); };
+  stage.querySelector(".fit").addEventListener("click", refit);
+  redraw = () => { if (!T.user) refit(); };
+  const draw = () => {
+    vp.querySelector(".nebulae").innerHTML = THREADS.map(nebulaSVG).join("");
+    vp.querySelector(".edges").innerHTML = links().map(edgeSVG).join("");
+    vp.querySelector(".stars").innerHTML = VIEW.map(starSVG).join("");
+    vp.querySelector(".labels").innerHTML = VIEW.map(labelSVG).join("");
+    markSelected();
+  };
+  draw();
+  apply();
+
+  let drag = null;
+  svg.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    const g = e.target.closest(".star, .slabel");
+    drag = { id: g ? g.dataset.id : null, x: e.clientX, y: e.clientY, tx: T.x, ty: T.y, p: g ? { ...POS[g.dataset.id] } : null, moved: false };
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    if (drag.id) { POS[drag.id] = { x: drag.p.x + dx / T.k, y: drag.p.y + dy / T.k }; draw(); }
+    else { T.x = drag.tx + dx; T.y = drag.ty + dy; T.user = true; apply(); }
+  });
+  svg.addEventListener("pointerup", () => { if (drag && !drag.moved && drag.id) select(drag.id); drag = null; });
+  svg.addEventListener("pointercancel", () => { drag = null; });
+  svg.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = svg.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    const k = Math.min(3, Math.max(0.3, T.k * Math.exp(-e.deltaY * 0.0015)));
+    T.x = mx - (mx - T.x) * (k / T.k); T.y = my - (my - T.y) * (k / T.k); T.k = k; T.user = true;
+    apply();
+  }, { passive: false });
+  svg.addEventListener("pointerover", e => { if (!drag) { const g = e.target.closest(".star, .slabel"); highlight(svg, g ? g.dataset.id : null); } });
+  svg.addEventListener("pointerleave", () => highlight(svg, null));
+}
+
+function highlight(svg, id) {
+  const near = new Set(id ? [id] : []);
+  if (id) links().forEach(l => { if (l.source === id) near.add(l.target); if (l.target === id) near.add(l.source); });
+  svg.querySelectorAll(".star, .slabel").forEach(n => n.classList.toggle("dim", !!id && !near.has(n.dataset.id)));
+  svg.querySelectorAll(".edge").forEach(e => e.classList.toggle("dim", !!id && e.dataset.s !== id && e.dataset.t !== id));
+}
+
+// ---------- panel ----------
+
+function statusChip(i) {
+  const s = look(i);
+  return `<span class="chip" style="--st:${tint(i)}"><span class="g">${s.glyph}</span>${esc(isRecord(i) ? "Decision record, no status" : s.label)}</span>`;
+}
+
+function dot(i) {
+  const cls = isRecord(i) ? "rec" : isFinished(i) ? "fin" : "";
+  return `<span class="dot ${cls}" style="--st:${tint(i)}" title="${esc(look(i).label)}"></span>`;
+}
+
+function itemLink(path, text) {
+  return BY[path] ? `<button class="linkish" data-goto="${esc(path)}">${esc(text)}</button>` : `<span>${esc(text)}</span>`;
+}
+
+function relLine(c) {
+  const mark = c.shown ? dot(BY[c.path]) : `<span class="dot off"></span>`;
+  return `<li>${mark}<span>${itemLink(c.path, c.title)}<span class="why">${esc(c.why)}</span></span></li>`;
+}
+
+function stepHTML(i, s, k) {
+  const cmd = command(i, s);
+  return `<li class="${k === 0 ? "main" : ""}"><div class="s-head"><code class="skill">/${esc(s.skill)}</code>${k === 0 ? `<span class="tag">main</span>` : ""}</div>`
+    + `<p class="s-reason">${esc(s.reason)}</p>`
+    + `<div class="s-cmd"><code>${esc(cmd)}</code><button class="copy" data-cmd="${esc(cmd)}">Copy</button></div></li>`;
+}
+
+function renderPanel() {
+  const P = document.getElementById("panel");
+  const i = state.item ? BY[state.item] : null;
+  if (!i) {
+    const open = VIEW.filter(x => !isRecord(x) && !isFinished(x)).length;
+    P.innerHTML = `<div class="p-empty"><p>Click a star to see its description, its status and its next steps.</p>`
+      + `<p class="small">${VIEW.length} items in ${THREADS.length} groups. ${open} open, ${VIEW.filter(isRecord).length} decision records.</p></div>`;
+    return;
+  }
+  const rec = isRecord(i), fin = isFinished(i), cue = cueOf(i), kids = madeFrom(i);
+  let h = `<div class="p-head"><span class="p-type">${TYPES[i.type]}${i.num ? " " + esc(i.num) : ""}</span><button class="p-close" title="Close, or Esc">×</button></div>`
+    + `<h2 class="p-title">${esc(i.title)}</h2>`
+    + `<div class="p-path"><code>${esc(i.path)}</code></div>`
+    + `<div class="p-status">${statusChip(i)}${i.word ? `<span class="muted small">Its file says "${esc(i.word)}".</span>` : ""}</div>`;
+  if (i.warnings.length) h += `<div class="banner warn"><b>Check this file.</b><ul>${i.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
+  if (i.waitsFor.length) h += `<div class="banner blocked"><b>Blocked.</b> It waits for ${i.waitsFor.length > 1 ? "these" : "this"} to finish:${i.waitsFor.map(w => `<div>${itemLink(w.path, `${w.ref}: ${w.title}`)}</div>`).join("")}</div>`;
+  if (i.mergedRef) h += `<div class="banner merged"><b>Merged.</b> Another item took over its question:<div>${itemLink(i.mergedRef.path, `${i.mergedRef.ref}: ${i.mergedRef.title}`)}</div></div>`;
+  if (cue && cue.all && !fin) h += `<div class="banner cue"><b>✓ Everything made from it is finished</b>, ${cue.total} of ${cue.total}. Its own status stays ${esc(look(i).label)} until a session sets it.</div>`;
+  if (i.desc) h += `<p class="p-desc">${esc(i.desc)}</p>`;
+
+  h += `<h3>Next steps</h3>`;
+  if (rec) h += `<p class="muted small">A decision record records a decision, not work to do, so it has no next steps.</p>`;
+  else if (fin) h += `<p class="muted small">Finished, so there are no next steps and nothing to copy.</p>`;
+  else if (!i.next.length) h += `<p class="none">No next steps written.</p><p class="muted small">Add a <code>## Next steps</code> list to its file, then rebuild.</p>`;
+  else h += `<ol class="steps">${i.next.map((s, k) => stepHTML(i, s, k)).join("")}</ol><p class="copy-out" aria-live="polite"></p>`;
+
+  h += `<h3>Context <span class="muted">the paths after context:</span></h3>`;
+  h += i.context.length ? `<ul class="rel">${i.context.map(relLine).join("")}</ul>` : `<p class="muted small">Nothing above it, so a copied command has no context part.</p>`;
+  if (kids.length) {
+    h += `<h3>Made from it${cue ? ` <span class="muted">${cue.fin} of ${cue.total} finished</span>` : ""}</h3>`
+      + `<ul class="rel">${kids.map(k => `<li>${dot(k)}<span>${itemLink(k.id, k.title)}</span></li>`).join("")}</ul>`;
+  }
+  P.innerHTML = h;
+}
+
+async function copyCommand(btn) {
+  const text = btn.dataset.cmd, out = document.querySelector("#panel .copy-out");
+  let copied = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); copied = true; } catch (e) { copied = false; }
+  }
+  if (!copied) {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.appendChild(ta); ta.select();
+    try { copied = document.execCommand("copy"); } catch (e) { copied = false; }
+    ta.remove();
+  }
+  out.classList.toggle("bad", !copied);
+  if (copied) {
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+    out.textContent = "Copied. Paste it into a new session.";
+  } else {
+    const range = document.createRange();
+    range.selectNodeContents(btn.parentElement.querySelector("code"));
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    out.textContent = "The browser blocked copying. The command is selected, so press Cmd+C or Ctrl+C.";
+  }
+}
+
+document.getElementById("panel").addEventListener("click", e => {
+  const copy = e.target.closest(".copy");
+  if (copy) { copyCommand(copy); return; }
+  if (e.target.closest(".p-close")) { select(null); return; }
+  const go = e.target.closest("[data-goto]");
+  if (go) select(go.dataset.goto);
+});
+
+// ---------- wiring ----------
+
+function markSelected() {
+  document.querySelectorAll("#stage [data-id]").forEach(el => el.classList.toggle("selected", el.dataset.id === state.item));
+}
+
+function select(id) {
+  state.item = id && BY[id] ? id : null;
+  markSelected();
+  renderPanel();
+  writeURL();
+}
+
+function writeURL() {
+  const url = location.pathname + (state.item ? "?" + new URLSearchParams({ item: state.item }) : "");
+  try { history.replaceState(null, "", url); } catch (e) { /* some browsers refuse this on file: pages */ }
+}
+
+if (!DATA) {
+  document.getElementById("stage").innerHTML = `<p class="empty-note">This is the template. Run <code>python3 tools/observatory/observatory.py</code> to build the observatory.</p>`;
+} else if (!VIEW.length) {
+  document.getElementById("stage").innerHTML = `<p class="empty-note">No work items or decision records were created since ${esc(DATA.cutoff)}.</p>`;
+} else {
+  document.getElementById("built").textContent = `Built ${DATA.built}. Rebuild with tools/observatory/observatory.py.`;
+  document.getElementById("legend").innerHTML = skyLegend();
+  const asked = new URLSearchParams(location.search).get("item");
+  if (asked && Object.hasOwn(BY, asked)) state.item = asked;
+  renderGraph(document.getElementById("stage"));
+  renderPanel();
+  document.addEventListener("keydown", e => { if (e.key === "Escape") select(null); });
+  window.addEventListener("resize", () => { if (redraw) redraw(); });
+}
+</script>
+</body>
+</html>

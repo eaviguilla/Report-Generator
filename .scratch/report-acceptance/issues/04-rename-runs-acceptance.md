@@ -10,3 +10,7 @@ Likely outcome: keep the rename as it is and close this as `wontfix`, unless a r
 other checks appears.
 
 From [docs/plans/report-acceptance.md](../../../docs/plans/report-acceptance.md).
+
+## Next steps
+
+1. `/triage`: The issue expects to close as wontfix unless a reason to run the other checks appears.

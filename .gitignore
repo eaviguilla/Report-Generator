@@ -13,6 +13,7 @@ data/vulnreport-errors.log*
 # generated output
 generated/*
 !generated/.gitkeep
+tools/observatory/observatory.html
 
 # release packaging output
 /dist/

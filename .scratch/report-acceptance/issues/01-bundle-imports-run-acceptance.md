@@ -13,3 +13,8 @@ import, and would provision it at import instead of on the first save.
 To decide: should the import refuse such a bundle, or import it and let the tester correct it, as now?
 
 From [docs/plans/report-acceptance.md](../../../docs/plans/report-acceptance.md).
+
+## Next steps
+
+1. `/triage`: Filed by the report-acceptance plan. Nobody has evaluated it yet.
+2. `/implement`: Small once agreed. Run acceptance before the import writes the bundle.

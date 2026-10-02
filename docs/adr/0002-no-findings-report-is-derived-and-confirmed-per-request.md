@@ -4,6 +4,8 @@ status: accepted
 
 # A no-findings report is derived from its empty finding list and confirmed on each Generate
 
+From: [No-findings report: generate a report that has no findings](../plans/no-findings-report.md)
+
 A report is a no-findings report when it has no findings of any status. Nothing in the draft marks it: there is no Report Type value for it and no saved flag. The tester confirms it every time they generate, the confirmation travels with the Generate request as `confirm_no_findings`, and the server refuses a report with no findings that arrives without it.
 
 ## Considered options

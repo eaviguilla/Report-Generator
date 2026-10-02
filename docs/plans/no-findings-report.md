@@ -83,3 +83,7 @@ are.
 - [x] 6. Tests: Word output, import, routes, a case in each of the two gate contract tests, and the
   dialog.
 - [x] 7. Docs: ADR-0002, GLOSSARY.md, DOCX_TEMPLATE.md, ROUTES.md, DATA_MAP.md.
+
+## Next steps
+
+1. `/implement`: Check the Word output on Windows, then set the status to done.

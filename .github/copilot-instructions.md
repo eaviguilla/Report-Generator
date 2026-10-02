@@ -55,8 +55,10 @@ Claude Code follows these same files. `CLAUDE.md` (committed) is the short Claud
 here. `.claude/rules/*.md` are generated copies of `.github/instructions/*.instructions.md`, with each
 `applyTo` glob turned into a `paths` entry: edit the instruction file, then run
 `py -3 scripts/sync_ai_rules.py` (`python3` on macOS). `tests/test_ai_rules_sync.py` fails when the two
-drift. Edit rules here only. Claude wrappers for the agents in `.github/agents/` and the prompts in
-`.github/prompts/` are not set up in this checkout.
+drift. Edit rules here only. Claude wrappers for `loremaster`, `scribe`, `tactician` and `invader` live in
+`.claude/agents/` (hand-maintained copies, not generated; edit both sides when one changes). Only
+`.github/prompts/plan-change.prompt.md`'s orchestration is not set up for Claude Code in this
+checkout.
 
 # Talking to me
 

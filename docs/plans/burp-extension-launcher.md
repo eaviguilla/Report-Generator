@@ -4,6 +4,11 @@
 > `app/init.py`, and `burp/report_generator_burp.py` is now `report_generator_burp.py` at the repository root. Read
 > `run.py` and `burp/` below as those two files. The Step 8 checklist is unchanged, and still open.
 
+> **Browser replaced** (`docs/adr/0003-burp-build-opens-an-app-window-in-edge-or-chrome.md`,
+> `docs/plans/burp-app-window.md`): the tab no longer opens the system default browser. It opens the app
+> window in Edge or Chrome, and the window and the app stop together. The "Browser" choice below, and the
+> advice to use the usual browser, describe the earlier design.
+
 > **Status:** in progress · 2026-09-30 · Steps 1–7 are built and their tests pass here (242 Python
 > tests, 4 skipped); Step 8 (checks on Windows and inside a real Burp) and Step 9's close-out are still
 > to do.

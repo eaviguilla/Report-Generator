@@ -42,3 +42,7 @@ _Avoid_: environment-irrelevant image, stale image, orphaned image, out-of-scope
 **Word report**:
 The Word document the app builds from a report.
 _Avoid_: Word document report, generated report, docx, output file
+
+**App window**:
+The window the app opens in when it is started from Burp. It has no address bar and no tabs, and it is not Burp's browser.
+_Avoid_: Burp browser, node app, popup

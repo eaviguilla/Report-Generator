@@ -219,12 +219,20 @@ written, are set out in `.github/copilot-instructions.md` (*Running tests in thi
 `report_generator_burp.py`, at the top of a release folder (beside `app/`), is a single Jython 2.7
 extension for Burp's legacy Extender API. It is only a launcher: a tab with Start, Stop / Force stop,
 Open and the app's output. Start runs the tester's Python 3 on `app/init.py` exactly as a console start does,
-so the server, the page and `data/` are unchanged. It prints the folder, the command and the address, and
+so the server, the page and `data/` are unchanged. It prints the folder, the commands and the address, and
 hides nothing.
 
 - **Stop** closes the server's input. `app/init.py` sees the end of input and asks uvicorn to shut down, so
   running requests, including a report being generated, finish. **Force stop** kills the process tree and
   is the only stop that can cut a save short (`docs/DATA_MAP.md` §3).
+- **The app window.** When the app is ready, the tab opens it in Microsoft Edge, or Chrome when Edge is
+  missing, started with `--app` (no address bar, no tabs) and its own profile, `app-window-profile/` in the
+  release folder (`docs/adr/0003-burp-build-opens-an-app-window-in-edge-or-chrome.md`). It is Windows only,
+  and never Burp's browser or the default browser. The window and the app stop together. When the server
+  ends, the tab ends the browser it started, by its handle, and unloading the extension ends it at once.
+  When that browser exits while the app is running, the tab stops the app, unless it exited within three
+  seconds of starting, which means it gave its window to a browser already running on the profile. A
+  browser still holding the profile from an earlier session is reported, and no second one starts.
 - **One server per data folder.** `app/init.py` takes a lock in the data folder; a second Start says where the
   first is running.
 - **New release.** On the first Start in a folder with no reports the tab offers *Bring reports over*,
@@ -234,4 +242,5 @@ hides nothing.
   back only when the app runs on the same one (`docs/DATA_MAP.md` §13).
 - **Checks.** `tests/test_launcher.py` covers `app/init.py`, and runs the extension's Jython self-checks when
   Java and a Jython jar (`VULNREPORT_JYTHON_JAR`) are available. What only Burp can show is settled by the
-  checklist in `docs/plans/burp-extension-launcher.md`.
+  checklist in `docs/plans/burp-extension-launcher.md`, and for the app window by step 5 of
+  `docs/plans/burp-app-window.md`.

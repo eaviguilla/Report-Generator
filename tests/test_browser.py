@@ -4527,6 +4527,97 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(main.workspace.load(report_id).vulnerabilities, [])
         self.assertEqual(main.workspace.load(report_id).evidence, {}, "deleting the finding left its evidence behind")
 
+    def _generatable_report(self) -> str:
+        """A report with one complete finding, with Word patched out so generating runs on every platform."""
+        word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
+        word.start()
+        self.addCleanup(word.stop)
+        report_id = self.ready_report(include_finding=True)
+        report, _ = self._complete_finding(report_id)
+        main.workspace.save(report)
+        return report_id
+
+    def _hold_generation(self, report_id: str) -> None:
+        """Park the page's generate request until it calls window.releaseGenerate()."""
+        self.page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                window.fetch = (input, init = {}) => {
+                    const url = typeof input === "string" ? input : input.url;
+                    if (url.startsWith(`/reports/${reportId}/generate`) && init.method === "POST") {
+                        return new Promise(resolve => { window.releaseGenerate = () => resolve(originalFetch(input, init)); });
+                    }
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+
+    def _expect_generated(self):
+        return self.page.expect_response(lambda response: "/generate" in response.url and response.request.method == "POST", timeout=15_000)
+
+    def test_generate_button_holds_its_place_and_width_from_click_to_finish(self) -> None:
+        """The success notice once shared the bottom bar and pushed the button left, and the shorter busy label narrowed it."""
+        report_id = self._generatable_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        button = page.locator("#generate-report")
+        expect(button).to_be_enabled()
+        idle = button.bounding_box()
+        self._hold_generation(report_id)
+        button.click()
+        page.wait_for_function("typeof window.releaseGenerate === 'function'")
+        expect(button).to_have_text("Generating...")
+        self.assertEqual(button.bounding_box(), idle, "the button changed size or place while generating")
+        with self._expect_generated() as generated:
+            page.evaluate("window.releaseGenerate()")
+        self.assertTrue(generated.value.ok)
+        expect(button).to_have_text("Generate Report")
+        self.assertEqual(button.bounding_box(), idle, "the button moved once the report was generated")
+
+    def test_word_report_popup_copies_its_path_or_selects_it_when_the_browser_refuses(self) -> None:
+        report_id = self._generatable_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        # Stand in for the browser's clipboard, so the test never writes to the machine's real one.
+        rows = [
+            ("copied", "text => { window.copiedText = text; return Promise.resolve(); }", "Copied", "window.copiedText"),
+            ("refused", "() => Promise.reject(new DOMException('Write permission denied.', 'NotAllowedError'))", "Copy failed", "getSelection().toString()"),
+        ]
+        for case, write_text, label, read_back in rows:
+            with self.subTest(clipboard=case):
+                page.evaluate(f"() => {{ navigator.clipboard.writeText = {write_text}; }}")
+                with self._expect_generated() as generated:
+                    page.get_by_role("button", name="Generate Report").click()
+                path = generated.value.json()["path"]
+                popup = page.get_by_role("dialog", name="Your Word report is ready")
+                popup.get_by_role("button", name="Copy path").click()
+                expect(popup.get_by_role("button", name=label)).to_be_visible()
+                self.assertEqual(page.evaluate(read_back), path)
+                popup.get_by_role("button", name="OK").click()
+                expect(popup).to_be_hidden()
+
+    def test_word_report_popup_waits_for_a_prompt_the_tester_has_open(self) -> None:
+        """Generating takes a while, and a prompt opened meanwhile must not be answered for the tester."""
+        report_id = self._generatable_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        self._hold_generation(report_id)
+        page.get_by_role("button", name="Generate Report").click()
+        page.wait_for_function("typeof window.releaseGenerate === 'function'")
+        page.evaluate("() => { window.earlierAnswer = window.vrDialog.confirm({title: 'Earlier question', message: 'Asked while the report was generating.'}); }")
+        earlier = page.get_by_role("dialog", name="Earlier question")
+        expect(earlier).to_be_visible()
+        with self._expect_generated():
+            page.evaluate("window.releaseGenerate()")
+        expect(page.locator("#generate-report")).to_have_text("Generate Report")
+        expect(earlier).to_be_visible()
+        popup = page.get_by_role("dialog", name="Your Word report is ready")
+        expect(popup).to_have_count(0)
+        earlier.get_by_role("button", name="OK").click()
+        self.assertTrue(page.evaluate("window.earlierAnswer"))
+        expect(popup).to_be_visible()
+
     def test_complete_report_saves_generated_docx_to_generated_folder(self) -> None:
         # The server runs in this process, so patching Word out here lets the test run on every platform.
         word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
@@ -4588,15 +4679,16 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator("#generate-report").filter(has_text="Saving...").wait_for()
         self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT"])
         page.evaluate("window.releaseGenerateSave()")
-        page.locator("#generate-status").wait_for(state="visible", timeout=15_000)
+        popup = page.get_by_role("dialog", name="Your Word report is ready")
+        popup.wait_for(timeout=15_000)
         self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT", "POST"])
         page.get_by_role("heading", name="Unrelated warning").wait_for()
         persisted_description = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "description")
         self.assertEqual(persisted_description.fragments[0].runs[0].text, "Saved immediately before generation")
         output_path = main.GENERATED / "JH - Browser QA - Annual Pentest 2026.docx"
-        status_text = page.locator("#generate-status").inner_text()
-        self.assertIn(output_path.name, status_text)
-        self.assertIn("generated", status_text)
+        popup_text = popup.inner_text()
+        self.assertIn(f'"{output_path.name}"', popup_text)
+        self.assertIn(str(output_path), popup_text)
         rendered = Document(output_path)
         text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
         self.assertIn("Browser finding", text)

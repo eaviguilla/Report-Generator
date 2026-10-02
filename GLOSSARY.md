@@ -30,3 +30,7 @@ _Avoid_: extra image, stale image
 **Untested-environment image**:
 An image outside Previous Proof of Concept whose environment is not a tested environment.
 _Avoid_: environment-irrelevant image, stale image, orphaned image, out-of-scope image
+
+**Word report**:
+The Word document the app builds from a report.
+_Avoid_: Word document report, generated report, docx, output file

@@ -21,9 +21,9 @@ else - drafting, saving, import, and export - runs anywhere.
 ## Running it from Burp Suite
 
 `report_generator_burp.py`, at the top of this folder, adds a **Report Generator** tab to Burp
-with Start, Stop and Open buttons and the app's output. It only starts and stops the
-same app described above: nothing else changes, and the tab prints the folder, the
-exact command and the address.
+with Start, Stop and Open buttons and the app's output. It starts and stops the same app
+described above and shows it in its own window. The tab prints the folder, the exact
+commands and the address.
 
 1. In Burp: Extensions, Add, extension type **Python**, and choose
    `report_generator_burp.py` from this folder. Burp's Python environment must already
@@ -31,12 +31,20 @@ exact command and the address.
 2. Open the Report Generator tab and press **Start**. It runs your Python 3 (`py -3`,
    then `python`, on Windows; `python3` elsewhere). Type a path into the *Python* field
    to use another interpreter.
-3. When the status line says *Running at http://127.0.0.1:...*, the app opens in your
-   usual browser. It listens only on this computer. Use your usual browser rather than
-   Burp's own, so report content stays out of Burp's Proxy history.
+3. When the status line says *Running at http://127.0.0.1:...*, the app opens in its own
+   window, in Microsoft Edge or, when Edge is missing, Google Chrome. The window has no
+   address bar and no tabs. The app listens only on this computer, and its traffic stays
+   out of Burp's Proxy history. **Open** adds another window.
 
 Things worth knowing:
 
+- **The window and the app stop together.** Stop, Force stop or unloading the extension
+  closes the window, and closing the window stops the app. A report being generated
+  finishes first, as with Stop.
+- The window opens only on Windows, and needs Microsoft Edge or Google Chrome. Without
+  either, the tab prints the address and opens nothing.
+- If Burp ends without unloading the extension, for example when it is closed by force, the
+  window stays open on its own. The next Start asks you to close it, then press **Open**.
 - **Stop** asks the app to finish what it is doing and exit, including a report that is
   being generated, and can take a while. **Force stop** ends it at once. After a Force
   stop a page may show *Save conflict* for a change the app had already saved but could
@@ -46,9 +54,10 @@ Things worth knowing:
 - Keep `report_generator_burp.py` in the folder Burp loaded it from. If you move the
   folder, add the extension again.
 - One copy runs per folder. A second Start says where the first is running.
-- Changes you had not saved yet are kept by the browser under the address the app was
-  served from, port included. If the app comes back on a different port they wait there
-  and reappear when it runs on that port again.
+- Changes you had not saved yet are kept by the window, in `app-window-profile` in this
+  folder, under the address the app was served from, port included. If the app comes back
+  on a different port they wait there and reappear when it runs on that port again. Moving
+  to a new release leaves them behind.
 - If setup was interrupted and Start keeps failing, delete the `.venv` folder and press
   Start again.
 

@@ -761,7 +761,15 @@ class JythonSelfCheckTests(unittest.TestCase):
             result = self.run_jython("--self-check", data_folder, jar)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_jython_tab_starts_stops_and_opens_the_browser_once(self) -> None:
+    def test_jython_app_window_starts_edge_or_chrome_and_watches_it(self) -> None:
+        jar, why = jython_or_reason(needs_venv=False)
+        if jar is None:
+            self.skipTest(why)
+        with tempfile.TemporaryDirectory() as data_folder:
+            result = self.run_jython("--self-check-window", data_folder, jar, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_jython_tab_ties_the_app_window_to_the_app(self) -> None:
         jar, why = jython_or_reason(needs_venv=True)
         if jar is None:
             self.skipTest(why)

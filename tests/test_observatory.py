@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-
+from unittest.mock import patch
 _PATH = Path(__file__).resolve().parent.parent / "tools" / "observatory" / "observatory.py"
 _SPEC = importlib.util.spec_from_file_location("observatory", _PATH)
 observatory = importlib.util.module_from_spec(_SPEC)
@@ -197,6 +198,50 @@ class ObservatoryTests(unittest.TestCase):
         self.assertEqual(new["from"], [])
         self.assertEqual([c["path"] for c in new["context"]], ["docs/plans/old.md"])
         self.assertFalse(new["context"][0]["shown"])
+
+    def test_a_snapshot_changes_when_a_watched_file_is_saved_added_or_removed(self) -> None:
+        self.write(".scratch/x/issues/01-a.md", "# A\n")
+        script = self.repo / "tool.py"
+        script.write_text("", encoding="utf-8")
+        first = observatory.snapshot(self.repo, (script,))
+        self.assertEqual(len(first), 2)
+        edits = {
+            "saved": lambda: os.utime(self.repo / ".scratch/x/issues/01-a.md", ns=(1, 1)),
+            "tool saved": lambda: os.utime(script, ns=(1, 1)),
+            "added": lambda: self.write(".out-of-scope/idea.md", "# Idea\n"),
+            "removed": lambda: (self.repo / ".scratch/x/issues/01-a.md").unlink(),
+        }
+        for name, edit in edits.items():
+            with self.subTest(name=name):
+                before = observatory.snapshot(self.repo, (script,))
+                edit()
+                self.assertNotEqual(observatory.snapshot(self.repo, (script,)), before)
+
+    def test_watch_rebuilds_once_after_the_files_stop_changing(self) -> None:
+        cases = {
+            "no change": (["a", "a", "a"], 0),
+            "burst of saves": (["a", "b", "c", "d", "d", "d"], 1),
+            "two separate saves": (["a", "b", "b", "b", "c", "c"], 2),
+            "still changing": (["a", "b", "c", "d"], 0),
+        }
+        for name, (states, expected) in cases.items():
+            with self.subTest(name=name):
+                feed = iter(states)
+                rebuilds = []
+                observatory.watch(lambda: next(feed), lambda: rebuilds.append(1), lambda: None, rounds=len(states) - 1)
+                self.assertEqual(len(rebuilds), expected)
+
+    def test_a_page_is_written_whole_and_leaves_no_temporary_file(self) -> None:
+        page = self.repo / "page.html"
+        page.write_text("old", encoding="utf-8")
+        observatory.write_page(page, "new")
+        self.assertEqual(page.read_text(encoding="utf-8"), "new")
+        self.assertEqual([p.name for p in self.repo.iterdir()], ["page.html"])
+        with patch.object(observatory.os, "replace", side_effect=PermissionError("locked")):
+            with self.assertRaisesRegex(PermissionError, "locked"):
+                observatory.write_page(page, "newer")
+        self.assertEqual(page.read_text(encoding="utf-8"), "new")
+        self.assertEqual([p.name for p in self.repo.iterdir()], ["page.html"])
 
     def test_no_text_in_an_item_can_close_the_page_script(self) -> None:
         page = observatory.render(

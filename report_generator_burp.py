@@ -272,9 +272,10 @@ BROWSER_PLACES = (
     (u"ProgramFiles", (u"Google", u"Chrome", u"Application", u"chrome.exe")),
     (u"ProgramFiles(x86)", (u"Google", u"Chrome", u"Application", u"chrome.exe")),
 )
-APP_WINDOW_PROFILE = u"app-window-profile"
-# A browser that ends this soon after starting gave its window to one already running on the profile.
+APP_WINDOW_FOLDER = u"app-window"
+# A browser that ends this soon after starting gave its window to one already running on the folder.
 HANDOVER_MS = 3000
+DISCARD_TRIES = 5
 
 
 def browser_places(getenv):
@@ -300,18 +301,23 @@ def start_browser(words):
 
 
 class AppWindow(object):
-    """The app window (docs/adr/0003). `launch(words)` returns a java.lang.Process; `now()` is in milliseconds."""
+    """The app window (docs/adr/0003). `launch(words)` returns a java.lang.Process; `now()` is in milliseconds;
+    `later(job)` runs a job off the Swing thread."""
 
-    def __init__(self, app_folder, places, launch, on_windows, now=None):
-        self.profile = File(app_folder, APP_WINDOW_PROFILE)
+    def __init__(self, app_folder, places, launch, on_windows, now=None, later=None):
+        self.folder = File(app_folder, APP_WINDOW_FOLDER)
         self.places = places
         self.launch = launch
         self.on_windows = on_windows
         self.now = now or System.currentTimeMillis
+        self.later = later or in_background
         self.browser = None
         self.opened_at = 0
         self._ended = False
         self._lock = threading.Lock()
+        self._folder_lock = threading.Lock()  # one open, or one folder delete, at a time; never on the Swing thread
+        self._generation = 0
+        self._browser_generation = 0
 
     def open(self, url):
         """Show the app at `url`, and return a line for the tab: None once the extension has unloaded."""
@@ -323,27 +329,38 @@ class AppWindow(object):
         if not found:
             return u"No app window, because neither Microsoft Edge nor Google Chrome was found. Looked for:\n  %s\nThe app is running at %s" % (
                 u"\n  ".join(self.places), url)
+        with self._folder_lock:
+            note, dropped = self._open(found[0], url)
+        if dropped is not None:  # the extension unloaded while this browser started
+            self._discard_later(*dropped)
+        return note
+
+    def _open(self, place, url):
+        """Under the folder lock: the tab's line, and (generation, browser) to delete after if it was dropped."""
         with self._lock:
             current = self.browser
         joining = current is not None and current.isAlive()
-        if not joining and self._left_running():
-            return u"An app window from an earlier session is still open. Close it, then press Open."
-        # Aggressive flushing writes the page's kept edits to disk within a second, not five or more.
-        words = [found[0], u"--app=" + url, u"--user-data-dir=" + self.profile.getPath(), u"--window-size=1440,900",
-                 u"--no-first-run", u"--no-default-browser-check", u"--enable-aggressive-domstorage-flushing"]
+        if not joining:
+            if self._left_running():
+                return u"An app window from an earlier session is still open. Close it, then press Open.", None
+            self._generation += 1
+            self._discard()  # every window starts blank and keeps nothing from an earlier one
+        words = [place, u"--app=" + url, u"--user-data-dir=" + self.folder.getPath(), u"--window-size=1440,900",
+                 u"--no-first-run", u"--no-default-browser-check"]
         try:
             browser = self.launch(words)
         except (Exception, Throwable) as error:
-            return u"Could not start the app window: %s" % error
+            return u"Could not start the app window: %s" % error, None
         with self._lock:
             ended = self._ended
             if not ended and not joining:  # a second window joins the browser already watched, and its process ends
                 self.browser = browser
+                self._browser_generation = self._generation
                 self.opened_at = self.now()
-        if ended:  # the extension unloaded while this browser started
+        if ended:
             browser.destroy()
-            return None
-        return u"App window: %s" % u" ".join(words)
+            return None, (None if joining else (self._generation, browser))
+        return u"App window: %s" % u" ".join(words), None
 
     def poll(self):
         """What became of the window since the last call: None, u"closed", or u"handed over"."""
@@ -352,22 +369,54 @@ class AppWindow(object):
             if browser is None or browser.isAlive():
                 return None
             self.browser = None
-        return u"handed over" if self.now() - self.opened_at < HANDOVER_MS else u"closed"
+            generation = self._browser_generation
+        if self.now() - self.opened_at < HANDOVER_MS:
+            return u"handed over"
+        self._discard_later(generation)
+        return u"closed"
 
     def close(self, for_good=False):
         """End the browser this started, by its handle, never one found by name; `for_good` on unload. Any thread."""
         with self._lock:
             self._ended = self._ended or for_good
             browser, self.browser = self.browser, None
+            generation = self._browser_generation
         if browser is not None:
             try:
                 browser.destroy()
             except (Exception, Throwable):
                 pass
+            self._discard_later(generation, browser)
+
+    def _discard_later(self, generation, browser=None):
+        """Delete the folder of the window started as `generation` once `browser` has ended, unless a newer
+        window has started on it since. Helper processes can hold files a moment longer, so it tries again."""
+
+        def job():
+            if browser is not None:
+                try:
+                    browser.waitFor(5, TimeUnit.SECONDS)
+                except (Exception, Throwable):
+                    pass
+            for attempt in range(DISCARD_TRIES):
+                if attempt:
+                    JThread.sleep(1000)
+                with self._folder_lock:
+                    if self._generation != generation:
+                        return
+                    self._discard()
+                    if not self.folder.exists():
+                        return
+
+        self.later(job)
+
+    def _discard(self):
+        """A file still held is left; the next window's start removes it."""
+        shutil.rmtree(self.folder.getPath(), True)
 
     def _left_running(self):
-        """A browser holds the profile while its lock file is there and cannot be removed; a stale one goes."""
-        lock = File(self.profile, u"lockfile")
+        """A browser holds the folder while its lock file is there and cannot be removed; a stale one goes."""
+        lock = File(self.folder, u"lockfile")
         return lock.exists() and not lock.delete()
 
 
@@ -919,6 +968,9 @@ class _FakeBrowser(object):
         self.destroyed = True
         self.alive = False
 
+    def waitFor(self, _amount, _unit):
+        return not self.alive
+
 
 class _FakeLauncher(object):
     """Starts nothing: records each command and hands back a browser the check can close."""
@@ -969,9 +1021,9 @@ def self_check_window(_app_folder, python_exe):
         _make_file(chrome_pf)
         note = window.open(url)
         check(len(launcher.started) == 1 and launcher.started[0].words == [
-            chrome_pf, u"--app=" + url, u"--user-data-dir=" + release + sep + u"app-window-profile",
-            u"--window-size=1440,900", u"--no-first-run", u"--no-default-browser-check", u"--enable-aggressive-domstorage-flushing"],
-            u"with only Chrome installed, Chrome opens the address with no address bar and its own profile: %s"
+            chrome_pf, u"--app=" + url, u"--user-data-dir=" + release + sep + u"app-window",
+            u"--window-size=1440,900", u"--no-first-run", u"--no-default-browser-check"],
+            u"with only Chrome installed, Chrome opens the address with no address bar and a browser folder of its own: %s"
             % [browser.words for browser in launcher.started])
         check(note is not None and chrome_pf in note, u"the tab is told which browser opened: %s" % note)
 
@@ -991,7 +1043,7 @@ def self_check_window(_app_folder, python_exe):
         check(not launcher.started, u"off Windows no browser starts, even with Edge installed")
         check(note is not None and u"only on Windows" in note and url in note, u"and the tab says so, with the address: %s" % note)
 
-        lock = File(File(release, u"app-window-profile"), u"lockfile")
+        lock = File(File(release, u"app-window"), u"lockfile")
         _make_file(lock.getPath())
         held = RandomAccessFile(lock, u"rw")  # a running browser keeps it open, which stops its removal on Windows,
         lock.getParentFile().setWritable(False)  # and a read-only folder stops it everywhere else
@@ -1001,13 +1053,89 @@ def self_check_window(_app_folder, python_exe):
         finally:
             lock.getParentFile().setWritable(True)
             held.close()
-        check(not launcher.started, u"while a browser left from an earlier session holds the profile, no browser starts on it")
+        check(not launcher.started, u"while a browser left from an earlier session holds the folder, no browser starts on it")
         check(note is not None and u"earlier session" in note, u"and the tab asks the tester to close that window: %s" % note)
+        check(lock.exists(), u"and the folder that browser holds is left alone")
 
         launcher = _FakeLauncher()
         AppWindow(release, places, launcher, True).open(url)
         check(len(launcher.started) == 1, u"a lock file nothing holds any more does not stop the window opening")
         check(not lock.exists(), u"and that stale lock file is removed")
+
+        def run_now(job):
+            job()
+
+        browser_folder = File(release, u"app-window")
+        leftover = File(browser_folder, u"Default" + sep + u"Cookies")
+        _make_file(leftover.getPath())
+        clock = [0]
+        launcher = _FakeLauncher()
+        window = AppWindow(release, places, launcher, True, lambda: clock[0], run_now)
+        window.open(url)
+        check(not leftover.exists(), u"a new window starts with an empty browser folder, so nothing carries over")
+        _make_file(leftover.getPath())
+        clock[0] = 60000
+        window.open(url)
+        check(leftover.exists(), u"a second window joining the running browser leaves its folder alone")
+        window.close()
+        check(not browser_folder.exists(), u"closing the window deletes its browser folder")
+
+        clock[0] = 0
+        launcher = _FakeLauncher()
+        window = AppWindow(release, places, launcher, True, lambda: clock[0], run_now)
+        window.open(url)
+        _make_file(leftover.getPath())
+        clock[0] = 1000
+        launcher.started[0].alive = False
+        check(window.poll() == u"handed over" and leftover.exists(), u"a window handed to a browser already running keeps the folder it runs on")
+
+        clock[0] = 0
+        launcher = _FakeLauncher()
+        window = AppWindow(release, places, launcher, True, lambda: clock[0], run_now)
+        window.open(url)
+        _make_file(leftover.getPath())
+        clock[0] = 60000
+        launcher.started[0].alive = False
+        check(window.poll() == u"closed" and not browser_folder.exists(), u"a window the tester closes leaves no browser folder behind")
+
+        deferred = []
+        launcher = _FakeLauncher()
+        window = AppWindow(release, places, launcher, True, lambda: clock[0], deferred.append)
+        window.open(url)
+        window.close()
+        window.open(url)
+        _make_file(leftover.getPath())
+        for job in deferred:
+            job()
+        check(len(deferred) == 1 and leftover.exists(), u"deleting a closed window's folder never touches a newer window's")
+        window.close()
+        deferred[-1]()
+        check(not browser_folder.exists(), u"and the newer window's own close deletes it")
+
+        deferred = []
+        clock[0] = 0
+        launcher = _FakeLauncher()
+        window = AppWindow(release, places, launcher, True, lambda: clock[0], deferred.append)
+        window.open(url)
+        clock[0] = 60000
+        launcher.started[0].alive = False
+        window.poll()
+        window.open(url)
+        _make_file(leftover.getPath())
+        deferred[0]()
+        check(leftover.exists(), u"a window the tester closed just as a new one opened leaves the new window's folder alone")
+
+        launcher = _FakeLauncher()
+        window = AppWindow(release, places, None, True, later=run_now)
+
+        def unload_as_it_starts(words):
+            window.close(for_good=True)
+            _make_file(leftover.getPath())
+            return launcher(words)
+
+        window.launch = unload_as_it_starts
+        window.open(url)
+        check(not browser_folder.exists(), u"a window ended because the extension unloaded as it started leaves no folder")
 
         clock = [0]
         launcher = _FakeLauncher()

@@ -226,13 +226,15 @@ hides nothing.
   running requests, including a report being generated, finish. **Force stop** kills the process tree and
   is the only stop that can cut a save short (`docs/DATA_MAP.md` §3).
 - **The app window.** When the app is ready, the tab opens it in Microsoft Edge, or Chrome when Edge is
-  missing, started with `--app` (no address bar, no tabs) and its own profile, `app-window-profile/` in the
-  release folder (`docs/adr/0003-burp-build-opens-an-app-window-in-edge-or-chrome.md`). It is Windows only,
+  missing, started with `--app` (no address bar, no tabs) and a browser folder of its own, `app-window/` in
+  the release folder (`docs/adr/0003-burp-build-opens-an-app-window-in-edge-or-chrome.md`). The folder is
+  emptied before each new window and deleted when the window closes, so nothing carries from one session
+  to the next. It is Windows only,
   and never Burp's browser or the default browser. The window and the app stop together. When the server
   ends, the tab ends the browser it started, by its handle, and unloading the extension ends it at once.
   When that browser exits while the app is running, the tab stops the app, unless it exited within three
-  seconds of starting, which means it gave its window to a browser already running on the profile. A
-  browser still holding the profile from an earlier session is reported, and no second one starts.
+  seconds of starting, which means it gave its window to a browser already running on that folder. A
+  browser still holding the folder from an earlier session is reported, and no second one starts.
 - **One server per data folder.** `app/init.py` takes a lock in the data folder; a second Start says where the
   first is running.
 - **New release.** On the first Start in a folder with no reports the tab offers *Bring reports over*,

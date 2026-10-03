@@ -7,8 +7,8 @@ data/server.lock
 data.before-move-*/
 generated.before-move-*/
 DATA-MOVED.txt
-# the Burp build's app window profile: unsaved edits and cached client content (docs/adr/0003)
-app-window-profile/
+# the Burp build's app window browser folder, deleted when the window closes (docs/adr/0003)
+app-window/
 # the handler rotates into .log.1, .log.2 and so on
 data/vulnreport-errors.log*
 

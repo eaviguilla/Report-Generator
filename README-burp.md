@@ -54,10 +54,11 @@ Things worth knowing:
 - Keep `report_generator_burp.py` in the folder Burp loaded it from. If you move the
   folder, add the extension again.
 - One copy runs per folder. A second Start says where the first is running.
-- Changes you had not saved yet are kept by the window, in `app-window-profile` in this
-  folder, under the address the app was served from, port included. If the app comes back
-  on a different port they wait there and reappear when it runs on that port again. Moving
-  to a new release leaves them behind.
+- The window starts empty every time and keeps nothing once it closes: no account, no
+  history, no cookies. Its browser files live in `app-window` in this folder while it is
+  open and are deleted when it closes. Reports are saved in the `data` folder, not in the
+  window, so closing it loses only an edit typed in the seconds before, if that edit had
+  not reached the app yet. The light or dark choice resets each time.
 - If setup was interrupted and Start keeps failing, delete the `.venv` folder and press
   Start again.
 

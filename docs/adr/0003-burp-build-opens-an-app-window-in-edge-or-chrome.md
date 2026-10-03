@@ -8,7 +8,9 @@ From: [The Burp build opens the app window](../plans/burp-app-window.md)
 
 Replaces the "Browser" choice in [Host the app from a Burp Suite extension](../plans/burp-extension-launcher.md), which opened the system default browser.
 
-When the Burp tab starts the app, it opens the app window in Edge, or in Chrome when Edge is missing. The extension starts that browser itself, with no address bar and with its own profile in the release folder. It never uses Burp's browser and never falls back to the default browser. If neither Edge nor Chrome is installed, nothing opens, and the tab names the browsers it looked for and prints the address.
+When the Burp tab starts the app, it opens the app window in Edge, or in Chrome when Edge is missing. The extension starts that browser itself, with no address bar and with a browser folder of its own in the release folder, which it empties before each new window and deletes when the window closes. It never uses Burp's browser and never falls back to the default browser. If neither Edge nor Chrome is installed, nothing opens, and the tab names the browsers it looked for and prints the address.
+
+Amended 2026-10-03: the browser folder was first kept between sessions. It is now thrown away, so the window never carries an account, history or data from one session to the next.
 
 ## Considered options
 
@@ -20,9 +22,9 @@ When the Burp tab starts the app, it opens the app window in Edge, or in Chrome 
 
 - The app window opens only on Windows, where the Burp build runs. Anywhere else the tab opens nothing and prints the address.
 - The window and the app stop together. When the server ends, whether by Stop, Force stop or a crash, the extension ends the browser it started without asking it first. Unloading the extension ends it at once, since nothing watches the server after that. When that browser exits, the extension stops the app as if Stop were pressed. A polite close was rejected because it needs a Windows-only way to close another program's window and makes Stop wait on a "Leave site?" answer.
-- Ending the browser this way can lose the last second of typing. The page keeps each edit in the browser's local storage 150 ms after it is typed, but the browser writes local storage to disk in batches, five seconds apart by default. The window is started with `--enable-aggressive-domstorage-flushing`, which brings that to one second. An edit typed within that second before the browser ends is lost.
-- A browser left running on the profile from an earlier session, after Burp was killed, cannot be tied to the app. Before opening a window, the extension checks the profile's lock file and asks the tester to close that window first. A browser that ends within three seconds of starting gave its window to one already running, so it does not stop the app either.
-- The window's profile holds its unsaved edits, undo history, theme choice and cache. Deleting the release folder deletes it. Bring over does not move it, so unsaved edits stay behind with the old release.
+- Ending the browser discards what the page kept in it: an edit typed in the seconds before, if it had not reached the app yet, undo history and the theme choice. Reports themselves are saved by the app in the data folder and are unaffected.
+- A browser left running on the browser folder from an earlier session, after Burp was killed, cannot be tied to the app. Before opening a window, the extension checks the folder's lock file and asks the tester to close that window first. A browser that ends within three seconds of starting gave its window to one already running, so it does not stop the app either.
+- The browser folder holds nothing between sessions: no account sign-in, sync, imported browser data, cookies, cache or unsaved edits. Two cases leave files until the next window starts, which empties the folder first: Burp killed while the window is open, and a browser helper process still holding a file after five tries a second apart.
 - Unsaved edits that a tester's usual browser held before this change are not offered in the app window.
 - The window's traffic stays out of Burp's Proxy history. Edge and Chrome send `127.0.0.1` traffic directly even when a system proxy is set.
 - Ctrl+N in the app window still opens an ordinary browser window, with an address bar.

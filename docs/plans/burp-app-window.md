@@ -26,7 +26,8 @@ Windows, fails its sandbox and comes up blank.
    browser is never used.
 3. **Scope.** Only the Burp tab changes. A console start and the default release still open the default
    browser.
-4. **Profile.** The window keeps its profile in `app-window-profile/` in the release folder. Bring over
+4. **Profile.** The window keeps its browser data in a folder of its own in the release folder. Changed
+   later: the folder is thrown away after each window (see What deviated). Bring over
    does not move it.
 5. **Window and app.** They stop together. Stop closes the window, and closing the window stops the app.
 6. **Switching over.** Unsaved edits a tester's usual browser holds are not offered in the window. The
@@ -59,18 +60,38 @@ Taken from repgen-web: a 1440 by 900 window, first-run screens skipped, and Open
   - a. Edge opens the app window with no address bar and no tabs, titled and iconed by the page.
   - b. Closing the last app window ends the browser process, for Edge and for Chrome, so the app stops.
   - c. Stop, Force stop, unloading the extension and closing Burp normally each close the window, and
-    Task Manager shows no Edge process left with `app-window-profile` on its command line.
+    Task Manager shows no Edge process left with `app-window` on its command line. The `app-window`
+    folder is gone a few seconds later.
   - d. With Burp killed while the window is open, the next Start reports the leftover window and opens
     nothing until it is closed. This is the `lockfile` check.
   - e. Open while the window is open adds a window, and closing both stops the app.
   - f. With the Windows proxy pointed at Burp, nothing from the app appears in Proxy history.
   - g. With Edge absent, Chrome opens. With neither, the tab lists the places it looked.
   - h. `tests.test_launcher` passes with the Jython checks run, not skipped.
-  - i. Type into a finding's description, wait two seconds, press Stop, then Start: the page offers the
-    unsaved edit. Repeat and press Stop at once, to see what the last second loses.
+  - i. Change the theme, press Stop, then Start: the new window is back on the default theme and offers
+    no unsaved edit, because nothing is kept between windows.
+  - j. On a machine signed in to Windows with a Microsoft or work account, the window shows no sign-in,
+    sync or import prompt, and `edge://settings/profiles` in a Ctrl+N window opened from it shows no
+    account.
 
 ## What deviated
 
+- **The browser folder is thrown away** (2026-10-03, after the user asked that the window never carry
+  over or link a browser profile). Answer 4 kept it in `app-window-profile/` between sessions. It is now
+  `app-window/`, emptied before each new window and deleted on a worker thread once the window closes,
+  never under a newer window. A second window joining a running one, and a folder a leftover browser
+  holds, are left alone. `--enable-aggressive-domstorage-flushing` is gone, since nothing the page keeps
+  in the browser outlives the window, which also replaces the first deviation below. Check 5i changed to
+  match, and 5j is new.
+  - One open runs at a time and holds the folder while it empties it and starts the browser, so the
+    automatic open and the Open button cannot run over each other. Each delete belongs to the window it
+    was scheduled for and is skipped once a newer window has started.
+  - A delete tries five times, a second apart, because Edge's helper processes can hold files after the
+    main one ends. Whatever is still held then is removed when the next window starts.
+  - An older release keeps its `app-window-profile/` folder until that release folder is deleted. Nothing
+    in this release reads or names it.
+  - Nothing stops Edge signing a new browser folder in to a work account by policy on a domain-joined
+    machine. If check 5j finds an account there, that needs a decision before this plan closes.
 - **The loss on Stop is up to a second, not 150 ms.** Answer 7 was agreed on the claim that the page keeps
   each edit 150 ms after it is typed, so ending the browser loses at most that. The page does write to
   local storage after 150 ms, but Chromium writes local storage to disk in batches, five seconds apart by
@@ -98,3 +119,8 @@ Taken from repgen-web: a 1440 by 900 window, first-run screens skipped, and Open
 setup from `requirements-dev.txt` never writes it. Use a native arm64 Java, such as Homebrew's `openjdk`.
 Burp Professional's bundled Java is x86_64, so the Python it starts runs under Rosetta and cannot load the
 arm64 `pydantic_core`, and the app never prints its address.
+
+## Next steps
+
+1. `/implement`: Run the Windows checks in step 5, including 5j on the throwaway browser folder, then set
+   the status to done.

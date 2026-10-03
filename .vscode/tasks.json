@@ -1,0 +1,20 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Observatory: rebuild on save",
+      "type": "process",
+      "command": "python3",
+      "args": ["tools/observatory/observatory.py", "--watch"],
+      "windows": {
+        "command": "py",
+        "args": ["-3", "tools/observatory/observatory.py", "--watch"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "dedicated", "showReuseMessage": false },
+      "runOptions": { "runOn": "folderOpen" }
+    }
+  ]
+}

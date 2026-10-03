@@ -9,17 +9,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import posixpath
 import re
 import subprocess
 import sys
+import tempfile
+import time
 import webbrowser
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
-HERE = Path(__file__).resolve().parent
+SCRIPT = Path(__file__).resolve()
+HERE = SCRIPT.parent
 REPO = HERE.parent.parent
 TEMPLATE = HERE / "page.html"
 OUTPUT = HERE / "observatory.html"
@@ -314,8 +319,12 @@ def folder_parent(item: Item, items: dict[str, Item]) -> str | None:
     return None
 
 
+def work_item_paths(repo: Path) -> set[Path]:
+    return {p for pattern in PATTERNS for p in repo.glob(pattern)}
+
+
 def read_items(repo: Path) -> dict[str, Item]:
-    found = {p.relative_to(repo).as_posix() for pattern in PATTERNS for p in repo.glob(pattern)}
+    found = {p.relative_to(repo).as_posix() for p in work_item_paths(repo)}
     items = {}
     for rel in sorted(found):
         kind = node_type(rel, repo)
@@ -445,15 +454,67 @@ def render(template: str, data: dict) -> str:
     return template.replace(DATA_MARK, payload, 1)
 
 
+def write_page(path: Path, text: str) -> None:
+    # Replaced in one step, so a reload never sees half a page.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def snapshot(repo: Path, extra: Iterable[Path]) -> dict[str, int]:
+    found = work_item_paths(repo) | set(extra)
+    out = {}
+    for p in found:
+        try:
+            out[p.as_posix()] = p.stat().st_mtime_ns
+        except OSError:
+            pass
+    return out
+
+
+def watch(look: Callable[[], dict], rebuild: Callable[[], None], wait: Callable[[], None], rounds: int | None = None) -> None:
+    last, dirty, looked = look(), False, 0
+    while rounds is None or looked < rounds:
+        looked += 1
+        wait()
+        now = look()
+        if now != last:
+            last, dirty = now, True
+        elif dirty:
+            dirty = False
+            rebuild()
+
+
+def rebuild_once() -> None:
+    # A fresh interpreter builds with the current code, and its crash cannot stop the watcher.
+    result = subprocess.run([sys.executable, str(SCRIPT), "--no-open"], cwd=REPO)
+    if result.returncode:
+        print(f"{datetime.now():%H:%M:%S} Rebuild failed; the page keeps its last good build.", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the observatory page from this repo's work items and open it.")
     parser.add_argument("--no-open", action="store_true", help="write the page without opening it")
+    parser.add_argument("--watch", action="store_true", help="rebuild the page whenever a work item or this tool changes, until stopped")
     args = parser.parse_args(argv)
+    if args.watch:
+        print("Watching the work items. Reload the page to see a rebuild; Ctrl+C stops.")
+        try:
+            rebuild_once()
+            watch(lambda: snapshot(REPO, (SCRIPT, TEMPLATE)), rebuild_once, lambda: time.sleep(0.5))
+        except KeyboardInterrupt:
+            pass
+        return 0
     existing = paths_at_cutoff(REPO)
     if existing is None:
         print(f"git could not list the files at {CUTOFF}, so every item gets a star.", file=sys.stderr)
     data = build(REPO, existing)
-    OUTPUT.write_text(render(TEMPLATE.read_text(encoding="utf-8"), data), encoding="utf-8")
+    write_page(OUTPUT, render(TEMPLATE.read_text(encoding="utf-8"), data))
     warnings = [(i["path"], w) for i in data["items"] for w in i["warnings"]]
     print(f"Observatory: {len(data['items'])} items, {len(warnings)} warnings.")
     for path, warning in warnings:

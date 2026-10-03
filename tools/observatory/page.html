@@ -170,7 +170,8 @@ const STATUS = {
   "wontfix":         { label: "Won't fix",       glyph: "✕" },
 };
 const RECORD = { label: "Decision record", glyph: "§" };
-const TYPES = { review: "Review item", plan: "Plan", spec: "Spec", map: "Wayfinder map", ticket: "Wayfinder ticket", issue: "Issue", adr: "Decision record" };
+const OUT_OF_SCOPE = { label: "Out-of-scope idea", glyph: "✧" };
+const TYPES = { review: "Review item", plan: "Plan", spec: "Spec", map: "Wayfinder map", ticket: "Wayfinder ticket", issue: "Issue", adr: "Decision record", "out-of-scope": "Out-of-scope idea" };
 // Each status is a kind of star: core and glow paint it, label tints its name, chip tints the panel.
 const SKY = {
   "needs-triage":    { core: "#f8fafc", glow: "#cbd5e1", label: "#e2e8f0", chip: "#e2e8f0" },
@@ -181,9 +182,10 @@ const SKY = {
   "done":            { core: "#bbf7d0", glow: "#16a34a", label: "#9cc7ad", chip: "#4ade80" },
   "wontfix":         { core: "#a1a1aa", glow: "#3f3f46", label: "#8b8b94", chip: "#a1a1aa" },
   record:            { core: "#fef3c7", glow: "#d6b370", label: "#e9dbb0", chip: "#e7c27d" },
+  "out-of-scope":    { core: "#f9a8d4", glow: "#db2777", label: "#f9a8d4", chip: "#f472b6" },
 };
 // How far each kind of star's light reaches, in core radii.
-const GLOW = { "needs-triage": 4.5, "needs-info": 6.5, "ready-for-agent": 7.5, "ready-for-human": 7.5, "in-progress": 6.5, done: 4, wontfix: 0, record: 3.5 };
+const GLOW = { "needs-triage": 4.5, "needs-info": 6.5, "ready-for-agent": 7.5, "ready-for-human": 7.5, "in-progress": 6.5, done: 4, wontfix: 0, record: 3.5, "out-of-scope": 3.5 };
 const NEBULA = ["#6366f1", "#14b8a6", "#a855f7", "#3b82f6", "#ec4899", "#0ea5e9", "#f59e0b", "#22c55e"];
 
 // ---------- the items ----------
@@ -195,17 +197,19 @@ let redraw = null, POS = null, GRAPH_T = null;
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const isRecord = i => i.type === "adr";
-const isFinished = i => !isRecord(i) && (i.status === "done" || i.status === "wontfix");
+const isOutOfScope = i => i.type === "out-of-scope";
+const isReference = i => isRecord(i) || isOutOfScope(i);
+const isFinished = i => !isReference(i) && (i.status === "done" || i.status === "wontfix");
 const madeFrom = i => VIEW.filter(k => k.from.includes(i.id));
-const look = i => (isRecord(i) ? RECORD : STATUS[i.status]);
-const skyKey = i => (isRecord(i) ? "record" : i.status);
+const look = i => (isRecord(i) ? RECORD : isOutOfScope(i) ? OUT_OF_SCOPE : STATUS[i.status]);
+const skyKey = i => (isRecord(i) ? "record" : isOutOfScope(i) ? "out-of-scope" : i.status);
 const tint = i => SKY[skyKey(i)].chip;
 const hash = s => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const MOTION = !matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function cueOf(i) {
-  if (isRecord(i)) return null;
-  const ks = madeFrom(i).filter(k => !isRecord(k));
+  if (isReference(i)) return null;
+  const ks = madeFrom(i).filter(k => !isReference(k));
   if (!ks.length) return null;
   const fin = ks.filter(isFinished).length;
   return { fin, total: ks.length, all: fin === ks.length };
@@ -220,7 +224,7 @@ function links() {
   const out = [];
   for (const i of VIEW) {
     for (const f of i.from) out.push({ kind: "from", source: f, target: i.id });
-    for (const b of i.blockedBy) out.push({ kind: "blocked", source: b, target: i.id, active: !isFinished(BY[b]) && !isRecord(BY[b]) });
+    for (const b of i.blockedBy) out.push({ kind: "blocked", source: b, target: i.id, active: !isFinished(BY[b]) && !isReference(BY[b]) });
     if (i.mergedInto) out.push({ kind: "merged", source: i.id, target: i.mergedInto });
   }
   return out;
@@ -392,7 +396,7 @@ function starSVG(i) {
   if (key === "in-progress") h += `<g class="orbit"><circle class="ring" r="${R + 7}"/><circle class="moon" cx="${R + 7}" r="1.5"/></g><g class="orbit o2"><circle class="ring" r="${R + 13}"/></g>`;
   if (i.waitsFor.length) h += `<circle class="cage" r="${R + 6}"/>`;
   if (cue && cue.all && !fin) h += `<circle class="cue-ring" r="${R + 10}"/><text class="cue-tick" x="${(R + 10) * 0.75}" y="${3 - (R + 10) * 0.75}">✓</text>`;
-  h += isRecord(i) ? `<path class="core" d="${sparkle(R * 2)}" fill="url(#core-record)"/>` : `<circle class="core" r="${R * 1.35}" fill="url(#core-${key})"/>`;
+  h += isReference(i) ? `<path class="core" d="${sparkle(R * 2)}" fill="url(#core-${key})"/>` : `<circle class="core" r="${R * 1.35}" fill="url(#core-${key})"/>`;
   if (key === "wontfix") h += `<circle class="husk" r="${R * 2}"/>`;
   return h + `<circle class="sel" r="${R + 16}"/><circle class="hit" r="${Math.max(13, R + 7)}"/></g></g>`;
 }
@@ -433,11 +437,11 @@ function nebulaSVG(t, k) {
 
 function miniStar(k) {
   const s = SKY[k];
-  return k === "record" ? `<span class="mini-star rec" style="--c:${s.core}">✦</span>` : `<span class="mini-star" style="--c:${s.core};--g:${s.glow}"></span>`;
+  return k === "record" || k === "out-of-scope" ? `<span class="mini-star rec" style="--c:${s.core}">✦</span>` : `<span class="mini-star" style="--c:${s.core};--g:${s.glow}"></span>`;
 }
 
 function hudHTML() {
-  const work = VIEW.filter(i => !isRecord(i)), fin = work.filter(isFinished).length;
+  const work = VIEW.filter(i => !isReference(i)), fin = work.filter(isFinished).length;
   const counts = Object.keys(STATUS).map(k => [k, work.filter(i => i.status === k).length]).filter(([, n]) => n);
   const warned = VIEW.filter(i => i.warnings.length).length;
   return `<span><b>${work.length - fin}</b> open, <b>${fin}</b> finished</span>`
@@ -450,7 +454,8 @@ function hudHTML() {
 
 function skyLegend() {
   const st = Object.keys(STATUS).map(k => `<span class="lg-star">${miniStar(k)}${esc(STATUS[k].label)}</span>`).join("")
-    + `<span class="lg-star">${miniStar("record")}Decision record</span>`;
+    + `<span class="lg-star">${miniStar("record")}Decision record</span>`
+    + `<span class="lg-star">${miniStar("out-of-scope")}${OUT_OF_SCOPE.label}</span>`;
   const ln = (cls, label) => `<span class="lk"><svg width="34" height="10"><g class="edge ${cls}"><path class="line" d="M1,5 H33"/></g></svg>${label}</span>`;
   const ring = (cls, label) => `<span class="lk"><svg width="18" height="18" viewBox="-9 -9 18 18"><circle class="${cls}" r="6"/></svg>${label}</span>`;
   return `<span class="lg-group">${st}</span>`
@@ -526,11 +531,11 @@ function highlight(svg, id) {
 
 function statusChip(i) {
   const s = look(i);
-  return `<span class="chip" style="--st:${tint(i)}"><span class="g">${s.glyph}</span>${esc(isRecord(i) ? "Decision record, no status" : s.label)}</span>`;
+  return `<span class="chip" style="--st:${tint(i)}"><span class="g">${s.glyph}</span>${esc(isReference(i) ? `${s.label}, no status` : s.label)}</span>`;
 }
 
 function dot(i) {
-  const cls = isRecord(i) ? "rec" : isFinished(i) ? "fin" : "";
+  const cls = isRecord(i) || isOutOfScope(i) ? "rec" : isFinished(i) ? "fin" : "";
   return `<span class="dot ${cls}" style="--st:${tint(i)}" title="${esc(look(i).label)}"></span>`;
 }
 
@@ -554,12 +559,12 @@ function renderPanel() {
   const P = document.getElementById("panel");
   const i = state.item ? BY[state.item] : null;
   if (!i) {
-    const open = VIEW.filter(x => !isRecord(x) && !isFinished(x)).length;
+    const open = VIEW.filter(x => !isReference(x) && !isFinished(x)).length;
     P.innerHTML = `<div class="p-empty"><p>Click a star to see its description, its status and its next steps.</p>`
       + `<p class="small">${VIEW.length} items in ${THREADS.length} groups. ${open} open, ${VIEW.filter(isRecord).length} decision records.</p></div>`;
     return;
   }
-  const rec = isRecord(i), fin = isFinished(i), cue = cueOf(i), kids = madeFrom(i);
+  const rec = isRecord(i), outOfScope = isOutOfScope(i), fin = isFinished(i), cue = cueOf(i), kids = madeFrom(i);
   let h = `<div class="p-head"><span class="p-type">${TYPES[i.type]}${i.num ? " " + esc(i.num) : ""}</span><button class="p-close" title="Close, or Esc">×</button></div>`
     + `<h2 class="p-title">${esc(i.title)}</h2>`
     + `<div class="p-path"><code>${esc(i.path)}</code></div>`
@@ -572,6 +577,7 @@ function renderPanel() {
 
   h += `<h3>Next steps</h3>`;
   if (rec) h += `<p class="muted small">A decision record records a decision, not work to do, so it has no next steps.</p>`;
+  else if (outOfScope) h += `<p class="muted small">This idea was turned down before, so it has no next steps.</p>`;
   else if (fin) h += `<p class="muted small">Finished, so there are no next steps and nothing to copy.</p>`;
   else if (!i.next.length) h += `<p class="none">No next steps written.</p><p class="muted small">Add a <code>## Next steps</code> list to its file, then rebuild.</p>`;
   else h += `<ol class="steps">${i.next.map((s, k) => stepHTML(i, s, k)).join("")}</ol><p class="copy-out" aria-live="polite"></p>`;

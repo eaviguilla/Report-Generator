@@ -51,6 +51,11 @@ Three header lines link one item to another. They sit beside `Status:`. In a pla
 
 `tools/observatory/observatory.py` draws the work items as a star map from these statuses, links and next steps.
 
+When `/triage` finds that a request matches a file in `.out-of-scope/` and decides to let it go ahead:
+
+- If the request is for a different idea, add a `From:` line linking to the out-of-scope file and leave that file in place.
+- If you changed your mind about the same idea, copy the file's reasons and Prior requests list into a comment in the request's file, then delete the out-of-scope file. Do not add a `From:` line.
+
 ## When a skill says "publish to the issue tracker"
 
 Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).

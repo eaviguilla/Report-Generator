@@ -41,7 +41,7 @@ OLD_WORDS = {
     "resolved": "done",
 }
 AGENT_TICKET_TYPES = ("research",)
-PATTERNS = (".scratch/*/map.md", ".scratch/*/spec.md", ".scratch/*/issues/*.md", "docs/plans/*.md", "docs/adr/*.md")
+PATTERNS = (".scratch/*/map.md", ".scratch/*/spec.md", ".scratch/*/issues/*.md", "docs/plans/*.md", "docs/adr/*.md", ".out-of-scope/*.md")
 DESCRIPTION_SECTIONS = {
     "ticket": ("question",),
     "map": ("destination",),
@@ -78,6 +78,8 @@ class Item:
 
 def node_type(rel: str, repo: Path) -> str | None:
     parts = rel.split("/")
+    if len(parts) == 2 and parts[0] == ".out-of-scope" and parts[1].endswith(".md"):
+        return "out-of-scope"
     if parts[:2] == ["docs", "plans"] and len(parts) == 3:
         return "plan"
     if parts[:2] == ["docs", "adr"] and len(parts) == 3 and re.match(r"\d{4}-", parts[2]):
@@ -163,6 +165,8 @@ def short_label(kind: str, num: str | None, title: str) -> str:
         return f"Review {int(num)} · {text}"
     if kind == "adr":
         return f"ADR {num} · {text}"
+    if kind == "out-of-scope":
+        return f"Out-of-scope idea · {text}"
     return f"{TYPE_WORDS[kind]} · {text}"
 
 
@@ -291,7 +295,7 @@ def blocked_paths(value: str, item: Item, siblings: dict[str, str]) -> list[str]
 def checked(targets: list[str], key: str, item: Item, items: dict[str, Item], repo: Path) -> list[str]:
     good = []
     for target in targets:
-        if target in items and target != item.path:
+        if target in items and target != item.path and (key == "From" or items[target].kind != "out-of-scope"):
             good.append(target)
         elif (repo / target).exists():
             item.warnings.append(f"{key}: names {target}, which is not a work item or decision record.")
@@ -343,7 +347,7 @@ def link_items(items: dict[str, Item], repo: Path) -> None:
             item.blocked_by = checked(blocked_paths(blocked, item, siblings), "Blocked by", item, items, repo)
         merged = checked(link_paths(header_value(item.lines, "merged into") or "", item.path), "Merged into", item, items, repo)
         item.merged_into = merged[0] if merged else None
-        if item.kind != "adr":
+        if item.kind not in ("adr", "out-of-scope"):
             raw = header_value(item.lines, "status")
             word = status_word(raw) if raw else None
             item.status, warning = official_status(word, (header_value(item.lines, "type") or "").lower(), bool(item.merged_into))
@@ -361,13 +365,17 @@ def ref(item: Item) -> str:
 
 
 def is_open(item: Item) -> bool:
-    return item.kind != "adr" and item.status not in FINISHED
+    return item.kind not in ("adr", "out-of-scope") and item.status not in FINISHED
 
 
 def context(item: Item, items: dict[str, Item], shown: set[str]) -> list[dict]:
     out = []
     for target, via in item.came_from.items():
-        out.append((target, f"It came from this, by {'its folder' if via == 'folder' else 'a From: line'}."))
+        if items[target].kind == "out-of-scope":
+            why = "This idea was turned down before."
+        else:
+            why = f"It came from this, by {'its folder' if via == 'folder' else 'a From: line'}."
+        out.append((target, why))
     for target in item.blocked_by:
         out.append((target, f"Blocked by this, which is {'still open' if is_open(items[target]) else 'finished'}."))
     for other in items.values():
@@ -379,7 +387,8 @@ def context(item: Item, items: dict[str, Item], shown: set[str]) -> list[dict]:
             continue
         seen.add(target)
         if target not in shown:
-            why += f" It is older than {CUTOFF}, so it has no star."
+            if items[target].kind != "out-of-scope":
+                why += f" It is older than {CUTOFF}, so it has no star."
         rows.append({"path": target, "title": items[target].title, "why": why, "shown": target in shown})
     return rows
 
@@ -388,6 +397,14 @@ def build(repo: Path, existing: set[str] | None) -> dict:
     items = read_items(repo)
     link_items(items, repo)
     shown = {rel for rel in items if existing is None or rel not in existing}
+    linked_out_of_scope = {
+        target
+        for item in items.values()
+        if is_open(item)
+        for target in item.came_from
+        if items[target].kind == "out-of-scope"
+    }
+    shown = {rel for rel in shown if items[rel].kind != "out-of-scope" or rel in linked_out_of_scope}
     out = []
     for rel in sorted(shown):
         item = items[rel]

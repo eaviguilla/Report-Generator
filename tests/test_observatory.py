@@ -71,6 +71,49 @@ class ObservatoryTests(unittest.TestCase):
                 self.assertEqual(items[rel]["from"], ["docs/plans/feature.md"])
                 self.assertEqual(items[rel]["context"][0]["why"], "It came from this, by a From: line.")
 
+    def test_an_out_of_scope_file_shows_only_while_an_open_item_came_from_it(self) -> None:
+        self.write(".out-of-scope/idea.md", "# Turned-down idea\n\nThe reasons it was rejected.\n")
+        path = ".out-of-scope/idea.md"
+        self.write(".scratch/feature/issues/01-request.md", "# Request\n\nStatus: ready-for-agent\n")
+        self.assertNotIn(path, self.items())
+        self.write(
+            ".scratch/feature/issues/01-request.md",
+            "# Request\n\nStatus: ready-for-agent\n\nFrom: [Earlier idea](../../../.out-of-scope/idea.md)\n",
+        )
+        self.assertIn(path, self.items())
+
+        for status in ("done", "wontfix"):
+            with self.subTest(status=status):
+                self.write(
+                    ".scratch/feature/issues/01-request.md",
+                    f"# Request\n\nStatus: {status}\n\nFrom: [Earlier idea](../../../.out-of-scope/idea.md)\n",
+                )
+                items = self.items()
+                self.assertNotIn(path, items)
+                self.assertFalse(items[".scratch/feature/issues/01-request.md"]["context"][0]["shown"])
+                self.assertEqual(items[".scratch/feature/issues/01-request.md"]["context"][0]["why"], "This idea was turned down before.")
+
+    def test_an_out_of_scope_file_cannot_be_a_blocker(self) -> None:
+        self.write(".out-of-scope/idea.md", "# Turned-down idea\n")
+        self.write(
+            ".scratch/feature/issues/01-request.md",
+            "# Request\n\nStatus: ready-for-agent\n\nBlocked by: [Earlier idea](../../../.out-of-scope/idea.md)\n",
+        )
+        item = self.items()[".scratch/feature/issues/01-request.md"]
+        self.assertEqual(item["blockedBy"], [])
+        self.assertEqual(item["warnings"], ["Blocked by: names .out-of-scope/idea.md, which is not a work item or decision record."])
+
+    def test_an_out_of_scope_from_link_is_context_without_a_warning(self) -> None:
+        self.write(".out-of-scope/idea.md", "# Turned-down idea\n\nThe reasons it was rejected.\n")
+        self.write(
+            ".scratch/feature/issues/01-request.md",
+            "# Request\n\nStatus: ready-for-agent\n\nFrom: [Earlier idea](../../../.out-of-scope/idea.md)\n",
+        )
+        item = self.items()[".scratch/feature/issues/01-request.md"]
+        self.assertEqual(item["warnings"], [])
+        self.assertEqual([entry["path"] for entry in item["context"]], [".out-of-scope/idea.md"])
+        self.assertEqual(item["context"][0]["why"], "This idea was turned down before.")
+
     def test_blocked_by_takes_ticket_numbers_from_the_same_folder(self) -> None:
         self.write(".scratch/effort/map.md", "# Effort\n\nStatus: in-progress\n")
         self.write(".scratch/effort/issues/01-first.md", "# First\n\nType: grilling\nStatus: resolved\n")

@@ -1,8 +1,7 @@
 # No-findings report: generate a report that has no findings
 
-> **Status:** in-progress · 2026-10-02 · built and tested on macOS, not yet committed. The Word
-> output still needs a check on Windows, where Word repaginates and numbers the TESTING RESULT
-> heading.
+> **Status:** done · 2026-10-03 · `f6c215d`. Built and tested on macOS, and the Word output checked on
+> Windows, where Word repaginates and numbers the TESTING RESULT heading correctly.
 >
 > **What deviated.**
 > - The confirmation is a query parameter, `?confirm_no_findings=true`, on both generate routes,
@@ -83,7 +82,3 @@ are.
 - [x] 6. Tests: Word output, import, routes, a case in each of the two gate contract tests, and the
   dialog.
 - [x] 7. Docs: ADR-0002, GLOSSARY.md, DOCX_TEMPLATE.md, ROUTES.md, DATA_MAP.md.
-
-## Next steps
-
-1. `/implement`: Check the Word output on Windows, then set the status to done.

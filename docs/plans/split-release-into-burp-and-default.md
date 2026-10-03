@@ -1,6 +1,6 @@
 # Split the release into a Burp build and a default build
 
-> **Status:** in-progress
+> **Status:** done · 2026-10-02 · `c48b716`
 
 ## Request
 "I want to have 2 package release scripts so that I can release a burp extension or the default
@@ -89,7 +89,3 @@ in the same zip as `app/init.py`.
   current layout for a default build.
 - Nothing from the agreed design itself changed: `app/init.py` ended up with zero edits, exactly as
   planned, and the two packaging scripts and both READMEs match the table above.
-
-## Next steps
-
-1. `/implement`: The code shipped in c48b716, but the status line still says in progress. Finish any open step in its Agreed plan, then set the status to done.

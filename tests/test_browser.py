@@ -23,7 +23,7 @@ from playwright.sync_api import Error as PlaywrightError
 from app import acceptance, main
 from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import finding_input_issues, setup_input_issues, setup_issues, status_conclusion_runs
+from app.report_service import finding_input_issues, setup_input_issues, setup_issues, setup_refusal_message, scope_text_refusals, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from tests.support import png_bytes, use_temp_workspace
 from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
@@ -1205,6 +1205,63 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator("#save-button").click()
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
         self.assertEqual(page.locator("#app-diagnostics").count(), 0)
+
+    def test_duplicate_component_message_marks_only_the_later_row(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["mobile"]
+        report.scope_targets = []
+        main.workspace.save(report)
+        report_data = report.model_dump(mode="json", by_alias=True)
+        report_data["scope_text"] = {
+            "production": {"mobile": {"component": "Wallet app\nWallet app", "description": "Android\niOS"}}
+        }
+        [duplicate_result] = [result for result in scope_text_refusals(report_data) if result["code"] == "duplicate_component"]
+        expected_message = setup_refusal_message(duplicate_result, report_data).removeprefix("In the Production Mobile scope, ")
+
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 10000")
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        production = page.locator("#scope-grid .scope-panel.production")
+        first = production.get_by_role("textbox", name="Mobile Component", exact=True).first
+        first.fill("Wallet app")
+        production.get_by_role("textbox", name="Mobile Description", exact=True).first.fill("Android")
+        production.get_by_role("button", name="Add component").click()
+        duplicate = production.get_by_role("textbox", name="Mobile Component", exact=True).nth(1)
+        description = production.get_by_role("textbox", name="Mobile Description", exact=True).nth(1)
+        self.assertTrue(duplicate.evaluate("input => input.validity.valid"))
+        self.assertIsNone(duplicate.get_attribute("aria-describedby"))
+        duplicate.press_sequentially("  Wallet app  ")
+
+        self.assertTrue(first.evaluate("input => input.validity.valid"))
+        self.assertFalse(duplicate.evaluate("input => input.validity.valid"))
+        described_by = duplicate.get_attribute("aria-describedby")
+        self.assertIsNone(described_by)
+        duplicate.evaluate("input => input.blur()")
+        description.fill("iOS")
+
+        described_by = duplicate.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(description.get_attribute("aria-describedby"), described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(expected_message)
+        self.assertEqual(message.evaluate("element => element.closest('td').colSpan"), 3)
+        self.assertEqual(
+            message.evaluate("element => element.closest('tr').previousElementSibling.querySelector('[data-scope-field=component]').value"),
+            "  Wallet app  ",
+        )
+        self.assertEqual(first.get_attribute("aria-invalid"), None)
+        self.assertEqual(duplicate.get_attribute("aria-invalid"), "true")
+        self.assertEqual(description.get_attribute("aria-invalid"), "true")
+
+        duplicate.fill("Wallet app copy")
+        expect(message).to_be_hidden()
+        self.assertTrue(first.evaluate("input => input.validity.valid"))
+        self.assertTrue(duplicate.evaluate("input => input.validity.valid"))
+        self.assertIsNone(duplicate.get_attribute("aria-describedby"))
+        self.assertIsNone(description.get_attribute("aria-describedby"))
+        self.assertIsNone(duplicate.get_attribute("aria-invalid"))
+        self.assertIsNone(description.get_attribute("aria-invalid"))
 
     def _two_thick_client_components(self) -> str:
         """A thick-client report with two components, both referenced by its one finding."""

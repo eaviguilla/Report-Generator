@@ -1465,6 +1465,7 @@
     const setupMessageControllers = new Map();
     const dateMessageControllers = new Map();
     const accountMessageControllers = new Map();
+    const componentMessageControllers = new Map();
     const attachSetupMessage = (controls, placeMessage) => {
       const messageElement = document.createElement("span");
       messageElement.id = id("setup-field-message");
@@ -1552,6 +1553,15 @@
             && (result.code === "incomplete_test_account" || result.code === "repeated_test_account"))
           .map(result => window.vrRules.formatRuleMessage(result, report, vocabulary));
         controller.set("issue", messages.join(" "));
+      });
+      componentMessageControllers.forEach(({controller, environment, channel, index, input}) => {
+        const component = window.vrRules.strip(input.value);
+        const componentLines = componentText(scopeTextField(environment, channel, "component")).split(/\r?\n/);
+        const firstIndex = componentLines.findIndex(value => window.vrRules.strip(value) === component);
+        const issue = results.find(result => result.code === "missing_component_description"
+          && result.environment === environment && result.app_type === channel
+          && result.component === component && firstIndex === index);
+        controller.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
       });
     };
     const wireSetupRule = (input, rule, label = rule.label, messageKind = "refusal") => {
@@ -2154,20 +2164,27 @@
         const body = table.querySelector("tbody");
         const fields = ["component", "description"];
         const commit = () => {
-          const rows = [...body.querySelectorAll("tr")];
+          const rows = [...body.querySelectorAll(".scope-component-row")];
           fields.forEach(field => setScopeTextField(environment, channel, field,
             rows.map(row => row.querySelector(`[data-scope-field="${field}"]`).value).join("\n")));
         };
         const renderRows = () => {
           const stored = fields.map(field => scopeTextField(environment, channel, field).split(/\r?\n/));
+          componentMessageControllers.forEach((binding, key) => {
+            if (binding.environment === environment && binding.channel === channel) componentMessageControllers.delete(key);
+          });
           body.innerHTML = "";
           for (let index = 0; index < Math.max(stored[0].length, stored[1].length, 1); index += 1) {
             const row = document.createElement("tr");
+            row.className = "scope-component-row";
+            const rowInputs = [];
+            const rowRules = [];
             fields.forEach((field, column) => {
               const cell = document.createElement("td");
               const input = document.createElement("input");
               input.dataset.scopeField = field;
               input.value = stored[column][index] || "";
+              rowInputs.push(input);
               // Named by app type rather than by row, so the name stays the box's purpose and the
               // column header supplies the rest.
               input.setAttribute("aria-label", `${channelLabels[channel]} ${field === "description" ? "Description" : "Component"}`);
@@ -2210,14 +2227,24 @@
               const ownRefusals = () => refusals().filter(result => result.box === field && result.line === index);
               const invalidCharacters = () => ownRefusals().find(result => result.code === "invalid_characters")?.characters || [];
               const overLimit = () => ownRefusals().find(result => result.code === "too_long");
-              const repeated = () => field === "component" && refusals()
-                .some(result => result.code === "duplicate_component" && result.component === window.vrRules.strip(input.value));
+              const repeated = () => {
+                const component = window.vrRules.strip(input.value);
+                return field === "component" && refusals()
+                  .some(result => result.code === "duplicate_component" && result.component === component)
+                  && scopeTextField(environment, channel, "component").split(/\r?\n/).slice(0, index)
+                    .some(value => window.vrRules.strip(value) === component);
+              };
               const rule = {
                 invalidCharacters,
                 valid:() => !invalidCharacters().length && !overLimit() && !repeated(),
                 result:() => ownRefusals()[0] || refusals().find(result => result.code === "duplicate_component" && result.component === window.vrRules.strip(input.value)),
               };
-              wireSetupRule(input, rule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
+              rowRules.push({
+                input,
+                rule,
+                label:`${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`,
+                messageKind:`refusal:${field}`,
+              });
               cell.append(input);
               row.append(cell);
             });
@@ -2248,7 +2275,16 @@
             };
             actions.append(remove);
             row.append(actions);
-            body.append(row);
+            const messageRow = document.createElement("tr");
+            messageRow.className = "setup-message-row";
+            messageRow.hidden = true;
+            const messageCell = document.createElement("td");
+            messageCell.colSpan = 3;
+            messageRow.append(messageCell);
+            const controller = attachSetupMessage(rowInputs, message => messageCell.append(message));
+            componentMessageControllers.set(`${environment}:${channel}:${index}`, {controller, environment, channel, index, input:rowInputs[0]});
+            body.append(row, messageRow);
+            rowRules.forEach(({input, rule, label, messageKind}) => wireSetupRule(input, rule, label, messageKind));
           }
         };
         const add = document.createElement("button");
@@ -2258,7 +2294,8 @@
         add.onclick = () => {
           fields.forEach(field => setScopeTextField(environment, channel, field, `${scopeTextField(environment, channel, field)}\n`));
           renderRows();
-          body.lastElementChild?.querySelector("input")?.focus();
+          const rows = body.querySelectorAll(".scope-component-row");
+          rows[rows.length - 1]?.querySelector("input")?.focus();
           scheduleSave();
         };
         renderRows();

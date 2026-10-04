@@ -654,6 +654,30 @@ class BrowserWorkflowTests(unittest.TestCase):
         tester.evaluate("element => element.blur()")
         expect(note).to_be_hidden()
 
+    def test_setup_character_limit_cuts_a_paste_and_announces_the_cut(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        maximum = vocabulary["character_rules"]["tester"]["max_length"]
+        tester = page.get_by_label("Tester", exact=True)
+        tester.fill("T" * (maximum - 2))
+
+        tester.evaluate("""(element, pasted) => {
+            const clipboard = new DataTransfer();
+            clipboard.setData("text/plain", pasted);
+            element.focus();
+            element.setSelectionRange(element.value.length, element.value.length);
+            element.dispatchEvent(new ClipboardEvent("paste", {bubbles:true, cancelable:true, clipboardData:clipboard}));
+            document.execCommand("insertText", false, pasted);
+        }""", "XYZ")
+
+        self.assertEqual(tester.input_value(), "T" * (maximum - 2) + "XY")
+        described_by = tester.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        note = page.locator(f"#{described_by}")
+        expect(note).to_have_text(f"Tester holds up to {maximum} characters, so the paste was cut to fit.")
+        self.assertIsNone(tester.get_attribute("aria-invalid"))
+
     def test_held_autosave_shows_every_refusal_on_setup(self) -> None:
         report_id = self.ready_report()
         page = self.page

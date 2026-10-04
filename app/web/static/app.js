@@ -1507,11 +1507,13 @@
           messageElement.hidden = !visibleMessages.length;
           const messageRow = messageElement.closest("tr");
           if (messageRow) messageRow.hidden = !visibleMessages.length;
+          const hasValidationMessage = [...messages.entries()].some(([kind, value]) => kind !== "character-limit" && (Array.isArray(value) ? value.some(Boolean) : Boolean(value)));
           controls.forEach(control => {
             const describedBy = new Set((control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
             if (visibleMessages.length) {
               describedBy.add(messageElement.id);
-              control.setAttribute("aria-invalid", "true");
+              if (hasValidationMessage) control.setAttribute("aria-invalid", "true");
+              else if (control.validity.valid) control.removeAttribute("aria-invalid");
             } else {
               describedBy.delete(messageElement.id);
               if (control.validity.valid) control.removeAttribute("aria-invalid");

@@ -1,6 +1,6 @@
 # One set of Setup cases for the Python and JavaScript rules
 
-Status: ready-for-agent
+Status: done (2026-10-04)
 
 From: [review item 03, twin rules become one interface with two adapters](../architecture-review/issues/03-twin-rules-become-one-interface-with-two-adapters.md). Its `## Answers` section holds the decisions this spec writes down.
 
@@ -121,6 +121,6 @@ The implementer picks the exact code strings, in snake case. The invalid-charact
 - The section summary's count of scope lines is a display, not a rule. It can read the rules file's view of the targets, but it is not a case.
 - The case runner should not know about Setup in particular, so the next slice adds a table and a function name, not a new runner.
 
-## Next steps
+## What deviated
 
-1. `/to-tickets`: The work spans the Python service, `app.js`, three templates, a new test module and the docs, which is more than one session's build.
+Built as four tickets under `issues/`, each with its own "What deviated" section. Across them: results carry a `line` index for scope boxes and an `account` number for test accounts; `rules.js` trims with `vrRules.strip`, a twin of Python's `str.strip`; and the Setup username field now shows the save's message for a letter outside ASCII.

@@ -1984,6 +1984,34 @@ class ReportApiTests(unittest.TestCase):
         )
         self.assertEqual(report_service.setup_issues(report), [])
 
+    def test_setup_input_issues_word_every_field_refusal_in_field_order(self) -> None:
+        engagement = models.Engagement(
+            app_name="Bad/App", ci_number="CI_1", bsn_number="BSN.1", app_owner="Owner 2", tester="QA_Tester",
+            tested_environments=["production", "non_production"], non_production_label="UAT!",
+            test_accounts=[models.TestAccount(user_role="Admin_2", username="bad/user"), models.TestAccount(user_role="N/A", username="user.")],
+            limitations="No testing @ prod",
+        )
+        # The model refuses reversed dates on its own, so they are set past validation.
+        engagement.test_windows = {
+            "production": TestWindow.model_construct(start_date=date(2026, 1, 3), end_date=date(2026, 1, 2), test_time="08:00_17:00"),
+            "non_production": TestWindow(test_time="Any\u00e9time\u0085"),
+        }
+        self.assertEqual(report_service.setup_input_issues(engagement), [
+            'Application name contains invalid character: "/" (slash)',
+            'CI number contains invalid character: "_" (underscore)',
+            'BSN number contains invalid character: "." (period)',
+            'Application owner contains invalid character: "2" (digit two)',
+            'Tester contains invalid character: "_" (underscore)',
+            "Production start date cannot be after its end date",
+            'Production time contains invalid character: "_" (underscore)',
+            'Non-Production time contains invalid character: "\u0085" (unicode u+0085)',
+            'User role 1 contains invalid character: "_" (underscore)',
+            'Username 1 contains invalid character: "/" (slash)',
+            "Username 2 must start and end with a letter or number",
+            'Limitations contains invalid character: "@" (at sign)',
+            'Non-Production name contains invalid character: "!" (exclamation mark)',
+        ])
+
     def _generatable_report(self) -> str:
         report_id = self.new_report()
         incomplete = self.client.get(f"/reports/{report_id}/generate")

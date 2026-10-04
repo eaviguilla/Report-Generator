@@ -85,10 +85,76 @@ def thick_client(component: str, description: str, **engagement) -> dict:
     return scoped({("production", "thick_client"): components(component, description)}, **engagement)
 
 
+def bad_field(field: str, *characters: str, **context) -> dict:
+    return refusal("invalid_characters", field=field, **context, characters=list(characters))
+
+
+def timed(environment: str, test_time: str) -> dict:
+    return undated(environment, test_time=test_time)
+
+
+def accounts(*pairs: tuple[str, str]) -> list[dict]:
+    return [{"user_role": role, "username": username} for role, username in pairs]
+
+
+FIELD_CASES = [
+    ("an application name character", setup_report(app_name="Bad/App"), [bad_field("app_name", "/")]),
+    ("a letter outside ASCII in the application name", setup_report(app_name="Café Portal-2: (Web)"), []),
+    ("a CI number character", setup_report(ci_number="CI_123"), [bad_field("ci_number", "_")]),
+    ("a space in the BSN number", setup_report(bsn_number="BSN 1.2"), [bad_field("bsn_number", " ", ".")]),
+    ("a digit in the application owner", setup_report(app_owner="Owner 2"), [bad_field("app_owner", "2")]),
+    ("a tester character", setup_report(tester="QA_Tester"), [bad_field("tester", "_")]),
+    ("a limitations character", setup_report(limitations="No testing @ production\nRead only"), [bad_field("limitations", "@")]),
+    ("a test time character", setup_report(test_windows=timed("non_production", "08:00_17:00")), [bad_field("test_time", "_", environment="non_production")]),
+    ("an untested environment's time is not checked", setup_report(tested_environments=["production"], test_windows=timed("non_production", "08:00_17:00")), []),
+    ("a user role character", setup_report(test_accounts=accounts(("Admin_2", "N/A"))), [bad_field("user_role", "_", account=1)]),
+    ("a username character", setup_report(test_accounts=accounts(("N/A", "N/A"), ("Admin", "bad/user"))), [bad_field("username", "/", account=2)]),
+    ("a username of N/A", setup_report(test_accounts=accounts(("N/A", "N/A"))), []),
+    ("a blank account", setup_report(test_accounts=accounts(("", ""))), []),
+    ("a username with a domain and a space", setup_report(test_accounts=accounts(("Admin", "DOMAIN\\qa user@example"))), []),
+    ("a username ending in a period", setup_report(test_accounts=accounts(("Admin", "qa.user."))), [refusal("invalid_username", account=1)]),
+    ("a username starting with a space", setup_report(test_accounts=accounts(("Admin", " qa"))), [refusal("invalid_username", account=1)]),
+    ("a username with a letter outside ASCII", setup_report(test_accounts=accounts(("Admin", "José"))), [refusal("invalid_username", account=1)]),
+    ("Production dates out of order", setup_report(test_windows=undated("production", start_date="2026-01-03")), [refusal("test_dates_out_of_order", environment="production")]),
+    ("Non-Production dates out of order", setup_report(test_windows=undated("non_production", end_date="2026-01-02")), [refusal("test_dates_out_of_order", environment="non_production")]),
+    ("one day is in order", setup_report(test_windows=undated("production", end_date="2026-01-01")), []),
+    ("a Non-Production name character", setup_report(non_production_label="UAT!"), [bad_field("non_production_label", "!")]),
+    ("a Non-Production name is checked trimmed", setup_report(non_production_label="\u0085UAT "), []),
+    ("a bad Non-Production name with Non-Production not tested", setup_report(tested_environments=["production"], non_production_label="UAT!"), []),
+    (
+        "a whitespace-only application name is refused and missing",
+        setup_report(app_name="\x1c"),
+        [bad_field("app_name", "\x1c"), issue("missing_app_name")],
+    ),
+    (
+        "every field refusal, in field order, after the scope refusals and before the issues",
+        scoped(
+            {("production", "thick_client"): components("Acme!.exe", "")},
+            app_name="Bad/App", ci_number="CI_1", bsn_number="BSN.1", app_owner="Owner 2", tester="QA_Tester",
+            tested_channels=["web", "thick_client"], non_production_label="UAT!", limitations="No testing @ prod",
+            test_windows={
+                "production": {"start_date": "2026-01-03", "end_date": "2026-01-02", "test_time": "08:00_17:00"},
+                "non_production": {"start_date": None, "end_date": "2026-01-01", "test_time": "Any|time"},
+            },
+            test_accounts=accounts(("Admin_2", "bad/user"), ("N/A", "user.")),
+        ),
+        [
+            bad_scope("production", "thick_client", "component", 0, "!"),
+            bad_field("app_name", "/"), bad_field("ci_number", "_"), bad_field("bsn_number", "."), bad_field("app_owner", "2"), bad_field("tester", "_"),
+            refusal("test_dates_out_of_order", environment="production"), bad_field("test_time", "_", environment="production"),
+            bad_field("test_time", "|", environment="non_production"),
+            bad_field("user_role", "_", account=1), bad_field("username", "/", account=1), refusal("invalid_username", account=2),
+            bad_field("limitations", "@"), bad_field("non_production_label", "!"),
+            undescribed("production", "thick_client", "Acme!.exe"), issue("missing_test_dates", environment="non_production"),
+        ],
+    ),
+]
+
+
 SETUP_CASES = [
     ("complete", setup_report(), []),
     ("missing app name", setup_report(app_name=""), [issue("missing_app_name")]),
-    ("whitespace-only app name", setup_report(app_name=" \t "), [issue("missing_app_name")]),
+    ("whitespace-only app name", setup_report(app_name=" \t "), [bad_field("app_name", "\t"), issue("missing_app_name")]),
     ("missing segment", setup_report(segment=None), [issue("missing_segment")]),
     ("missing report type", setup_report(report_type=None), [issue("missing_report_type")]),
     ("missing tester", setup_report(tester=""), [issue("missing_tester")]),
@@ -272,6 +338,9 @@ class RuleCaseTests(unittest.TestCase):
 
     def test_setup_results(self) -> None:
         self.run_cases(SETUP_CASES, setup_results, "setupResults")
+
+    def test_setup_field_refusals(self) -> None:
+        self.run_cases(FIELD_CASES, setup_results, "setupResults")
 
 
 if __name__ == "__main__":

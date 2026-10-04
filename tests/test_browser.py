@@ -623,6 +623,37 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(page.locator("#save-button")).to_have_attribute("data-save-state", "unsaved")
         self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Browser QA")
 
+    def test_setup_character_limit_stops_typing_and_announces_the_limit(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        maximum = vocabulary["character_rules"]["tester"]["max_length"]
+        tester = page.get_by_label("Tester", exact=True)
+        self.assertEqual(tester.get_attribute("maxlength"), str(maximum))
+
+        tester.fill("T" * maximum)
+        tester.press("x")
+
+        self.assertEqual(tester.input_value(), "T" * maximum)
+        described_by = tester.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        note = page.locator(f"#{described_by}")
+        expect(note).to_have_text(f"Tester holds up to {maximum} characters.")
+        self.assertEqual(note.get_attribute("role"), "status")
+        self.assertEqual(note.get_attribute("aria-live"), "polite")
+        self.assertIn("setup-character-limit-note", note.get_attribute("class"))
+        self.assertEqual(note.evaluate("element => getComputedStyle(element).color"), page.evaluate("() => { const probe = document.createElement('span'); probe.style.color = 'var(--muted)'; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; }"))
+        self.assertIsNone(tester.get_attribute("aria-invalid"))
+
+        tester.press("Backspace")
+        expect(note).to_be_hidden()
+        self.assertIsNone(tester.get_attribute("aria-describedby"))
+        tester.press("x")
+        tester.press("x")
+        expect(note).to_be_visible()
+        tester.evaluate("element => element.blur()")
+        expect(note).to_be_hidden()
+
     def test_held_autosave_shows_every_refusal_on_setup(self) -> None:
         report_id = self.ready_report()
         page = self.page

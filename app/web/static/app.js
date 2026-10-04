@@ -1490,6 +1490,7 @@
       placeMessage(messageElement);
       const messages = new Map();
       const controller = {
+        element: messageElement,
         hasText:() => [...messages.values()].some(value => Array.isArray(value) ? value.some(Boolean) : Boolean(value)),
         set:(kind, text) => {
           messages.set(kind, text);
@@ -1537,6 +1538,51 @@
         return attachSetupMessage([control], message => wrapper.append(message));
       }
       return attachSetupMessage([control], message => label.after(message));
+    };
+    const attachSetupCharacterLimit = (control, maximum, label) => {
+      if (!Number.isInteger(maximum)) return;
+      const messageController = setupMessageControllers.get(control);
+      if (!messageController) return;
+      control.maxLength = maximum;
+      messageController.element.setAttribute("role", "status");
+      messageController.element.setAttribute("aria-live", "polite");
+      let skipPasteInput = false;
+      const showLimitNote = pasted => {
+        if (control.value.length > maximum) return;
+        messageController.set("character-limit", `${label} holds up to ${maximum} characters${pasted ? ", so the paste was cut to fit" : ""}.`);
+        if (control.validity.valid) {
+          control.removeAttribute("aria-invalid");
+          messageController.element.classList.add("setup-character-limit-note");
+        }
+      };
+      const remainingLength = () => maximum - (control.value.length - (control.selectionEnd - control.selectionStart));
+      control.addEventListener("keydown", event => {
+        if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return;
+        if (control.value.length <= maximum && event.key.length > remainingLength()) showLimitNote(false);
+      });
+      control.addEventListener("beforeinput", event => {
+        if (!event.inputType?.startsWith("insert") || event.inputType === "insertFromPaste" || event.data == null) return;
+        if (control.value.length <= maximum && event.data.length > remainingLength()) showLimitNote(false);
+      });
+      control.addEventListener("paste", event => {
+        const pasted = event.clipboardData?.getData("text/plain") ?? event.clipboardData?.getData("text");
+        if (pasted == null || control.value.length > maximum || pasted.length <= remainingLength()) return;
+        showLimitNote(true);
+        skipPasteInput = true;
+        queueMicrotask(() => { skipPasteInput = false; });
+      });
+      control.addEventListener("input", event => {
+        if (skipPasteInput && event.inputType?.startsWith("insert")) {
+          skipPasteInput = false;
+          return;
+        }
+        messageController.set("character-limit", "");
+        messageController.element.classList.remove("setup-character-limit-note");
+      });
+      control.addEventListener("blur", () => {
+        messageController.set("character-limit", "");
+        messageController.element.classList.remove("setup-character-limit-note");
+      });
     };
     const firstSetupMessageControl = () => [...root.querySelectorAll("[data-setup-message-control]")]
       .find(control => setupMessageControllers.get(control)?.hasText());
@@ -1711,7 +1757,10 @@
         observeWidth(input, grow);
       }
       input.oninput = () => { report[section][field] = input.value || (input.matches('select, input[type="date"]') ? null : ""); if (input.value.trim()) input.classList.remove("validation-error"); grow?.(); scheduleSave(); };
-      if (setupRules[field]) wireSetupRule(input, setupRules[field]);
+      if (setupRules[field]) {
+        wireSetupRule(input, setupRules[field]);
+        attachSetupCharacterLimit(input, vocabulary.character_rules[field]?.max_length, setupRules[field].label);
+      }
     });
     updateSetupValidationNotice();
     // Offered, never written. A retest that covered one environment usually says so in Limitations,

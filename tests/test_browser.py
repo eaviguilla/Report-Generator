@@ -42,11 +42,11 @@ AUTOSAVE_TEST_DEFAULT = """(() => {
 })()"""
 
 
-def setup_issue(field_name: str, value: str) -> str:
+def setup_issue(field_name: str, value: str, environment: str = "production") -> str:
     """The server's message for one invalid Setup value, which the browser must show word for word."""
     windows = {environment: TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2)) for environment in ("production", "non_production")}
     engagement = Engagement(tested_environments=["production", "non_production"], test_windows=windows, test_accounts=[TestAccount(user_role="N/A", username="N/A")])
-    target = windows["production"] if field_name == "test_time" else engagement.test_accounts[0] if field_name in ("user_role", "username") else engagement
+    target = windows[environment] if field_name == "test_time" else engagement.test_accounts[0] if field_name in ("user_role", "username") else engagement
     setattr(target, field_name, value)
     [issue] = setup_input_issues(engagement)
     return issue
@@ -236,7 +236,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_label("Application Name").fill("Bad/App")
         page.get_by_role("button", name="Next: Findings").click()
         self.assertIn("/setup", page.url)
-        self.assertIn("Application name", page.locator("#setup-validation-note").inner_text())
+        self.assertRegex(page.locator("#setup-validation-note").inner_text(), r"^\d+ things to fix before Findings\.")
 
     def test_authoring_workflow_autosave_fragments_and_manager_grouping(self) -> None:
         page = self.page
@@ -615,6 +615,9 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_date_pair_message_is_shared_below_the_row_and_clears_when_fixed(self) -> None:
         report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        main.workspace.save(report)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
         start = page.get_by_label("Production start date", exact=True)
@@ -642,6 +645,27 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIsNone(end.get_attribute("aria-describedby"))
         self.assertIsNone(start.get_attribute("aria-invalid"))
         self.assertIsNone(end.get_attribute("aria-invalid"))
+
+        for environment, label in (("production", "Production"), ("non_production", "Non-Production")):
+            time_input = page.get_by_label(f"{label} time", exact=True)
+            time_value = "x" * 1000
+            time_input.fill(time_value)
+            self.assertIsNone(time_input.get_attribute("aria-describedby"))
+            time_input.evaluate("input => input.blur()")
+            time_described_by = time_input.get_attribute("aria-describedby")
+            self.assertTrue(time_described_by)
+            time_line = page.locator(f"#{time_described_by}")
+            expect(time_line).to_have_text(setup_issue("test_time", time_value, environment))
+            self.assertIsNone(time_line.evaluate("element => element.closest('label')"))
+            self.assertTrue(time_line.evaluate("element => element.parentElement.classList.contains('setup-field-wrap')"))
+
+            character_value = "Bad@Time"
+            time_input.fill(character_value)
+            expect(time_line).to_have_text(setup_issue("test_time", character_value, environment))
+            time_input.fill("Anytime")
+            expect(time_line).to_be_hidden()
+            self.assertIsNone(time_input.get_attribute("aria-describedby"))
+            self.assertIsNone(time_input.get_attribute("aria-invalid"))
 
         report.engagement.test_windows["production"].start_date = None
         missing_date_message = next(message for message in setup_issues(report) if "Production start date" in message)
@@ -1262,6 +1286,23 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIsNone(description.get_attribute("aria-describedby"))
         self.assertIsNone(duplicate.get_attribute("aria-invalid"))
         self.assertIsNone(description.get_attribute("aria-invalid"))
+
+        report.scope_targets = [
+            ScopeTarget(target_id="tgt_mobile_one", environment="production", channel="mobile", value="Wallet app", description="Android", order=0),
+            ScopeTarget(target_id="tgt_mobile_two", environment="production", channel="mobile", value="Wallet app copy", description="", order=1),
+        ]
+        missing_description_message = next(message for message in setup_issues(report) if "component 2" in message.lower())
+        description.fill("")
+        page.get_by_role("button", name="Next: Findings").click()
+        expect(message).to_have_text(missing_description_message)
+        self.assertEqual(duplicate.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(description.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(duplicate.get_attribute("aria-invalid"), "true")
+        self.assertEqual(description.get_attribute("aria-invalid"), "true")
+        description.fill("iOS")
+        expect(message).to_be_hidden()
+        self.assertIsNone(duplicate.get_attribute("aria-describedby"))
+        self.assertIsNone(description.get_attribute("aria-describedby"))
 
     def _two_thick_client_components(self) -> str:
         """A thick-client report with two components, both referenced by its one finding."""
@@ -3638,7 +3679,19 @@ class BrowserWorkflowTests(unittest.TestCase):
             typed.evaluate("input => input.validationMessage"),
             setup_issue("non_production_label", "MY@LAB"),
         )
+        self.assertIsNone(typed.get_attribute("aria-describedby"))
+        typed.evaluate("input => input.blur()")
+        described_by = typed.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(setup_issue("non_production_label", "MY@LAB"))
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+        self.assertTrue(message.evaluate("element => element.parentElement.classList.contains('setup-field-wrap')"))
+        typed.fill("MY@LAB2")
+        expect(message).to_have_text(setup_issue("non_production_label", "MY@LAB2"))
         typed.fill("MY LAB/2")
+        expect(message).to_be_hidden()
+        self.assertIsNone(typed.get_attribute("aria-describedby"))
         self.assertEqual(typed.evaluate("input => input.validationMessage"), "")
         page.locator("#save-button").click()
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)

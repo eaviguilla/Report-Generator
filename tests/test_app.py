@@ -215,13 +215,13 @@ class ReportApiTests(unittest.TestCase):
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         field_cases = [
-            ("app_name", "Bad/App", 'Application name contains invalid character: "/" (slash)'),
-            ("ci_number", "CI_123", 'CI number contains invalid character: "_" (underscore)'),
-            ("bsn_number", "BSN.123", 'BSN number contains invalid character: "." (period)'),
-            ("app_owner", "Owner 2", 'Application owner contains invalid character: "2" (digit two)'),
-            ("tester", "QA_Tester", 'Tester contains invalid character: "_" (underscore)'),
-            ("limitations", "No testing @ production", 'Limitations contains invalid character: "@" (at sign)'),
-            ("non_production_label", "UAT@2", 'Non-Production name contains invalid character: "@" (at sign)'),
+            ("app_name", "Bad/App", 'Application name cannot have "/". Remove or replace it.'),
+            ("ci_number", "CI_123", 'CI number cannot have "_". Remove or replace it.'),
+            ("bsn_number", "BSN.123", 'BSN number cannot have ".". Remove or replace it.'),
+            ("app_owner", "Owner 2", 'Application owner cannot have "2". Remove or replace it.'),
+            ("tester", "QA_Tester", 'Tester cannot have "_". Remove or replace it.'),
+            ("limitations", "No testing @ production", 'Limitations cannot have "@". Remove or replace it.'),
+            ("non_production_label", "UAT@2", 'Non-Production name cannot have "@". Remove or replace it.'),
         ]
         for field, value, expected_issue in field_cases:
             with self.subTest(field=field):
@@ -233,9 +233,9 @@ class ReportApiTests(unittest.TestCase):
                 self.assertIn(expected_issue, response.json()["error"]["message"])
 
         nested_cases = [
-            ({"test_windows": {"production": {"test_time": "08:00_17:00"}}}, 'Production time contains invalid character: "_" (underscore)'),
-            ({"test_accounts": [{"user_role": "Admin_2", "username": "N/A"}]}, 'User role 1 contains invalid character: "_" (underscore)'),
-            ({"test_accounts": [{"user_role": "Admin", "username": "bad/user"}]}, 'Username 1 contains invalid character: "/" (slash)'),
+            ({"test_windows": {"production": {"test_time": "08:00_17:00"}}}, 'Production time cannot have "_". Remove or replace it.'),
+            ({"test_accounts": [{"user_role": "Admin_2", "username": "N/A"}]}, 'User role 1 cannot have "_". Remove or replace it.'),
+            ({"test_accounts": [{"user_role": "Admin", "username": "bad/user"}]}, 'Username 1 cannot have "/". Remove or replace it.'),
             ({"test_windows": {"production": {"start_date": "2026-01-02", "end_date": "2026-01-01"}}}, "start date"),
         ]
         for engagement_update, expected_issue in nested_cases:
@@ -263,7 +263,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=candidate).status_code, 200)
         renamed = self.client.patch(f"/reports/{report_id}/name", json={"app_name": "Bad/App"})
         self.assertEqual(renamed.status_code, 422)
-        self.assertEqual(renamed.json()["detail"], 'Application name contains invalid character: "/" (slash)')
+        self.assertEqual(renamed.json()["detail"], 'Application name cannot have "/". Remove or replace it.')
 
     def test_rename_accepts_every_application_name_setup_accepts(self) -> None:
         """The home-page rename kept its own, narrower character set, so it refused a name the Setup
@@ -289,13 +289,13 @@ class ReportApiTests(unittest.TestCase):
             "contents": [],
         }]
         cases = [
-            ("cvss_score", "9.8a", 'CVSS Score contains invalid character: "a" (latin small letter a)'),
-            ("cvss_score", "9,8", 'CVSS Score contains invalid character: "," (comma)'),
-            ("cvss_vector", "CVSS:3.1/AV:N_", 'CVSS Vector contains invalid character: "_" (underscore)'),
-            ("cvss_vector", "CVSS:3.1 AV:N", 'CVSS Vector contains invalid character: " " (space)'),
+            ("cvss_score", "9.8a", 'CVSS Score cannot have "a". Remove or replace it.'),
+            ("cvss_score", "9,8", 'CVSS Score cannot have ",". Remove or replace it.'),
+            ("cvss_vector", "CVSS:3.1/AV:N_", 'CVSS Vector cannot have "_". Remove or replace it.'),
+            ("cvss_vector", "CVSS:3.1 AV:N", "CVSS Vector cannot have spaces. Remove the space."),
             # The prefix belongs to the document; typing it into the draft is an error, not a shortcut.
-            ("severity_review_tickets", "1234-5678", 'Severity Review Tickets contains invalid character: "-" (hyphen)'),
-            ("severity_review_tickets", "1234 5678", 'Severity Review Tickets contains invalid character: " " (space)'),
+            ("severity_review_tickets", "1234-5678", 'Severity Review Tickets cannot have "-". Remove or replace it.'),
+            ("severity_review_tickets", "1234 5678", "Severity Review Tickets cannot have spaces. Remove the space."),
         ]
         for field, value, expected_issue in cases:
             with self.subTest(field=field, value=value):
@@ -984,7 +984,7 @@ class ReportApiTests(unittest.TestCase):
         rejected = self.client.put(f"/reports/{report_id}", json=invalid)
         self.assertEqual(rejected.status_code, 422)
         self.assertEqual(rejected.json()["error"]["code"], "invalid_scope")
-        self.assertIn('Production Mobile scope contains invalid character: "\\u0007" (unicode u+0007)', rejected.json()["error"]["message"])
+        self.assertIn('In the Production Mobile scope, line 1 has a hidden character after "Mobile". Delete it.', rejected.json()["error"]["message"])
 
         web = saved.json()["report"]
         web["engagement"]["tested_channels"] = ["web"]
@@ -1053,7 +1053,7 @@ class ReportApiTests(unittest.TestCase):
         }))
         self.assertEqual(repeated.status_code, 422)
         self.assertEqual(repeated.json()["error"]["code"], "invalid_scope")
-        self.assertIn('Production Mobile scope lists the same component twice: "Wallet app"', repeated.json()["error"]["message"])
+        self.assertIn("In the Production Mobile scope, Component 2 is the same as component 1. Remove one of them.", repeated.json()["error"]["message"])
 
     def test_a_repeated_component_is_refused_before_an_earlier_lines_characters(self) -> None:
         report_id = self.new_report()
@@ -1063,7 +1063,7 @@ class ReportApiTests(unittest.TestCase):
         }))
 
         self.assertEqual(response.status_code, 422)
-        self.assertEqual(response.json()["error"]["message"], 'Production Mobile scope lists the same component twice: "Good"')
+        self.assertEqual(response.json()["error"]["message"], "In the Production Mobile scope, Component 3 is the same as component 2. Remove one of them.")
 
     def test_component_scope_checks_both_boxes_for_characters_word_cannot_store(self) -> None:
         """Any printable character passes, so an install path is typable, and the message names
@@ -1082,7 +1082,7 @@ class ReportApiTests(unittest.TestCase):
             "description": "Crashes on start\x07",
         }))
         self.assertEqual(rejected.status_code, 422)
-        self.assertIn('Production Thick Client scope description contains invalid character: "\\u0007" (unicode u+0007)', rejected.json()["error"]["message"])
+        self.assertIn('In the Production Thick Client scope, line 1 has a hidden character after "...hes on start". Delete it.', rejected.json()["error"]["message"])
 
         # The plain string form is still valid for every channel, so a browser cached from before
         # this shape existed degrades rather than 422ing.
@@ -1921,14 +1921,14 @@ class ReportApiTests(unittest.TestCase):
         report.engagement.tested_channels = ["mobile", "thick_client"]
         report.scope_targets.append(ScopeTarget(target_id="tgt_app", environment="production", channel="mobile", value="Wallet app", description="Android build"))
 
-        self.assertIn("only one of Mobile and Thick Client -- deselect the other", report_service.setup_issues(report))
+        self.assertIn("Choose Mobile or Thick Client, not both.", report_service.setup_issues(report))
         self.assertFalse(report_service.setup_is_complete(report))
 
         # Savable and loadable: the tester must be able to reach Setup and untick one.
         main.workspace.save(report)
         self.assertEqual(main.workspace.load(report_id).engagement.tested_channels, ["mobile", "thick_client"])
         self.assertIn("incomplete=setup", self.client.get(f"/reports/{report_id}/findings", follow_redirects=False).headers["location"])
-        self.assertIn("only one of Mobile and Thick Client -- deselect the other", generation_issues(main.workspace.load(report_id)))
+        self.assertIn("Choose Mobile or Thick Client, not both.", generation_issues(main.workspace.load(report_id)))
 
         # The union branch of resolve_tested_channels can produce the illegal pair from a file that
         # never submitted it. That file must still open.
@@ -1968,11 +1968,11 @@ class ReportApiTests(unittest.TestCase):
         self.assertTrue(report_service.setup_is_complete(self._component_scope_report(report_id, "thick_client", "Windows desktop client")))
 
         blank = self._component_scope_report(report_id, "thick_client", "")
-        self.assertEqual(report_service.setup_issues(blank), ['production Thick Client description for "Acme.exe"'])
+        self.assertEqual(report_service.setup_issues(blank), ["Enter a description for component 1."])
         self.assertFalse(report_service.setup_is_complete(blank))
 
         mobile = self._component_scope_report(report_id, "mobile", "")
-        self.assertEqual(report_service.setup_issues(mobile), ['production Mobile description for "Acme.exe"'])
+        self.assertEqual(report_service.setup_issues(mobile), ["Enter a description for component 1."])
 
         # Web and API carry locations, not components, so the rule never fires for them.
         web = self._component_scope_report(report_id, "web", "")
@@ -1982,7 +1982,7 @@ class ReportApiTests(unittest.TestCase):
         # The existing per-environment check still counts value alone.
         empty = self._component_scope_report(report_id, "thick_client", "Windows desktop client")
         empty.scope_targets = []
-        self.assertIn("production scope target", report_service.setup_issues(empty))
+        self.assertIn("Add a scope target for Production.", report_service.setup_issues(empty))
 
     def test_setup_issues_list_a_stored_target_the_save_would_refuse(self) -> None:
         """An import can store a target the save would refuse; it saves, so it must still block Findings."""
@@ -1992,7 +1992,7 @@ class ReportApiTests(unittest.TestCase):
             [result["code"] for result in report_service.setup_results({"engagement": report.engagement.model_dump(mode="json"), "scope_text": report_service.scope_text_from_targets(report.scope_targets)})],
             ["invalid_characters"],
         )
-        self.assertEqual(report_service.setup_issues(report), ['Production Thick Client scope description contains invalid character: "\\u0007" (unicode u+0007)'])
+        self.assertEqual(report_service.setup_issues(report), ['In the Production Thick Client scope, line 1 has a hidden character after "...hes on start". Delete it.'])
 
     def test_setup_input_issues_word_every_field_refusal_in_field_order(self) -> None:
         engagement = models.Engagement(
@@ -2007,19 +2007,19 @@ class ReportApiTests(unittest.TestCase):
             "non_production": TestWindow(test_time="Any\u00e9time\u0085"),
         }
         self.assertEqual(report_service.setup_input_issues(engagement), [
-            'Application name contains invalid character: "/" (slash)',
-            'CI number contains invalid character: "_" (underscore)',
-            'BSN number contains invalid character: "." (period)',
-            'Application owner contains invalid character: "2" (digit two)',
-            'Tester contains invalid character: "_" (underscore)',
-            "Production start date cannot be after its end date",
-            'Production time contains invalid character: "_" (underscore)',
-            'Non-Production time contains invalid character: "\u0085" (unicode u+0085)',
-            'User role 1 contains invalid character: "_" (underscore)',
-            'Username 1 contains invalid character: "/" (slash)',
-            "Username 2 cannot start or end with a space",
-            'Limitations contains invalid character: "@" (at sign)',
-            'Non-Production name contains invalid character: "!" (exclamation mark)',
+            'Application name cannot have "/". Remove or replace it.',
+            'CI number cannot have "_". Remove or replace it.',
+            'BSN number cannot have ".". Remove or replace it.',
+            'Application owner cannot have "2". Remove or replace it.',
+            'Tester cannot have "_". Remove or replace it.',
+            "Production start date is after its end date. Change one of them.",
+            'Production time cannot have "_". Remove or replace it.',
+            'Non-Production time has a hidden character after "Anyétime". Delete it.',
+            'User role 1 cannot have "_". Remove or replace it.',
+            'Username 1 cannot have "/". Remove or replace it.',
+            "Username 2 ends with a space. Delete it.",
+            'Limitations cannot have "@". Remove or replace it.',
+            'Non-Production name cannot have "!". Remove or replace it.',
         ])
 
     def _generatable_report(self) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .models import Report
-from .report_service import changed_target_refusals, finding_input_issues, provision as provision_finding, reconcile_targets, setup_input_issues, setup_refusal_message, sync_evidence_image_slots
+from .report_service import changed_target_refusals, finding_input_issues, provision as provision_finding, reconcile_targets, scope_text_from_targets, setup_input_issues, setup_refusal_message, sync_evidence_image_slots
 from .workspace import StaleReportError
 
 
@@ -51,7 +51,11 @@ def check(stored: Report, submitted: dict) -> Report:
     report = Report.model_validate(submitted)
     # Without scope text the targets arrive as stored data, so a changed one never met the Setup checks.
     if stranded is None and (refusals := changed_target_refusals(report.scope_targets, stored.scope_targets)):
-        raise InvalidScope(setup_refusal_message(refusals[0]))
+        context = {
+            "engagement": report.engagement.model_dump(mode="json"),
+            "scope_text": scope_text_from_targets(report.scope_targets),
+        }
+        raise InvalidScope(setup_refusal_message(refusals[0], context))
     setup_issues = setup_input_issues(report.engagement, stored.engagement)
     finding_issues = finding_input_issues(report)
     if setup_issues or finding_issues:

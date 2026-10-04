@@ -23,7 +23,7 @@ from playwright.sync_api import Error as PlaywrightError
 from app import acceptance, main
 from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import finding_input_issues, invalid_character_issue, setup_input_issues, status_conclusion_runs
+from app.report_service import finding_input_issues, setup_input_issues, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from tests.support import png_bytes, use_temp_workspace
 from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
@@ -226,8 +226,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(production_start.evaluate("input => input.validationMessage"), "")
         self.assertEqual(production_end.evaluate("input => input.validationMessage"), "")
         production_start.fill("2026-01-02")
-        self.assertIn("after", production_start.evaluate("input => input.validationMessage"))
-        self.assertIn("after", production_end.evaluate("input => input.validationMessage"))
+        self.assertEqual(production_start.evaluate("input => input.validationMessage"), "Production start date is after its end date. Change one of them.")
+        self.assertEqual(production_end.evaluate("input => input.validationMessage"), "Production start date is after its end date. Change one of them.")
         self.assertTrue(production_start.evaluate("input => input.validity.rangeOverflow"))
         production_start.fill("2026-01-01")
         self.assertEqual(production_start.evaluate("input => input.validationMessage"), "")
@@ -632,7 +632,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         mobile.evaluate("input => { input.value = 'Mobile\\u0007App'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
         self.assertEqual(
             mobile.evaluate("input => input.validationMessage"),
-            invalid_character_issue("Production Mobile scope", "Mobile\x07App", "", portable_names=True),
+            'Line 2 has a hidden character after "Mobile". Delete it.',
         )
         self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
 
@@ -920,7 +920,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             duplicate.evaluate("input => input.validationMessage"),
-            'Production Mobile scope lists the same component twice: "Wallet app"',
+            "Component 2 is the same as component 1. Remove one of them.",
         )
         page.locator("#save-button").click()
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
@@ -1003,21 +1003,21 @@ class BrowserWorkflowTests(unittest.TestCase):
         description.fill("Main desktop client")
         page.locator("#next").click()
         notice = page.locator("#setup-validation-note")
-        self.assertIn("production scope target", notice.text_content())
+        self.assertIn("Add a scope target for Production.", notice.text_content())
         self.assertTrue(component.evaluate("input => input.classList.contains('validation-error')"))
 
         # Component only: now a target exists, and the missing description is named by component.
         component.fill("Acme.exe")
         description.fill("")
         page.locator("#next").click()
-        self.assertIn('production Thick Client description for "Acme.exe"', notice.text_content())
+        self.assertIn("Enter a description for component 1.", notice.text_content())
         self.assertTrue(description.evaluate("input => input.classList.contains('validation-error')"))
         self.assertEqual(description.evaluate("input => document.activeElement === input"), True)
 
         description.evaluate("input => { input.value = 'Crashes on start\\u0007'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
         self.assertEqual(
             description.evaluate("input => input.validationMessage"),
-            invalid_character_issue("Production Thick Client scope description", "Crashes on start\x07", "", portable_names=True),
+            'Line 1 has a hidden character after "...hes on start". Delete it.',
         )
 
         description.fill("Main desktop client")

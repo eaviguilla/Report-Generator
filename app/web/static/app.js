@@ -7,6 +7,7 @@
   const serverReport = JSON.parse(root.dataset.report);
   const unicodeCharacterRanges = serverReport._unicode_character_ranges || {};
   delete serverReport._unicode_character_ranges;
+  vocabulary.unicode_character_ranges = unicodeCharacterRanges;
   let report = serverReport;
   const reportId = report.report_id;
   const reportTypeLabels = Object.fromEntries(vocabulary.report_types);
@@ -620,26 +621,11 @@
     const notice = document.querySelector("#setup-validation-note");
     if (!notice?.dataset.validationAttempted) return;
     const results = window.vrRules.setupResults(report, vocabulary);
-    const missing = results.filter(result => result.code in SETUP_DETAIL_TEXT).map(result => SETUP_DETAIL_TEXT[result.code]);
-    if (results.some(result => result.code === "missing_test_dates")) missing.push("testing dates");
-    const scopeless = results.filter(result => result.code === "missing_scope_target").map(result => result.environment);
-    ["production", "non_production"].filter(environment => scopeless.includes(environment))
-      .forEach(environment => missing.push(`${environment.replace("_", "-")} scope target`));
-    const exclusion = results.find(result => result.code === "mobile_and_thick_client");
-    if (exclusion) missing.push(componentExclusionIssue(exclusion));
-    missing.push(...results.filter(result => result.code === "missing_component_description").map(componentDescriptionIssue));
-    missing.push(...results.filter(result => ["incomplete_test_account", "repeated_test_account"].includes(result.code)).map(accountIssue));
-    const invalidMessages = [...new Set(
-      [...root.querySelectorAll("[data-setup-validated]")]
-        .filter(input => !input.validity.valid)
-        .map(input => input.validationMessage)
-        .filter(Boolean)
-    )];
-    const messages = [];
-    if (missing.length) messages.push(`Missing: ${missing.join(", ")}`);
-    if (invalidMessages.length) messages.push(`Invalid: ${invalidMessages.join("; ")}`);
+    const messages = results.map(result => window.vrRules.formatRuleMessage(result, report, vocabulary, {
+      scopeContext:result.field === "scope" || result.code === "duplicate_component",
+    }));
     notice.hidden = !messages.length;
-    notice.textContent = messages.length ? `${messages.join(". ")}.` : "";
+    notice.textContent = messages.join(" ");
   };
   // Each Setup card reports its own state on the right of its header strip, the way a Content
   // section reports its fragment count.
@@ -980,29 +966,19 @@
     }).observe(element);
   };
   // Shared with the Content page's Additional Information fields, so they live outside setup().
-  const characterNames = new Map([
-    [" ","space"], ["\t","tab"], ["\n","line feed"], ["\r","carriage return"], ["!","exclamation mark"], ['"',"double quote"], ["#","number sign"], ["$","dollar sign"], ["%","percent sign"], ["&","ampersand"], ["'","apostrophe"], ["(","left parenthesis"], [")","right parenthesis"], ["*","asterisk"], ["+","plus sign"], [",","comma"], ["-","hyphen"], [".","period"], ["/","slash"], [":","colon"], [";","semicolon"], ["<","less-than sign"], ["=","equals sign"], [">","greater-than sign"], ["?","question mark"], ["@","at sign"], ["[","left bracket"], ["\\","backslash"], ["]","right bracket"], ["^","caret"], ["_","underscore"], ["`","grave accent"], ["{","left brace"], ["|","vertical bar"], ["}","right brace"], ["~","tilde"],
-  ]);
-  const digitNames = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-  const characterName = character => characterNames.get(character)
-    || (/^[0-9]$/.test(character) ? `digit ${digitNames[Number(character)]}` : null)
-    || (/^[A-Z]$/.test(character) ? `latin capital letter ${character.toLowerCase()}` : null)
-    || (/^[a-z]$/.test(character) ? `latin small letter ${character}` : null)
-    || `Unicode U+${character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
-  const invalidCharacterMessage = (label, characters) => `${label} contains invalid character${characters.length === 1 ? "" : "s"}: ${characters.map(character => `${JSON.stringify(character)} (${characterName(character)})`).join(", ")}`;
   const characterRule = (label, allowed) => {
     const invalidCharacters = value => [...new Set([...value].filter(character => !allowed.test(character)))];
     return {label, invalidCharacters, valid:value => !invalidCharacters(value).length};
   };
   // Built from the server's CHARACTER_RULES, judging letters and digits by the browser's own Unicode
   // categories. Setup has always worked this way; the Content page uses serverCharacterRule instead.
-  const browserCharacterRule = rule => {
+  const browserCharacterRule = (rule, field) => {
     const invalidCharacters = value => window.vrRules.invalidCharacters(value, rule);
     return {
       label:rule.label,
       invalidCharacters,
       valid:value => !invalidCharacters(value).length && !window.vrRules.tooLong(value, rule.max_length),
-      message:label => `${label} must be at most ${rule.max_length} characters`,
+      message:(label, value) => ({code:"too_long", field, label, value, limit:rule.max_length}),
     };
   };
   const serverCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
@@ -1221,12 +1197,6 @@
   };
   // Words rules.js's Setup results as report_service.setup_issues does, or the Setup notice and the
   // server's page gate describe the same report differently.
-  const SETUP_DETAIL_TEXT = {missing_app_name:"application name", missing_segment:"segment", missing_report_type:"report type", missing_network:"network access", missing_tester:"tester", missing_report_date:"report date", no_tested_environment:"selected environment"};
-  const accountIssue = result => result.code === "repeated_test_account"
-    ? `test account ${result.account} repeats test account ${result.first} -- remove one`
-    : `test account ${result.account} ${result.missing === "username" ? "username" : "user role"}`;
-  const componentExclusionIssue = result => `only one of ${result.app_types.map(channel => channelLabels[channel]).join(" and ")} -- deselect the other`;
-  const componentDescriptionIssue = result => `${result.environment.replace("_", "-")} ${channelLabels[result.app_type]} description for "${result.component}"`;
   // Twin of report_service.affected_channels; keep both in step.
   const affectedChannels = finding => {
     const scope = finding.scope;
@@ -1470,7 +1440,7 @@
     const OTHERS_OPTION = "OTHERS";
     // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
     let typingCustomLabel = false;
-    const setupRule = field => browserCharacterRule(vocabulary.character_rules[field]);
+    const setupRule = field => browserCharacterRule(vocabulary.character_rules[field], field);
     const setupRules = {
       app_name: setupRule("app_name"),
       ci_number: setupRule("ci_number"),
@@ -1482,12 +1452,11 @@
       userRole: setupRule("user_role"),
       non_production_label: setupRule("non_production_label"),
       username: {
+        field:"username",
         label:"Username",
         invalidCharacters:value => window.vrRules.usernameRefusals(value, vocabulary).find(result => result.characters)?.characters || [],
         valid:value => !window.vrRules.usernameRefusals(value, vocabulary).length,
-        message:(label, value) => window.vrRules.usernameRefusals(value, vocabulary)[0]?.code === "too_long"
-          ? `${label} must be at most ${vocabulary.character_rules.username.max_length} characters`
-          : `${label} cannot start or end with a space`,
+        result:(label, value) => ({...window.vrRules.usernameRefusals(value, vocabulary)[0], label, value}),
       },
     };
     const setupNotice = document.querySelector("#setup-validation-note");
@@ -1496,7 +1465,10 @@
       const validate = () => {
         const invalid = !rule.valid(input.value);
         const invalidCharacters = rule.invalidCharacters?.(input.value) || [];
-        const message = !invalid ? "" : invalidCharacters.length ? invalidCharacterMessage(label, invalidCharacters) : rule.message?.(label, input.value);
+        const result = !invalid ? null : rule.result?.(label, input.value) || (invalidCharacters.length
+          ? {code:"invalid_characters", field:rule.field, label, characters:invalidCharacters, value:input.value}
+          : rule.message?.(label, input.value));
+        const message = result ? window.vrRules.formatRuleMessage({...result, label:result.label || label, value:result.value ?? input.value}, report, vocabulary) : "";
         input.setCustomValidity(invalid ? message : "");
         showRuleState(input, invalid, "ruleInvalid");
       };
@@ -1945,7 +1917,7 @@
       configuration.append(typeGroup);
       windows.innerHTML = "";
       Object.entries(environmentLabels).forEach(([environment, label]) => {
-        const window = report.engagement.test_windows[environment];
+        const testWindow = report.engagement.test_windows[environment];
         const panel = document.createElement("div");
         panel.className = "environment-window";
         const isSelected = selected(report.engagement.tested_environments, environment);
@@ -2014,19 +1986,19 @@
         // Scoped to the date pair: the Non-Production panel also holds the typed label box, which
         // is a text input and comes first.
         const timeInput = panel.querySelector('.date-pair input[type="text"]');
-        startDate.value = window.start_date || "";
-        endDate.value = window.end_date || "";
-        timeInput.value = window.test_time;
-        startDate.oninput = () => { window.start_date = startDate.value || null; if (startDate.value) startDate.classList.remove("validation-error"); scheduleSave(); };
-        endDate.oninput = () => { window.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
-        timeInput.oninput = () => { window.test_time = timeInput.value; scheduleSave(); };
+        startDate.value = testWindow.start_date || "";
+        endDate.value = testWindow.end_date || "";
+        timeInput.value = testWindow.test_time;
+        startDate.oninput = () => { testWindow.start_date = startDate.value || null; if (startDate.value) startDate.classList.remove("validation-error"); scheduleSave(); };
+        endDate.oninput = () => { testWindow.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
+        timeInput.oninput = () => { testWindow.test_time = timeInput.value; scheduleSave(); };
         wireSetupRule(timeInput, setupRules.time, `${label} time`);
         [startDate, endDate].forEach(input => { input.dataset.setupValidated = "true"; });
         const validateDateOrder = () => {
           startDate.max = endDate.value;
           endDate.min = startDate.value;
           const invalid = Boolean(startDate.value && endDate.value && startDate.value > endDate.value);
-          const message = invalid ? `${label} start date cannot be after its end date` : "";
+          const message = invalid ? window.vrRules.formatRuleMessage({code:"test_dates_out_of_order", environment}, report, vocabulary) : "";
           startDate.setCustomValidity(message);
           endDate.setCustomValidity(message);
           showRuleState(startDate, invalid, "dateOrderInvalid");
@@ -2120,9 +2092,7 @@
               const rule = {
                 invalidCharacters,
                 valid:() => !invalidCharacters().length && !overLimit() && !repeated(),
-                message:label => overLimit()
-                  ? `${label} line ${index + 1} must be at most ${overLimit().limit} characters`
-                  : `${label} lists the same component twice: ${JSON.stringify(window.vrRules.strip(input.value))}`,
+                result:() => ownRefusals()[0] || refusals().find(result => result.code === "duplicate_component" && result.component === window.vrRules.strip(input.value)),
               };
               wireSetupRule(input, rule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
               cell.append(input);
@@ -2207,10 +2177,7 @@
           wireSetupRule(textarea, {
             invalidCharacters:() => [...new Set(lineRefusals().filter(result => result.code === "invalid_characters").flatMap(result => result.characters))],
             valid:() => !lineRefusals().length,
-            message:label => {
-              const overLimit = lineRefusals().find(result => result.code === "too_long");
-              return `${label} line ${overLimit.line + 1} must be at most ${overLimit.limit} characters`;
-            },
+            result:() => lineRefusals()[0],
           }, `${environmentLabels[environment]} ${channelLabels[channel]} scope`);
           textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
           // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
@@ -3622,7 +3589,7 @@
             contentLabel: contentNames.additional_information,
             fragmentLabel: field.label,
             fragmentId: `${finding.uid}:${field.key}`,
-            message: invalidCharacterMessage(field.label, invalidCharacters),
+            message: window.vrRules.formatRuleMessage({code:"invalid_characters", field:field.key, label:field.label, characters:invalidCharacters, value:finding[field.key] || ""}, report, vocabulary),
           }] : [];
         });
         // Ordered by section so every proof of concept row sits with the others.
@@ -4203,7 +4170,10 @@
             const grow = () => { control.style.height = "auto"; control.style.height = `${control.scrollHeight}px`; };
             const validate = () => {
               const invalidCharacters = field.rule.invalidCharacters(control.value);
-              control.setCustomValidity(invalidCharacters.length ? invalidCharacterMessage(field.label, invalidCharacters) : "");
+              const message = invalidCharacters.length
+                ? window.vrRules.formatRuleMessage({code:"invalid_characters", field:field.key, label:field.label, characters:invalidCharacters, value:control.value}, report, vocabulary)
+                : "";
+              control.setCustomValidity(message);
               showRuleState(control, invalidCharacters.length > 0, "contentRuleInvalid");
             };
             control.oninput = () => {

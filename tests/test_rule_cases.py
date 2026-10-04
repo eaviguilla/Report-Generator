@@ -5,6 +5,7 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 
+from app import report_service
 from app.report_service import setup_results
 from app.vocabulary import client_vocabulary
 
@@ -182,6 +183,235 @@ FIELD_CASES = [
             bad_field("limitations", "@"), bad_field("non_production_label", "!"),
             undescribed("production", "thick_client", "Acme\x07.exe"), issue("missing_test_dates", environment="non_production"),
         ],
+    ),
+]
+
+
+MESSAGE_CASES = [
+    (
+        "a disallowed character",
+        bad_field("app_owner", "0"),
+        setup_report(app_owner="Owner 0"),
+        'Application owner cannot have "0". Remove or replace it.',
+    ),
+    (
+        "several disallowed characters",
+        bad_field("app_owner", "#", "&", "0"),
+        setup_report(app_owner="Owner #&0"),
+        'Application owner cannot have "#", "&" or "0". Remove or replace them.',
+    ),
+    (
+        "spaces in a field that forbids them",
+        bad_field("ci_number", " "),
+        setup_report(ci_number="CI 1"),
+        "CI number cannot have spaces. Remove the space.",
+    ),
+    (
+        "a hidden character after visible text",
+        bad_field("app_name", "\x07"),
+        setup_report(app_name="North\x07star"),
+        'Application name has a hidden character after "North". Delete it.',
+    ),
+    (
+        "a hidden character at the start",
+        bad_field("app_name", "\x07"),
+        setup_report(app_name="\x07Bank"),
+        "Application name has a hidden character at the start. Delete it.",
+    ),
+    (
+        "a tab",
+        bad_field("app_name", "\t"),
+        setup_report(app_name="Bank\t"),
+        'Application name has a tab after "Bank". Delete it.',
+    ),
+    (
+        "a line break",
+        bad_field("app_name", "\n"),
+        setup_report(app_name="Bank\nName"),
+        'Application name has a line break after "Bank". Delete it.',
+    ),
+    (
+        "an allowed line break before a disallowed character",
+        bad_field("limitations", "@"),
+        setup_report(limitations="First line\nSecond @"),
+        'Limitations cannot have "@". Remove or replace it.',
+    ),
+    (
+        "a non-breaking space",
+        bad_field("app_name", "\u00a0"),
+        setup_report(app_name="Bank\u00a0Name"),
+        'Application name has a non-breaking space after "Bank". Delete it.',
+    ),
+    (
+        "a Unicode 16 unassigned character in Additional Information",
+        refusal("invalid_characters", field="cvss_score", label="CVSS Score", characters=["\U00011de0"], value="9.8\U00011de0"),
+        setup_report(),
+        'CVSS Score has a hidden character after "9.8". Delete it.',
+    ),
+    (
+        "a newly assigned Unicode character follows the server category",
+        refusal("invalid_characters", field="cvss_vector", label="CVSS Vector", characters=["\u088f"], value="CVSS:3.1/AV:\u088f"),
+        setup_report(),
+        'CVSS Vector has a hidden character after "CVSS:3.1/AV:". Delete it.',
+    ),
+    (
+        "the twelve code points before a hidden character",
+        bad_field("app_name", "\x07"),
+        setup_report(app_name="abcdefghijklmnop\x07"),
+        'Application name has a hidden character after "...efghijklmnop". Delete it.',
+    ),
+    (
+        "code-point clipping does not split a non-BMP character",
+        bad_field("app_name", "\x07"),
+        setup_report(app_name=f"{WIDE_LETTER * 13}\x07"),
+        f'Application name has a hidden character after "...{WIDE_LETTER * 12}". Delete it.',
+    ),
+    (
+        "a hidden character in a Web scope line",
+        bad_scope("production", "web", "component", 3, "\x07"),
+        scoped({("production", "web"): "one\ntwo\nthree\napi.bank.\x07"}, tested_environments=["production"], tested_channels=["web"]),
+        'Line 4 has a hidden character after "api.bank.". Delete it.',
+    ),
+    (
+        "a scope refusal names its box away from Setup",
+        bad_scope("production", "web", "component", 3, "\x07"),
+        scoped({("production", "web"): "one\ntwo\nthree\napi.bank.\x07"}, tested_environments=["production"], tested_channels=["web"]),
+        'In the Production Web scope, line 4 has a hidden character after "api.bank.". Delete it.',
+        {"scopeContext": True},
+    ),
+    (
+        "a value over its field limit",
+        too_long("app_name", 100),
+        setup_report(app_name="A" * 101),
+        "Application name has 101 characters. Shorten it to 100 or fewer.",
+    ),
+    (
+        "a long scope line names its line",
+        long_scope("production", "web", "component", 3, 500),
+        scoped({("production", "web"): "\n\n\n" + "A" * 501}, tested_environments=["production"], tested_channels=["web"]),
+        "Line 4 has 501 characters. Shorten it to 500 or fewer.",
+    ),
+    (
+        "a long scope line names its box away from Setup",
+        long_scope("production", "web", "component", 3, 500),
+        scoped({("production", "web"): "\n\n\n" + "A" * 501}, tested_environments=["production"], tested_channels=["web"]),
+        "In the Production Web scope, line 4 has 501 characters. Shorten it to 500 or fewer.",
+        {"scopeContext": True},
+    ),
+    (
+        "a username with a leading space",
+        refusal("invalid_username", account=2),
+        setup_report(test_accounts=accounts(("Admin", "N/A"), ("User", " qa"))),
+        "Username 2 starts with a space. Delete it.",
+    ),
+    (
+        "a username with a trailing space",
+        refusal("invalid_username", account=1),
+        setup_report(test_accounts=accounts(("User", "qa "))),
+        "Username 1 ends with a space. Delete it.",
+    ),
+    (
+        "a username with spaces at both ends",
+        refusal("invalid_username", account=1),
+        setup_report(test_accounts=accounts(("User", " qa "))),
+        "Username 1 starts and ends with a space. Delete them.",
+    ),
+    (
+        "production dates in the wrong order",
+        refusal("test_dates_out_of_order", environment="production"),
+        setup_report(test_windows=undated("production", start_date="2026-01-03")),
+        "Production start date is after its end date. Change one of them.",
+    ),
+    (
+        "a repeated test account",
+        issue("repeated_test_account", account=4, first=1),
+        setup_report(test_accounts=accounts(("Admin", "qa"), ("User", "bob"), ("Guest", "guest"), ("Admin", "qa"))),
+        "Test account 4 is the same as test account 1. Remove one of them.",
+    ),
+    (
+        "a repeated component",
+        repeated("production", "thick_client", "Agent.exe"),
+        scoped({("production", "thick_client"): components("Agent.exe\nOther.exe\nAgent.exe", "Run it\nRun it\nRun it")}, tested_environments=["production"], tested_channels=["thick_client"]),
+        "Component 3 is the same as component 1. Remove one of them.",
+    ),
+    (
+        "a repeated component names its box away from Setup",
+        repeated("production", "thick_client", "Agent.exe"),
+        scoped({("production", "thick_client"): components("Agent.exe\nOther.exe\nAgent.exe", "Run it\nRun it\nRun it")}, tested_environments=["production"], tested_channels=["thick_client"]),
+        "In the Production Thick Client scope, Component 3 is the same as component 1. Remove one of them.",
+        {"scopeContext": True},
+    ),
+    (
+        "more than fifty test accounts",
+        refusal("too_many_accounts", limit=50),
+        setup_report(test_accounts=accounts(*[("Admin", f"user{index}") for index in range(51)])),
+        "A report can list at most 50 test accounts. Remove some.",
+    ),
+    ("a missing segment", issue("missing_segment"), setup_report(segment=None), "Choose a segment."),
+    ("a missing application name", issue("missing_app_name"), setup_report(app_name=""), "Enter the application name."),
+    ("a missing report type", issue("missing_report_type"), setup_report(report_type=None), "Choose a report type."),
+    ("a missing network access", issue("missing_network"), setup_report(network=None), "Choose the network access."),
+    ("a missing tester name", issue("missing_tester"), setup_report(tester=""), "Enter the tester's name."),
+    ("a missing report date", issue("missing_report_date"), setup_report(report_date=None), "Enter the report date."),
+    (
+        "a missing production end date",
+        issue("missing_test_dates", environment="production"),
+        setup_report(test_windows=undated("production", end_date=None)),
+        "Enter the Production end date.",
+    ),
+    (
+        "a missing production start date",
+        issue("missing_test_dates", environment="production"),
+        setup_report(test_windows=undated("production", start_date=None)),
+        "Enter the Production start date.",
+    ),
+    (
+        "missing production start and end dates",
+        issue("missing_test_dates", environment="production"),
+        setup_report(test_windows=undated("production", start_date=None, end_date=None)),
+        "Enter the Production start and end dates.",
+    ),
+    (
+        "a missing scope target",
+        issue("missing_scope_target", environment="production"),
+        scoped({("production", "web"): ""}, tested_environments=["production"]),
+        "Add a scope target for Production.",
+    ),
+    (
+        "a missing username in a test account",
+        issue("incomplete_test_account", account=3, missing="username"),
+        setup_report(test_accounts=accounts(("Admin", "qa"), ("Admin", ""), ("User", ""))),
+        "Enter a username for test account 3, or clear its user role.",
+    ),
+    (
+        "a missing user role in a test account",
+        issue("incomplete_test_account", account=3, missing="user_role"),
+        setup_report(test_accounts=accounts(("Admin", "qa"), ("Admin", ""), ("", "qa"))),
+        "Enter a user role for test account 3, or clear its username.",
+    ),
+    (
+        "a missing component description",
+        issue("missing_component_description", environment="production", app_type="thick_client", component="Editor.exe"),
+        scoped({("production", "thick_client"): components("Agent.exe\nEditor.exe", "Runs\n")}, tested_environments=["production"], tested_channels=["thick_client"]),
+        "Enter a description for component 2.",
+    ),
+    (
+        "both component app types selected",
+        issue("mobile_and_thick_client", app_types=["mobile", "thick_client"]),
+        setup_report(tested_channels=["mobile", "thick_client"]),
+        "Choose Mobile or Thick Client, not both.",
+    ),
+    (
+        "no app type selected",
+        refusal("no_app_type"),
+        setup_report(tested_channels=[]),
+        "Choose at least one app type.",
+    ),
+    (
+        "no environment selected",
+        issue("no_tested_environment"),
+        setup_report(tested_environments=[]),
+        "Choose at least one environment to test.",
     ),
 ]
 
@@ -406,6 +636,7 @@ class RuleCaseTests(unittest.TestCase):
         cls.page = cls.browser.new_page()
         cls.page.add_script_tag(content=RULES_JS.read_text(encoding="utf-8"))
         cls.vocabulary = client_vocabulary()
+        cls.vocabulary["unicode_character_ranges"] = report_service.unicode_character_ranges()
 
     def run_cases(self, cases: list[tuple[str, dict, list[dict]]], python_rule, javascript_name: str) -> None:
         """Run each case against `python_rule` and against `window.vrRules[javascript_name]`."""
@@ -425,6 +656,20 @@ class RuleCaseTests(unittest.TestCase):
 
     def test_setup_field_refusals(self) -> None:
         self.run_cases(FIELD_CASES, setup_results, "setupResults")
+
+    def test_rule_messages(self) -> None:
+        self.assertTrue(MESSAGE_CASES, "an empty message table checks nothing")
+        for case in MESSAGE_CASES:
+            name, result, report, expected, *options = case
+            message_options = options[0] if options else {}
+            with self.subTest(name, side="Python"):
+                self.assertEqual(report_service.format_rule_message(deepcopy(result), deepcopy(report), scope_context=message_options.get("scopeContext", False)), expected)
+            with self.subTest(name, side="JavaScript"):
+                actual = self.page.evaluate(
+                    "([result, report, vocabulary, options]) => window.vrRules.formatRuleMessage(result, report, vocabulary, options)",
+                    [result, report, self.vocabulary, message_options],
+                )
+                self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

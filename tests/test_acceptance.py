@@ -93,7 +93,7 @@ class CheckTests(unittest.TestCase):
 
     def test_invalid_setup_and_finding_fields_are_refused_with_both_lists(self) -> None:
         setup_issue = character_issue("app_name", "Bad/App")
-        finding_issue = character_issue("cvss_score", "9,8", portable_names=True)
+        finding_issue = character_issue("cvss_score", "9,8")
         stored = stored_report([], [Vulnerability(uid="v_fields")])
         cases = [
             ("Setup only", "Bad/App", "", [setup_issue], []),
@@ -105,7 +105,7 @@ class CheckTests(unittest.TestCase):
                 submitted = submission(stored)
                 submitted["engagement"]["app_name"] = app_name
                 submitted["vulnerabilities"][0]["cvss_score"] = cvss_score
-                with self.assertRaisesRegex(acceptance.InvalidFields, "contains invalid character") as raised:
+                with self.assertRaisesRegex(acceptance.InvalidFields, "cannot have") as raised:
                     acceptance.check(stored, submitted)
                 self.assertEqual((raised.exception.setup_issues, raised.exception.finding_issues), (setup_issues, finding_issues))
 
@@ -128,7 +128,7 @@ class CheckTests(unittest.TestCase):
 
         self.assertEqual(acceptance.check(stored, unchanged).engagement.app_name, "Bad/App")
         self.assertEqual(acceptance.check(stored, rows_moved).engagement.test_accounts[0].username, " viewer")
-        with self.assertRaisesRegex(acceptance.InvalidFields, "^Application name contains invalid character") as raised:
+        with self.assertRaisesRegex(acceptance.InvalidFields, "^Application name cannot have") as raised:
             acceptance.check(stored, changed)
         self.assertEqual(raised.exception.setup_issues, [character_issue("app_name", "Bad/App 2")])
         self.assertIn(character_issue("app_name", "Bad/App"), report_service.setup_issues(stored))
@@ -147,9 +147,9 @@ class CheckTests(unittest.TestCase):
         self.assertEqual([target.target_id for target in acceptance.check(stored, setup_kept).scope_targets], ["tgt_bad"])
         self.assertEqual(acceptance.check(stored, elsewhere_kept).scope_targets[0].value, bad_site)
         for label, submitted in (("Setup", setup_added), ("another page", elsewhere_changed)):
-            with self.subTest(label), self.assertRaisesRegex(acceptance.InvalidScope, r"(?i)^Production Web scope contains invalid character: .*u\+000b"):
+            with self.subTest(label), self.assertRaisesRegex(acceptance.InvalidScope, r"^In the Production Web scope, line [12] has a hidden character"):
                 acceptance.check(stored, submitted)
-        self.assertTrue(any("Production Web scope contains invalid character" in issue for issue in report_service.setup_issues(stored)))
+        self.assertTrue(any("In the Production Web scope, line 1 has a hidden character" in issue for issue in report_service.setup_issues(stored)))
 
     def test_editing_only_a_description_elsewhere_does_not_recheck_its_stored_component(self) -> None:
         component = ScopeTarget(target_id="tgt_bin", environment="production", channel="thick_client", value="Acme\x07.exe", description="Main client")
@@ -161,14 +161,14 @@ class CheckTests(unittest.TestCase):
         bad_description["scope_targets"][0]["description"] = "Desktop\x0b client"
 
         self.assertEqual(acceptance.check(stored, described).scope_targets[0].description, "Desktop client")
-        with self.assertRaisesRegex(acceptance.InvalidScope, r"(?i)^Production Thick Client scope description contains invalid character: .*u\+000b"):
+        with self.assertRaisesRegex(acceptance.InvalidScope, r"^In the Production Thick Client scope, line 1 has a hidden character"):
             acceptance.check(stored, bad_description)
 
     def test_an_unpaired_surrogate_is_refused_in_scope_text(self) -> None:
         submitted = submission(stored_report())
         submitted["scope_text"] = {"production": {"web": "https://prod.example.test/\ud800"}}
 
-        with self.assertRaisesRegex(acceptance.InvalidScope, r"(?i)u\+d800"):
+        with self.assertRaisesRegex(acceptance.InvalidScope, r'^In the Production Web scope, line 1 has a hidden character after "\.\.\.xample\.test/"\. Delete it\.$'):
             acceptance.check(stored_report(), submitted)
 
     def test_a_retired_scope_mode_resolves_against_the_targets_the_submission_writes(self) -> None:
@@ -190,7 +190,7 @@ class CheckTests(unittest.TestCase):
         tested["engagement"]["test_windows"] = {"production": reversed_window}
 
         self.assertEqual(acceptance.check(stored, untested).engagement.test_windows["non_production"].start_date.isoformat(), "2026-01-03")
-        with self.assertRaisesRegex(acceptance.InvalidFields, "^Production start date cannot be after its end date$"):
+        with self.assertRaisesRegex(acceptance.InvalidFields, "^Production start date is after its end date\\. Change one of them\\.$"):
             acceptance.check(stored, tested)
 
 

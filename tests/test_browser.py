@@ -23,7 +23,7 @@ from playwright.sync_api import Error as PlaywrightError
 from app import acceptance, main
 from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import finding_input_issues, setup_input_issues, setup_issues, setup_refusal_message, scope_text_refusals, status_conclusion_runs
+from app.report_service import finding_input_issues, format_rule_message, setup_input_issues, setup_issues, setup_refusal_message, scope_text_refusals, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from tests.support import png_bytes, use_temp_workspace
 from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
@@ -867,6 +867,96 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         self.assertIsNone(name.get_attribute("aria-invalid"))
         self.assertIsNone(name.get_attribute("aria-describedby"))
+
+    def test_web_scope_box_lists_refused_lines_and_scope_issues(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        box = page.get_by_role("textbox", name="Web", exact=True).first
+        accessible_boxes = page.get_by_role("textbox", name="Web", exact=True)
+        accessible_box_count = accessible_boxes.count()
+        scope_text = f"{'x' * 3000}\u0007\nhttps://invalid.example.test\u0008"
+        draft = main.workspace.load(report_id).model_dump(mode="json")
+        draft["scope_text"] = {"production": {"web": scope_text}}
+        refusals = scope_text_refusals(draft)
+        expected_lines = [
+            f"Line {line} " + " ".join(
+                format_rule_message(result, draft).removeprefix(f"Line {line} ")
+                for result in refusals if result.get("line") == line - 1
+            )
+            for line in (1, 2)
+        ]
+
+        box.focus()
+        box.evaluate("(element, value) => { element.value = value; element.dispatchEvent(new Event('input', {bubbles:true})); }", scope_text)
+        self.assertIsNone(box.get_attribute("aria-describedby"))
+        box.evaluate("element => element.blur()")
+
+        described_by = box.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message_list = page.locator(f"#{described_by}")
+        expect(message_list).to_be_visible()
+        self.assertEqual(message_list.evaluate("element => element.tagName"), "UL")
+        self.assertEqual(message_list.locator(":scope > li").all_text_contents(), expected_lines)
+        self.assertTrue(all(text.startswith(f"Line {line}") for line, text in enumerate(expected_lines, 1)))
+        self.assertEqual(box.get_attribute("aria-invalid"), "true")
+        self.assertIsNone(message_list.evaluate("element => element.closest('label')"))
+        self.assertEqual(accessible_boxes.count(), accessible_box_count)
+
+        page.get_by_role("button", name="Next: Findings").click()
+        self.assertTrue(box.evaluate("element => document.activeElement === element"))
+        expect(page.locator("#setup-validation-note")).to_have_text(
+            "2 things to fix before Findings. Each one is marked above, and the cursor is on the first."
+        )
+
+        box.fill("https://first.example.test\nhttps://second.example.test")
+        expect(message_list).to_be_hidden()
+        self.assertIsNone(box.get_attribute("aria-describedby"))
+        self.assertIsNone(box.get_attribute("aria-invalid"))
+
+        box.fill("")
+        page.get_by_role("button", name="Next: Findings").click()
+        issue = format_rule_message({"code": "missing_scope_target", "environment": "production"})
+        expect(message_list).to_be_visible()
+        expect(message_list).to_have_text(issue)
+        expect(page.locator("#setup-validation-note")).to_have_text(
+            "1 thing to fix before Findings. It is marked above, and the cursor is on it."
+        )
+        self.assertEqual(box.get_attribute("aria-invalid"), "true")
+        box.fill("https://fixed.example.test")
+        expect(message_list).to_be_hidden()
+        self.assertIsNone(box.get_attribute("aria-describedby"))
+        self.assertIsNone(box.get_attribute("aria-invalid"))
+
+        stored_id = self.ready_report()
+        stored = main.workspace.load(stored_id)
+        stored.scope_targets[0].value = "https://stored.example.test\u0007"
+        main.workspace.save(stored)
+        page.goto(f"{self.base_url}/reports/{stored_id}/setup")
+        stored_box = page.get_by_role("textbox", name="Web", exact=True).first
+        stored_described_by = stored_box.get_attribute("aria-describedby")
+        self.assertTrue(stored_described_by)
+        stored_message = page.locator(f"#{stored_described_by}")
+        stored_draft = main.workspace.load(stored_id).model_dump(mode="json")
+        stored_text = "https://stored.example.test\u0007"
+        stored_draft["scope_text"] = {"production": {"web": stored_text}}
+        [stored_refusal] = scope_text_refusals(stored_draft)
+        expect(stored_message).to_have_text(format_rule_message(stored_refusal, stored_draft))
+
+        gate_id = self.ready_report()
+        gated = main.workspace.load(gate_id)
+        gated.scope_targets = []
+        main.workspace.save(gated)
+        page.goto(f"{self.base_url}/reports/{gate_id}/setup?incomplete=setup")
+        gate_box = page.get_by_role("textbox", name="Web", exact=True).first
+        gate_described_by = gate_box.get_attribute("aria-describedby")
+        self.assertTrue(gate_described_by)
+        gate_message = page.locator(f"#{gate_described_by}")
+        expect(gate_message).to_have_text(issue)
+        self.assertEqual(gate_box.get_attribute("aria-invalid"), "true")
+        expect(page.locator("#setup-validation-note")).to_have_text(
+            "1 thing to fix before Findings. It is marked above, and the cursor is on it."
+        )
 
     def test_setup_next_does_not_open_the_native_validity_bubble(self) -> None:
         page = self.page

@@ -23,7 +23,7 @@ from playwright.sync_api import Error as PlaywrightError
 from app import acceptance, main
 from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import finding_input_issues, setup_input_issues, status_conclusion_runs
+from app.report_service import finding_input_issues, format_rule_message, setup_input_issues, setup_issues, setup_refusal_message, scope_text_refusals, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from tests.support import png_bytes, use_temp_workspace
 from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
@@ -42,11 +42,11 @@ AUTOSAVE_TEST_DEFAULT = """(() => {
 })()"""
 
 
-def setup_issue(field_name: str, value: str) -> str:
+def setup_issue(field_name: str, value: str, environment: str = "production") -> str:
     """The server's message for one invalid Setup value, which the browser must show word for word."""
     windows = {environment: TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2)) for environment in ("production", "non_production")}
     engagement = Engagement(tested_environments=["production", "non_production"], test_windows=windows, test_accounts=[TestAccount(user_role="N/A", username="N/A")])
-    target = windows["production"] if field_name == "test_time" else engagement.test_accounts[0] if field_name in ("user_role", "username") else engagement
+    target = windows[environment] if field_name == "test_time" else engagement.test_accounts[0] if field_name in ("user_role", "username") else engagement
     setattr(target, field_name, value)
     [issue] = setup_input_issues(engagement)
     return issue
@@ -236,7 +236,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_label("Application Name").fill("Bad/App")
         page.get_by_role("button", name="Next: Findings").click()
         self.assertIn("/setup", page.url)
-        self.assertIn("Application name", page.locator("#setup-validation-note").inner_text())
+        self.assertRegex(page.locator("#setup-validation-note").inner_text(), r"^\d+ things to fix before Findings\.")
 
     def test_authoring_workflow_autosave_fragments_and_manager_grouping(self) -> None:
         page = self.page
@@ -519,6 +519,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report = main.workspace.load(report_id)
         report.engagement.network = None
         main.workspace.save(report)
+        expected_message = next(message for message in setup_issues(report) if "network access" in message.lower())
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
         network = page.get_by_label("Network Access")
@@ -526,7 +527,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(network.locator("option").all_text_contents(), ["Select network access", "Internal", "External"])
         self.assertEqual(network.input_value(), "")
         page.get_by_role("button", name="Next: Findings").click()
-        self.assertIn("network access", page.locator("#setup-validation-note").text_content())
+        described_by = network.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), expected_message)
         self.assertTrue(network.evaluate("select => select.classList.contains('validation-error')"))
 
         network.select_option("External")
@@ -535,6 +538,52 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
 
         self.assertEqual(page.get_by_label("Network Access").input_value(), "External")
+
+    def test_missing_test_environment_is_described_by_its_checkbox(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = []
+        main.workspace.save(report)
+        expected_message = next(message for message in setup_issues(report) if "environment" in message.lower())
+        page = self.page
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup?incomplete=setup")
+
+        production = page.get_by_label("Production", exact=True)
+        described_by = production.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), expected_message)
+        self.assertEqual(production.get_attribute("aria-invalid"), "true")
+        message = page.locator(f"#{described_by}")
+        page.get_by_label("Non-Production", exact=True).check()
+        expect(message).to_be_hidden()
+        self.assertIsNone(production.get_attribute("aria-describedby"))
+        self.assertIsNone(production.get_attribute("aria-invalid"))
+
+    def test_mutually_exclusive_app_types_share_their_issue_message(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["mobile", "thick_client"]
+        report.scope_targets = []
+        main.workspace.save(report)
+        expected_message = next(message for message in setup_issues(report) if "not both" in message.lower())
+        page = self.page
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup?incomplete=setup")
+
+        mobile = page.get_by_label("Test Mobile", exact=True)
+        thick_client = page.get_by_label("Test Thick Client", exact=True)
+        described_by = mobile.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(thick_client.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), expected_message)
+        self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
+        self.assertEqual(thick_client.get_attribute("aria-invalid"), "true")
+        message = page.locator(f"#{described_by}")
+        mobile.uncheck()
+        expect(message).to_be_hidden()
+        self.assertIsNone(mobile.get_attribute("aria-describedby"))
+        self.assertIsNone(thick_client.get_attribute("aria-describedby"))
 
     def test_removing_a_tested_environment_clears_its_dates_in_one_undo_step(self) -> None:
         report_id = self.ready_report()
@@ -574,9 +623,405 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(page.locator("#save-button")).to_have_attribute("data-save-state", "unsaved")
         self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Browser QA")
 
+    def test_held_autosave_shows_every_refusal_on_setup(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        name = page.get_by_label("Application Name", exact=True)
+        limitations = page.get_by_label("Limitations", exact=True)
+        name.fill("Bad/App")
+        limitations.fill("x" * 5000)
+
+        page.wait_for_function("document.querySelector('[data-path=\"engagement.limitations\"]').hasAttribute('aria-describedby')")
+
+        self.assertEqual(page.locator(f"#{name.get_attribute('aria-describedby')}").inner_text(), setup_issue("app_name", "Bad/App"))
+        self.assertEqual(page.locator(f"#{limitations.get_attribute('aria-describedby')}").inner_text(), setup_issue("limitations", "x" * 5000))
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Browser QA")
+        self.assertEqual(main.workspace.load(report_id).engagement.limitations, "N/A")
+        self.assertEqual(page.evaluate("document.activeElement.dataset.path"), "engagement.app_name")
+
+    def test_setup_refusal_is_described_below_its_field_and_clears_when_fixed(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        name = page.get_by_label("Application Name", exact=True)
+        name.fill("Bad/App")
+        self.assertIsNone(name.get_attribute("aria-describedby"))
+        name.press("Tab")
+
+        self.assertEqual(name.get_attribute("aria-invalid"), "true")
+        described_by = name.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message = page.locator(f"#{described_by}")
+        self.assertEqual(message.inner_text(), setup_issue("app_name", "Bad/App"))
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+        self.assertEqual(page.get_by_role("textbox", name="Application Name", exact=True).count(), 1)
+
+        name.fill("Bad/Portal")
+        expect(message).to_have_text(setup_issue("app_name", "Bad/Portal"))
+        name.fill("Portal")
+        self.assertEqual(name.get_attribute("aria-invalid"), None)
+        self.assertEqual(name.get_attribute("aria-describedby"), None)
+
+    def test_date_pair_message_is_shared_below_the_row_and_clears_when_fixed(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        start = page.get_by_label("Production start date", exact=True)
+        end = page.get_by_label("Production end date", exact=True)
+        report = main.workspace.load(report_id)
+        report.engagement.test_windows["production"].start_date = date(2026, 1, 3)
+        order_message = next(message for message in setup_input_issues(report.engagement) if "start date is after" in message)
+
+        start.fill("2026-01-03")
+        start.evaluate("input => input.blur()")
+
+        start_described_by = start.get_attribute("aria-describedby")
+        self.assertTrue(start_described_by)
+        self.assertEqual(end.get_attribute("aria-describedby"), start_described_by)
+        message = page.locator(f"#{start_described_by}")
+        expect(message).to_have_text(order_message)
+        self.assertEqual(start.get_attribute("aria-invalid"), "true")
+        self.assertEqual(end.get_attribute("aria-invalid"), "true")
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+        self.assertTrue(message.evaluate("element => element.previousElementSibling?.classList.contains('date-pair')"))
+
+        end.fill("2026-01-04")
+        expect(message).to_be_hidden()
+        self.assertIsNone(start.get_attribute("aria-describedby"))
+        self.assertIsNone(end.get_attribute("aria-describedby"))
+        self.assertIsNone(start.get_attribute("aria-invalid"))
+        self.assertIsNone(end.get_attribute("aria-invalid"))
+
+        for environment, label in (("production", "Production"), ("non_production", "Non-Production")):
+            time_input = page.get_by_label(f"{label} time", exact=True)
+            time_value = "x" * 1000
+            time_input.fill(time_value)
+            self.assertIsNone(time_input.get_attribute("aria-describedby"))
+            time_input.evaluate("input => input.blur()")
+            time_described_by = time_input.get_attribute("aria-describedby")
+            self.assertTrue(time_described_by)
+            time_line = page.locator(f"#{time_described_by}")
+            expect(time_line).to_have_text(setup_issue("test_time", time_value, environment))
+            self.assertIsNone(time_line.evaluate("element => element.closest('label')"))
+            self.assertTrue(time_line.evaluate("element => element.parentElement.classList.contains('setup-field-wrap')"))
+
+            character_value = "Bad@Time"
+            time_input.fill(character_value)
+            expect(time_line).to_have_text(setup_issue("test_time", character_value, environment))
+            time_input.fill("Anytime")
+            expect(time_line).to_be_hidden()
+            self.assertIsNone(time_input.get_attribute("aria-describedby"))
+            self.assertIsNone(time_input.get_attribute("aria-invalid"))
+
+        report.engagement.test_windows["production"].start_date = None
+        missing_date_message = next(message for message in setup_issues(report) if "Production start date" in message)
+        start.fill("")
+        self.assertIsNone(start.get_attribute("aria-describedby"))
+        page.get_by_role("button", name="Next: Findings").click()
+
+        start_described_by = start.get_attribute("aria-describedby")
+        self.assertTrue(start_described_by)
+        self.assertEqual(end.get_attribute("aria-describedby"), start_described_by)
+        expect(page.locator(f"#{start_described_by}")).to_have_text(missing_date_message)
+        self.assertEqual(start.get_attribute("aria-invalid"), "true")
+        self.assertEqual(end.get_attribute("aria-invalid"), "true")
+
+        start.fill("2026-01-03")
+        expect(page.locator(f"#{start_described_by}")).to_be_hidden()
+        self.assertIsNone(start.get_attribute("aria-describedby"))
+        self.assertIsNone(end.get_attribute("aria-describedby"))
+        self.assertIsNone(start.get_attribute("aria-invalid"))
+        self.assertIsNone(end.get_attribute("aria-invalid"))
+
+    def test_test_account_messages_span_the_row_and_clear_when_fixed(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.locator("#add-test-account").click()
+        role = page.get_by_label("User role 2", exact=True)
+        username = page.get_by_label("Username 2", exact=True)
+        role.fill("Service")
+        report = main.workspace.load(report_id)
+        report.engagement.test_accounts.append(TestAccount(user_role="Service", username=""))
+        incomplete_message = next(message for message in setup_issues(report) if "test account 2" in message.lower())
+
+        page.get_by_role("button", name="Next: Findings").click()
+
+        described_by = role.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(username.get_attribute("aria-describedby"), described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(incomplete_message)
+        self.assertEqual(message.evaluate("element => element.closest('td').colSpan"), 3)
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+        self.assertEqual(role.get_attribute("aria-invalid"), "true")
+        self.assertEqual(username.get_attribute("aria-invalid"), "true")
+        self.assertEqual(role.get_attribute("aria-label"), "User role 2")
+        self.assertEqual(username.get_attribute("aria-label"), "Username 2")
+
+        username.fill("service")
+        expect(message).to_be_hidden()
+        self.assertIsNone(role.get_attribute("aria-describedby"))
+        self.assertIsNone(username.get_attribute("aria-describedby"))
+        self.assertIsNone(role.get_attribute("aria-invalid"))
+        self.assertIsNone(username.get_attribute("aria-invalid"))
+
+        report.engagement.test_accounts[1].username = "service "
+        trailing_space_message = next(message for message in setup_input_issues(report.engagement) if "Username 2" in message)
+        username.fill("service ")
+        self.assertIsNone(username.get_attribute("aria-describedby"))
+        username.evaluate("input => input.blur()")
+        expect(message).to_have_text(trailing_space_message)
+        self.assertEqual(role.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(username.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(role.get_attribute("aria-invalid"), "true")
+        self.assertEqual(username.get_attribute("aria-invalid"), "true")
+
+        report.engagement.test_accounts[1].username = "bad/name"
+        invalid_character_message = next(message for message in setup_input_issues(report.engagement) if "Username 2" in message)
+        username.fill("bad/name")
+        expect(message).to_have_text(invalid_character_message)
+        username.fill("service")
+        expect(message).to_be_hidden()
+        self.assertIsNone(role.get_attribute("aria-describedby"))
+        self.assertIsNone(username.get_attribute("aria-describedby"))
+
+        page.locator("#add-test-account").click()
+        role_three = page.get_by_label("User role 3", exact=True)
+        username_three = page.get_by_label("Username 3", exact=True)
+        role_three.fill("N/A")
+        username_three.fill("N/A")
+        report.engagement.test_accounts.append(TestAccount(user_role="N/A", username="N/A"))
+        repeated_message = next(message for message in setup_issues(report) if "test account 3" in message.lower())
+
+        page.get_by_role("button", name="Next: Findings").click()
+
+        repeated_described_by = role_three.get_attribute("aria-describedby")
+        self.assertTrue(repeated_described_by)
+        self.assertEqual(username_three.get_attribute("aria-describedby"), repeated_described_by)
+        repeated_line = page.locator(f"#{repeated_described_by}")
+        expect(repeated_line).to_have_text(repeated_message)
+        self.assertEqual(repeated_line.evaluate("element => element.closest('td').colSpan"), 3)
+        self.assertEqual(role_three.get_attribute("aria-invalid"), "true")
+        self.assertEqual(username_three.get_attribute("aria-invalid"), "true")
+        username_three.fill("unique")
+        expect(repeated_line).to_be_hidden()
+        self.assertIsNone(role_three.get_attribute("aria-describedby"))
+        self.assertIsNone(username_three.get_attribute("aria-describedby"))
+
+    def test_stored_invalid_setup_value_shows_its_refusal_immediately(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.app_name = "Bad/App"
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        name = page.get_by_label("Application Name", exact=True)
+
+        self.assertEqual(name.input_value(), "Bad/App")
+        self.assertEqual(name.get_attribute("aria-invalid"), "true")
+        described_by = name.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), setup_issue("app_name", "Bad/App"))
+
+    def test_setup_missing_segment_is_described_after_next(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        report_id = page.url.split("/reports/")[1].split("/")[0]
+        expected_messages = setup_issues(main.workspace.load(report_id))
+        segment = page.get_by_label("Segment")
+        accessible_name = segment.aria_snapshot().splitlines()[0].split(" [", 1)[0].rstrip(":")
+
+        page.get_by_role("button", name="Next: Findings").click()
+
+        self.assertIn("/setup", page.url)
+        self.assertEqual(segment.aria_snapshot().splitlines()[0].split(" [", 1)[0].rstrip(":"), accessible_name)
+        described_by = segment.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message = page.locator(f"#{described_by}").inner_text()
+        self.assertIn(message, expected_messages)
+        self.assertIn("segment", message.lower())
+        self.assertEqual(segment.get_attribute("aria-invalid"), "true")
+        self.assertEqual(page.evaluate("document.activeElement.dataset.path"), "engagement.segment")
+        notice = page.locator("#setup-validation-note")
+        count = len(expected_messages)
+        self.assertGreater(count, 1)
+        self.assertEqual(notice.inner_text(), f"{count} things to fix before Findings. Each one is marked above, and the cursor is on the first.")
+
+        segment.select_option("JH")
+
+        self.assertIsNone(segment.get_attribute("aria-describedby"))
+        self.assertIsNone(segment.get_attribute("aria-invalid"))
+        self.assertNotIn(message, notice.inner_text())
+        self.assertEqual(notice.inner_text(), f"{count - 1} things to fix before Findings. Each one is marked above, and the cursor is on the first.")
+
+    def test_setup_page_gate_shows_one_count_and_the_missing_field_message(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tester = "Browser QA"
+        report.engagement.segment = None
+        main.workspace.save(report)
+        expected_messages = setup_issues(report)
+        self.assertEqual(len(expected_messages), 1)
+        page = self.page
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup?incomplete=setup")
+
+        segment = page.get_by_label("Segment")
+        described_by = segment.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), expected_messages[0])
+        self.assertEqual(segment.get_attribute("aria-invalid"), "true")
+        self.assertEqual(page.locator("#setup-validation-note").inner_text(), "1 thing to fix before Findings. It is marked above, and the cursor is on it.")
+
+    def test_setup_next_shows_refusals_and_missing_details_together(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        report_id = page.url.split("/reports/")[1].split("/")[0]
+        expected_count = len(setup_issues(main.workspace.load(report_id)))
+        name = page.get_by_label("Application Name", exact=True)
+        segment = page.get_by_label("Segment")
+        name.fill("Bad/App")
+
+        page.get_by_role("button", name="Next: Findings").click()
+
+        name_message = page.locator(f"#{name.get_attribute('aria-describedby')}")
+        segment_message = page.locator(f"#{segment.get_attribute('aria-describedby')}")
+        self.assertEqual(name_message.inner_text(), setup_issue("app_name", "Bad/App"))
+        self.assertIn(segment_message.inner_text(), setup_issues(main.workspace.load(report_id)))
+        self.assertEqual(page.locator("#setup-validation-note").inner_text(), f"{expected_count} things to fix before Findings. Each one is marked above, and the cursor is on the first.")
+        self.assertEqual(page.evaluate("document.activeElement.dataset.path"), "engagement.segment")
+
+    def test_typed_non_production_name_shows_and_clears_its_refusal(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        environment = page.get_by_label("Non-Production", exact=True)
+        if not environment.is_checked():
+            environment.check()
+        page.get_by_label("Non-Production name", exact=True).select_option("OTHERS")
+        name = page.get_by_label("Non-Production name, typed", exact=True)
+        name.fill("QA\\Team")
+        name.press("Tab")
+
+        described_by = name.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message = page.locator(f"#{described_by}")
+        self.assertEqual(message.inner_text(), setup_issue("non_production_label", "QA\\Team"))
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+
+        name.fill("QA Team")
+
+        self.assertIsNone(name.get_attribute("aria-invalid"))
+        self.assertIsNone(name.get_attribute("aria-describedby"))
+
+    def test_web_scope_box_lists_refused_lines_and_scope_issues(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        box = page.get_by_role("textbox", name="Web", exact=True).first
+        accessible_boxes = page.get_by_role("textbox", name="Web", exact=True)
+        accessible_box_count = accessible_boxes.count()
+        scope_text = f"{'x' * 3000}\u0007\nhttps://invalid.example.test\u0008"
+        draft = main.workspace.load(report_id).model_dump(mode="json")
+        draft["scope_text"] = {"production": {"web": scope_text}}
+        refusals = scope_text_refusals(draft)
+        expected_lines = [
+            f"Line {line} " + " ".join(
+                format_rule_message(result, draft).removeprefix(f"Line {line} ")
+                for result in refusals if result.get("line") == line - 1
+            )
+            for line in (1, 2)
+        ]
+
+        box.focus()
+        box.evaluate("(element, value) => { element.value = value; element.dispatchEvent(new Event('input', {bubbles:true})); }", scope_text)
+        self.assertIsNone(box.get_attribute("aria-describedby"))
+        box.evaluate("element => element.blur()")
+
+        described_by = box.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message_list = page.locator(f"#{described_by}")
+        expect(message_list).to_be_visible()
+        self.assertEqual(message_list.evaluate("element => element.tagName"), "UL")
+        self.assertEqual(message_list.locator(":scope > li").all_text_contents(), expected_lines)
+        self.assertTrue(all(text.startswith(f"Line {line}") for line, text in enumerate(expected_lines, 1)))
+        self.assertEqual(box.get_attribute("aria-invalid"), "true")
+        self.assertIsNone(message_list.evaluate("element => element.closest('label')"))
+        self.assertEqual(accessible_boxes.count(), accessible_box_count)
+
+        page.get_by_role("button", name="Next: Findings").click()
+        self.assertTrue(box.evaluate("element => document.activeElement === element"))
+        expect(page.locator("#setup-validation-note")).to_have_text(
+            "2 things to fix before Findings. Each one is marked above, and the cursor is on the first."
+        )
+
+        box.fill("https://first.example.test\nhttps://second.example.test")
+        expect(message_list).to_be_hidden()
+        self.assertIsNone(box.get_attribute("aria-describedby"))
+        self.assertIsNone(box.get_attribute("aria-invalid"))
+
+        box.fill("")
+        page.get_by_role("button", name="Next: Findings").click()
+        issue = format_rule_message({"code": "missing_scope_target", "environment": "production"})
+        expect(message_list).to_be_visible()
+        expect(message_list).to_have_text(issue)
+        expect(page.locator("#setup-validation-note")).to_have_text(
+            "1 thing to fix before Findings. It is marked above, and the cursor is on it."
+        )
+        self.assertEqual(box.get_attribute("aria-invalid"), "true")
+        box.fill("https://fixed.example.test")
+        expect(message_list).to_be_hidden()
+        self.assertIsNone(box.get_attribute("aria-describedby"))
+        self.assertIsNone(box.get_attribute("aria-invalid"))
+
+        stored_id = self.ready_report()
+        stored = main.workspace.load(stored_id)
+        stored.scope_targets[0].value = "https://stored.example.test\u0007"
+        main.workspace.save(stored)
+        page.goto(f"{self.base_url}/reports/{stored_id}/setup")
+        stored_box = page.get_by_role("textbox", name="Web", exact=True).first
+        stored_described_by = stored_box.get_attribute("aria-describedby")
+        self.assertTrue(stored_described_by)
+        stored_message = page.locator(f"#{stored_described_by}")
+        stored_draft = main.workspace.load(stored_id).model_dump(mode="json")
+        stored_text = "https://stored.example.test\u0007"
+        stored_draft["scope_text"] = {"production": {"web": stored_text}}
+        [stored_refusal] = scope_text_refusals(stored_draft)
+        expect(stored_message).to_have_text(format_rule_message(stored_refusal, stored_draft))
+
+        gate_id = self.ready_report()
+        gated = main.workspace.load(gate_id)
+        gated.scope_targets = []
+        main.workspace.save(gated)
+        page.goto(f"{self.base_url}/reports/{gate_id}/setup?incomplete=setup")
+        gate_box = page.get_by_role("textbox", name="Web", exact=True).first
+        gate_described_by = gate_box.get_attribute("aria-describedby")
+        self.assertTrue(gate_described_by)
+        gate_message = page.locator(f"#{gate_described_by}")
+        expect(gate_message).to_have_text(issue)
+        self.assertEqual(gate_box.get_attribute("aria-invalid"), "true")
+        expect(page.locator("#setup-validation-note")).to_have_text(
+            "1 thing to fix before Findings. It is marked above, and the cursor is on it."
+        )
+
+    def test_setup_next_does_not_open_the_native_validity_bubble(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        page.get_by_label("Application Name", exact=True).fill("Bad/App")
+        page.evaluate("() => { window.reportValidityCalls = 0; HTMLElement.prototype.reportValidity = function() { window.reportValidityCalls += 1; return false; }; }")
+
+        page.get_by_role("button", name="Next: Findings").click()
+
+        self.assertEqual(page.evaluate("window.reportValidityCalls"), 0)
+
     def test_segment_and_report_type_are_required(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
+        report_id = page.url.split("/reports/")[1].split("/")[0]
+        expected_messages = setup_issues(main.workspace.load(report_id))
         self.assertEqual(page.get_by_label("Segment").locator("option").all_text_contents(), ["Select segment", "JH", "GWAM", "Asia", "GDT", "GFT"])
         self.assertEqual(page.get_by_label("Report Type").locator("option").all_text_contents(), ["Select report type", "Annual Pentest", "Retest", "Deployment Pentest", "New Test"])
         page.get_by_label("Application Name").fill("Required Fields")
@@ -587,8 +1032,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("textbox", name="Web", exact=True).nth(1).fill("https://test.example.test")
         page.get_by_role("button", name="Next: Findings").click()
         self.assertIn("/setup", page.url)
-        self.assertIn("segment", page.locator("#setup-validation-note").text_content())
-        self.assertIn("report type", page.locator("#setup-validation-note").text_content())
+        for label, field in (("Segment", "segment"), ("Report Type", "report type")):
+            control = page.get_by_label(label)
+            described_by = control.get_attribute("aria-describedby")
+            self.assertTrue(described_by)
+            message = page.locator(f"#{described_by}").inner_text()
+            self.assertIn(message, expected_messages)
+            self.assertIn(field, message.lower())
 
         page.get_by_label("Segment").select_option("GWAM")
         page.get_by_label("Report Type").select_option("new_test")
@@ -926,6 +1376,80 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
         self.assertEqual(page.locator("#app-diagnostics").count(), 0)
 
+    def test_duplicate_component_message_marks_only_the_later_row(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["mobile"]
+        report.scope_targets = []
+        main.workspace.save(report)
+        report_data = report.model_dump(mode="json", by_alias=True)
+        report_data["scope_text"] = {
+            "production": {"mobile": {"component": "Wallet app\nWallet app", "description": "Android\niOS"}}
+        }
+        [duplicate_result] = [result for result in scope_text_refusals(report_data) if result["code"] == "duplicate_component"]
+        expected_message = setup_refusal_message(duplicate_result, report_data).removeprefix("In the Production Mobile scope, ")
+
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 10000")
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        production = page.locator("#scope-grid .scope-panel.production")
+        first = production.get_by_role("textbox", name="Mobile Component", exact=True).first
+        first.fill("Wallet app")
+        production.get_by_role("textbox", name="Mobile Description", exact=True).first.fill("Android")
+        production.get_by_role("button", name="Add component").click()
+        duplicate = production.get_by_role("textbox", name="Mobile Component", exact=True).nth(1)
+        description = production.get_by_role("textbox", name="Mobile Description", exact=True).nth(1)
+        self.assertTrue(duplicate.evaluate("input => input.validity.valid"))
+        self.assertIsNone(duplicate.get_attribute("aria-describedby"))
+        duplicate.press_sequentially("  Wallet app  ")
+
+        self.assertTrue(first.evaluate("input => input.validity.valid"))
+        self.assertFalse(duplicate.evaluate("input => input.validity.valid"))
+        described_by = duplicate.get_attribute("aria-describedby")
+        self.assertIsNone(described_by)
+        duplicate.evaluate("input => input.blur()")
+        description.fill("iOS")
+
+        described_by = duplicate.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(description.get_attribute("aria-describedby"), described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(expected_message)
+        self.assertEqual(message.evaluate("element => element.closest('td').colSpan"), 3)
+        self.assertEqual(
+            message.evaluate("element => element.closest('tr').previousElementSibling.querySelector('[data-scope-field=component]').value"),
+            "  Wallet app  ",
+        )
+        self.assertEqual(first.get_attribute("aria-invalid"), None)
+        self.assertEqual(duplicate.get_attribute("aria-invalid"), "true")
+        self.assertEqual(description.get_attribute("aria-invalid"), "true")
+
+        duplicate.fill("Wallet app copy")
+        expect(message).to_be_hidden()
+        self.assertTrue(first.evaluate("input => input.validity.valid"))
+        self.assertTrue(duplicate.evaluate("input => input.validity.valid"))
+        self.assertIsNone(duplicate.get_attribute("aria-describedby"))
+        self.assertIsNone(description.get_attribute("aria-describedby"))
+        self.assertIsNone(duplicate.get_attribute("aria-invalid"))
+        self.assertIsNone(description.get_attribute("aria-invalid"))
+
+        report.scope_targets = [
+            ScopeTarget(target_id="tgt_mobile_one", environment="production", channel="mobile", value="Wallet app", description="Android", order=0),
+            ScopeTarget(target_id="tgt_mobile_two", environment="production", channel="mobile", value="Wallet app copy", description="", order=1),
+        ]
+        missing_description_message = next(message for message in setup_issues(report) if "component 2" in message.lower())
+        description.fill("")
+        page.get_by_role("button", name="Next: Findings").click()
+        expect(message).to_have_text(missing_description_message)
+        self.assertEqual(duplicate.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(description.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(duplicate.get_attribute("aria-invalid"), "true")
+        self.assertEqual(description.get_attribute("aria-invalid"), "true")
+        description.fill("iOS")
+        expect(message).to_be_hidden()
+        self.assertIsNone(duplicate.get_attribute("aria-describedby"))
+        self.assertIsNone(description.get_attribute("aria-describedby"))
+
     def _two_thick_client_components(self) -> str:
         """A thick-client report with two components, both referenced by its one finding."""
         report_id = self.ready_report(include_finding=True)
@@ -1003,16 +1527,20 @@ class BrowserWorkflowTests(unittest.TestCase):
         description.fill("Main desktop client")
         page.locator("#next").click()
         notice = page.locator("#setup-validation-note")
-        self.assertIn("Add a scope target for Production.", notice.text_content())
+        self.assertEqual(notice.text_content(), "1 thing to fix before Findings. It is marked above, and the cursor is on it.")
         self.assertTrue(component.evaluate("input => input.classList.contains('validation-error')"))
 
         # Component only: now a target exists, and the missing description is named by component.
         component.fill("Acme.exe")
         description.fill("")
         page.locator("#next").click()
-        self.assertIn("Enter a description for component 1.", notice.text_content())
+        self.assertEqual(notice.text_content(), "1 thing to fix before Findings. It is marked above, and the cursor is on it.")
+        described_by = component.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(description.get_attribute("aria-describedby"), described_by)
+        expect(page.locator(f"#{described_by}")).to_be_visible()
         self.assertTrue(description.evaluate("input => input.classList.contains('validation-error')"))
-        self.assertEqual(description.evaluate("input => document.activeElement === input"), True)
+        self.assertEqual(component.evaluate("input => document.activeElement === input"), True)
 
         description.evaluate("input => { input.value = 'Crashes on start\\u0007'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
         self.assertEqual(
@@ -3301,7 +3829,19 @@ class BrowserWorkflowTests(unittest.TestCase):
             typed.evaluate("input => input.validationMessage"),
             setup_issue("non_production_label", "MY@LAB"),
         )
+        self.assertIsNone(typed.get_attribute("aria-describedby"))
+        typed.evaluate("input => input.blur()")
+        described_by = typed.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(setup_issue("non_production_label", "MY@LAB"))
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+        self.assertTrue(message.evaluate("element => element.parentElement.classList.contains('setup-field-wrap')"))
+        typed.fill("MY@LAB2")
+        expect(message).to_have_text(setup_issue("non_production_label", "MY@LAB2"))
         typed.fill("MY LAB/2")
+        expect(message).to_be_hidden()
+        self.assertIsNone(typed.get_attribute("aria-describedby"))
         self.assertEqual(typed.evaluate("input => input.validationMessage"), "")
         page.locator("#save-button").click()
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)

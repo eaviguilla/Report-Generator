@@ -25,16 +25,20 @@ When it shows:
 - A save held on Setup shows the text for every field that holds it. Today `save()` also holds the save for a field the tester is still typing in, so without this the reason would be hidden.
 - Next shows refusals and issues together. Today `validateSetupPage` returns at the first refusal, so missing details show only after every bad value is fixed.
 
-- [ ] Placement and timing as above, for every Setup field, including rows added later and the typed Non-Production name.
-- [ ] The text sits outside the field's `<label>`. Each Setup field is wrapped by its label today, so text inside the label would become part of the field's spoken name. Each field keeps the accessible name it has today.
-- [ ] The notice above Next shows one count and lists nothing: "16 things to fix before Findings. Each one is marked above, and the cursor is on the first." With one: "1 thing to fix before Findings. It is marked above, and the cursor is on it." Arriving from the page gate shows the same count.
-- [ ] Next and a held save put the cursor in the first field with text, in page order. The browser's bubble (`reportValidity`) no longer opens.
-- [ ] A repeated component outlines and describes only the later row. Today both rows are outlined.
-- [ ] Browser tests, one per control shape: the text appears at the right moment, the field's `aria-describedby` names an element that holds it, `aria-invalid` is set, and both clear when the value is fixed. Also cover the count, the arrival from the page gate, a held save, and a field's accessible name staying the same.
-- [ ] `docs/DATA_MAP.md` §12, the "setup completeness" row: how `validateSetupPage` and the notice now read the results.
+- [x] Placement and timing as above, for every Setup field, including rows added later and the typed Non-Production name.
+- [x] The text sits outside the field's `<label>`. Each Setup field is wrapped by its label today, so text inside the label would become part of the field's spoken name. Each field keeps the accessible name it has today.
+- [x] The notice above Next shows one count and lists nothing: "16 things to fix before Findings. Each one is marked above, and the cursor is on the first." With one: "1 thing to fix before Findings. It is marked above, and the cursor is on it." Arriving from the page gate shows the same count.
+- [x] Next and a held save put the cursor in the first field with text, in page order. The browser's bubble (`reportValidity`) no longer opens.
+- [x] A repeated component outlines and describes only the later row. Today both rows are outlined.
+- [x] Browser tests, one per control shape: the text appears at the right moment, the field's `aria-describedby` names an element that holds it, `aria-invalid` is set, and both clear when the value is fixed. Also cover the count, the arrival from the page gate, a held save, and a field's accessible name staying the same.
+- [x] `docs/DATA_MAP.md` §12, the "setup completeness" row: how `validateSetupPage` and the notice now read the results.
 
 Out of scope: the Content page's Additional Information fields keep the browser's bubble.
 
 ## Next steps
 
-1. `/implement`: Placement, timing and the notice are decided. Build it once ticket 01 is done.
+1. Await merge into `feat/setup-inline-field-errors`.
+
+## Comments
+
+2026-10-05: The affected run exposed legacy browser assertions that still expected issue text in the notice and focus on the description input; they now check inline messages, the count-only notice, and first-control focus. Review also found that coverage checkbox issues lacked accessible inline messages, so the environment and app-type groups now share messages linked to their checkboxes and clear them when fixed. Empty app-type drafts route to repair before Setup, so no editor test was added for that unreachable state.

@@ -974,13 +974,17 @@
   };
   // Built from the server's CHARACTER_RULES, judging letters and digits by the browser's own Unicode
   // categories. Setup has always worked this way; the Content page uses serverCharacterRule instead.
-  const browserCharacterRule = (rule, field) => {
+  const browserCharacterRule = (rule, field, context = {}) => {
     const invalidCharacters = value => window.vrRules.invalidCharacters(value, rule);
     return {
       label:rule.label,
       invalidCharacters,
       valid:value => !invalidCharacters(value).length && !window.vrRules.tooLong(value, rule.max_length),
-      message:(label, value) => ({code:"too_long", field, label, value, limit:rule.max_length}),
+      result:(label, value) => {
+        const characters = invalidCharacters(value);
+        return characters.length ? {code:"invalid_characters", field, label, characters, value, ...context} : null;
+      },
+      message:(label, value) => ({code:"too_long", field, label, value, limit:rule.max_length, ...context}),
     };
   };
   const serverCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
@@ -1442,7 +1446,7 @@
     const OTHERS_OPTION = "OTHERS";
     // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
     let typingCustomLabel = false;
-    const setupRule = field => browserCharacterRule(vocabulary.character_rules[field], field);
+    const setupRule = (field, context = {}) => browserCharacterRule(vocabulary.character_rules[field], field, context);
     const setupRules = {
       app_name: setupRule("app_name"),
       ci_number: setupRule("ci_number"),
@@ -1450,7 +1454,7 @@
       app_owner: setupRule("app_owner"),
       tester: setupRule("tester"),
       limitations: setupRule("limitations"),
-      time: setupRule("test_time"),
+      time: environment => setupRule("test_time", {environment}),
       userRole: setupRule("user_role"),
       non_production_label: setupRule("non_production_label"),
       username: {
@@ -2119,7 +2123,7 @@
         startDate.oninput = () => { testWindow.start_date = startDate.value || null; if (startDate.value) startDate.classList.remove("validation-error"); scheduleSave(); };
         endDate.oninput = () => { testWindow.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
         timeInput.oninput = () => { testWindow.test_time = timeInput.value; scheduleSave(); };
-        wireSetupRule(timeInput, setupRules.time, `${label} time`);
+        wireSetupRule(timeInput, setupRules.time(environment), `${label} time`);
         [startDate, endDate].forEach(input => { input.dataset.setupValidated = "true"; });
         let revealDateMessage = Boolean(startDate.value && endDate.value && startDate.value > endDate.value);
         const validateDateOrder = () => {

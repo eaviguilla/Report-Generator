@@ -7,7 +7,7 @@ from dataclasses import asdict
 from typing import get_args
 
 from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, ReportType, Segment, Severity, Status
-from .report_service import CHARACTER_RULES, PLACEHOLDER_TEXT, RESOLVED_REMEDIATION
+from .report_service import CHARACTER_RULES, MAX_TEST_ACCOUNTS, PLACEHOLDER_TEXT, RESOLVED_REMEDIATION, SCOPE_LIMITS
 
 
 def client_vocabulary() -> dict:
@@ -22,6 +22,8 @@ def client_vocabulary() -> dict:
         "component_channels": list(COMPONENT_CHANNELS),
         "non_production_label_presets": list(NON_PRODUCTION_LABEL_PRESETS),
         "character_rules": {field: asdict(rule) for field, rule in CHARACTER_RULES.items()},
+        "max_test_accounts": MAX_TEST_ACCOUNTS,
+        "scope_limits": SCOPE_LIMITS,
         "placeholder_pattern": {"source": PLACEHOLDER_TEXT.pattern, "flags": "i" if PLACEHOLDER_TEXT.flags & re.IGNORECASE else ""},
         "resolved_remediation": RESOLVED_REMEDIATION,
     }

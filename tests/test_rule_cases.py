@@ -23,7 +23,9 @@ def setup_report(**engagement) -> dict:
             "app_name": "Northstar Banking",
             "segment": "JH",
             "report_type": "annual_pentest",
+            "network": "Internal",
             "tester": "QA Tester",
+            "report_date": "2026-01-05",
             "tested_environments": ["production", "non_production"],
             "tested_channels": ["web"],
             "test_windows": {
@@ -76,7 +78,11 @@ def repeated(environment: str, channel: str, component: str) -> dict:
 
 
 def bad_scope(environment: str, channel: str, box: str, line: int, *characters: str) -> dict:
-    return refusal("invalid_characters", field="component_scope", environment=environment, app_type=channel, box=box, line=line, characters=list(characters))
+    return refusal("invalid_characters", field="scope", environment=environment, app_type=channel, box=box, line=line, characters=list(characters))
+
+
+def long_scope(environment: str, channel: str, box: str, line: int, limit: int) -> dict:
+    return refusal("too_long", field="scope", environment=environment, app_type=channel, box=box, line=line, limit=limit)
 
 
 def thick_client(component: str, description: str, **engagement) -> dict:
@@ -97,6 +103,14 @@ def accounts(*pairs: tuple[str, str]) -> list[dict]:
     return [{"user_role": role, "username": username} for role, username in pairs]
 
 
+def too_long(field: str, limit: int, **context) -> dict:
+    return refusal("too_long", field=field, **context, limit=limit)
+
+
+# A letter outside the Basic Multilingual Plane: one code point, two UTF-16 units, as maxlength counts it.
+WIDE_LETTER = "\U0001d400"
+
+
 FIELD_CASES = [
     ("an application name character", setup_report(app_name="Bad/App"), [bad_field("app_name", "/")]),
     ("a letter outside ASCII in the application name", setup_report(app_name="Café Portal-2: (Web)"), []),
@@ -112,15 +126,36 @@ FIELD_CASES = [
     ("a username of N/A", setup_report(test_accounts=accounts(("N/A", "N/A"))), []),
     ("a blank account", setup_report(test_accounts=accounts(("", ""))), []),
     ("a username with a domain and a space", setup_report(test_accounts=accounts(("Admin", "DOMAIN\\qa user@example"))), []),
-    ("a username ending in a period", setup_report(test_accounts=accounts(("Admin", "qa.user."))), [refusal("invalid_username", account=1)]),
+    ("a username may start and end with punctuation", setup_report(test_accounts=accounts(("Service", "_svc"), ("Service", "svc-"), ("Admin", "qa.user."))), []),
     ("a username starting with a space", setup_report(test_accounts=accounts(("Admin", " qa"))), [refusal("invalid_username", account=1)]),
-    ("a username with a letter outside ASCII", setup_report(test_accounts=accounts(("Admin", "José"))), [refusal("invalid_username", account=1)]),
+    ("a username ending in a space", setup_report(test_accounts=accounts(("Admin", "qa "))), [refusal("invalid_username", account=1)]),
+    ("a username with a letter outside ASCII names it", setup_report(test_accounts=accounts(("Admin", "José"))), [bad_field("username", "é", account=1)]),
+    ("apostrophes and periods in names", setup_report(app_owner="O'Brien-Smith", tester="J. O’Neil"), []),
+    ("a digit in the tester", setup_report(tester="Tester 2"), [bad_field("tester", "2")]),
+    ("a hyphenated CI number", setup_report(ci_number="CI-12345", bsn_number="BSN-9"), []),
     ("Production dates out of order", setup_report(test_windows=undated("production", start_date="2026-01-03")), [refusal("test_dates_out_of_order", environment="production")]),
     ("Non-Production dates out of order", setup_report(test_windows=undated("non_production", end_date="2026-01-02")), [refusal("test_dates_out_of_order", environment="non_production")]),
     ("one day is in order", setup_report(test_windows=undated("production", end_date="2026-01-01")), []),
     ("a Non-Production name character", setup_report(non_production_label="UAT!"), [bad_field("non_production_label", "!")]),
     ("a Non-Production name is checked trimmed", setup_report(non_production_label="\u0085UAT "), []),
     ("a bad Non-Production name with Non-Production not tested", setup_report(tested_environments=["production"], non_production_label="UAT!"), []),
+    ("every field at its limit", setup_report(
+        app_name="a" * 100, ci_number="1" * 30, bsn_number="2" * 30, app_owner="o" * 60, tester="t" * 60, limitations="l" * 2000,
+        test_windows=timed("production", "9" * 40), test_accounts=accounts(("r" * 60, "u" * 100)),
+    ), []),
+    ("every field one past its limit, in field order", setup_report(
+        app_name="a" * 101, ci_number="1" * 31, bsn_number="2" * 31, app_owner="o" * 61, tester="t" * 61, limitations="l" * 2001,
+        test_windows=timed("production", "9" * 41), test_accounts=accounts(("r" * 61, "u" * 101)),
+    ), [
+        too_long("app_name", 100), too_long("ci_number", 30), too_long("bsn_number", 30), too_long("app_owner", 60), too_long("tester", 60),
+        too_long("test_time", 40, environment="production"), too_long("user_role", 60, account=1), too_long("username", 100, account=1),
+        too_long("limitations", 2000),
+    ]),
+    ("length counts UTF-16 units", setup_report(app_name=WIDE_LETTER * 50), []),
+    ("a letter outside the BMP counts twice", setup_report(app_name=WIDE_LETTER * 51), [too_long("app_name", 100)]),
+    ("an untested environment's time is not measured", setup_report(tested_environments=["production"], test_windows=timed("non_production", "9" * 41)), []),
+    ("fifty test accounts", setup_report(test_accounts=accounts(*[("Admin", f"user{index}") for index in range(50)])), []),
+    ("fifty-one test accounts", setup_report(test_accounts=accounts(*[("Admin", f"user{index}") for index in range(51)])), [refusal("too_many_accounts", limit=50)]),
     (
         "a whitespace-only application name is refused and missing",
         setup_report(app_name="\x1c"),
@@ -129,23 +164,23 @@ FIELD_CASES = [
     (
         "every field refusal, in field order, after the scope refusals and before the issues",
         scoped(
-            {("production", "thick_client"): components("Acme!.exe", "")},
+            {("production", "thick_client"): components("Acme\x07.exe", "")},
             app_name="Bad/App", ci_number="CI_1", bsn_number="BSN.1", app_owner="Owner 2", tester="QA_Tester",
             tested_channels=["web", "thick_client"], non_production_label="UAT!", limitations="No testing @ prod",
             test_windows={
                 "production": {"start_date": "2026-01-03", "end_date": "2026-01-02", "test_time": "08:00_17:00"},
                 "non_production": {"start_date": None, "end_date": "2026-01-01", "test_time": "Any|time"},
             },
-            test_accounts=accounts(("Admin_2", "bad/user"), ("N/A", "user.")),
+            test_accounts=accounts(("Admin_2", "bad/user"), ("N/A", " user")),
         ),
         [
-            bad_scope("production", "thick_client", "component", 0, "!"),
+            bad_scope("production", "thick_client", "component", 0, "\x07"),
             bad_field("app_name", "/"), bad_field("ci_number", "_"), bad_field("bsn_number", "."), bad_field("app_owner", "2"), bad_field("tester", "_"),
             refusal("test_dates_out_of_order", environment="production"), bad_field("test_time", "_", environment="production"),
             bad_field("test_time", "|", environment="non_production"),
             bad_field("user_role", "_", account=1), bad_field("username", "/", account=1), refusal("invalid_username", account=2),
             bad_field("limitations", "@"), bad_field("non_production_label", "!"),
-            undescribed("production", "thick_client", "Acme!.exe"), issue("missing_test_dates", environment="non_production"),
+            undescribed("production", "thick_client", "Acme\x07.exe"), issue("missing_test_dates", environment="non_production"),
         ],
     ),
 ]
@@ -157,6 +192,23 @@ SETUP_CASES = [
     ("whitespace-only app name", setup_report(app_name=" \t "), [bad_field("app_name", "\t"), issue("missing_app_name")]),
     ("missing segment", setup_report(segment=None), [issue("missing_segment")]),
     ("missing report type", setup_report(report_type=None), [issue("missing_report_type")]),
+    ("missing network access", setup_report(network=None), [issue("missing_network")]),
+    ("missing report date", setup_report(report_date=None), [issue("missing_report_date")]),
+    ("a blank account row is ignored", setup_report(test_accounts=accounts(("", ""), ("  ", ""), ("Admin", "admin"))), []),
+    ("no account rows at all", setup_report(test_accounts=[]), []),
+    (
+        "a half-filled account row names the missing half",
+        setup_report(test_accounts=accounts(("Admin", ""), ("", "viewer"), ("N/A", "N/A"))),
+        [issue("incomplete_test_account", account=1, missing="username"), issue("incomplete_test_account", account=2, missing="user_role")],
+    ),
+    ("N/A counts as filled", setup_report(test_accounts=accounts(("N/A", ""))), [issue("incomplete_test_account", account=1, missing="username")]),
+    (
+        "a repeated account names the row it repeats",
+        setup_report(test_accounts=accounts(("Admin", "admin"), ("Viewer", "viewer"), (" Admin ", "admin"), ("Admin", "admin"))),
+        [issue("repeated_test_account", account=3, first=1), issue("repeated_test_account", account=4, first=1)],
+    ),
+    ("one username under two roles", setup_report(test_accounts=accounts(("Admin", "qa"), ("Viewer", "qa"))), []),
+    ("case is kept when comparing accounts", setup_report(test_accounts=accounts(("Admin", "QA"), ("Admin", "qa"))), []),
     ("missing tester", setup_report(tester=""), [issue("missing_tester")]),
     ("whitespace-only tester", setup_report(tester="  "), [issue("missing_tester")]),
     ("no tested environment", setup_report(tested_environments=[]), [issue("no_tested_environment")]),
@@ -169,12 +221,16 @@ SETUP_CASES = [
     ("one component app type", setup_report(tested_channels=["web", "thick_client"]), []),
     (
         "every issue, in order",
-        setup_report(app_name="", segment=None, report_type=None, tester="", tested_channels=["mobile", "thick_client"], test_windows={}),
+        setup_report(
+            app_name="", segment=None, report_type=None, network=None, tester="", report_date=None, tested_channels=["mobile", "thick_client"], test_windows={},
+            test_accounts=accounts(("Admin", ""), ("Viewer", "viewer"), ("Viewer", "viewer")),
+        ),
         [
-            issue("missing_app_name"), issue("missing_segment"), issue("missing_report_type"), issue("missing_tester"),
+            issue("missing_app_name"), issue("missing_segment"), issue("missing_report_type"), issue("missing_network"), issue("missing_tester"), issue("missing_report_date"),
             issue("mobile_and_thick_client", app_types=["mobile", "thick_client"]),
             issue("missing_test_dates", environment="production"), issue("missing_scope_target", environment="production"),
             issue("missing_test_dates", environment="non_production"), issue("missing_scope_target", environment="non_production"),
+            issue("incomplete_test_account", account=1, missing="username"), issue("repeated_test_account", account=3, first=2),
         ],
     ),
     (
@@ -260,50 +316,72 @@ SETUP_CASES = [
         scoped({("production", "api"): "https://api.example.test\n https://api.example.test"}, tested_channels=["web", "api"]),
         [],
     ),
-    ("a component character", thick_client("Acme!.exe", "Main client"), [bad_scope("production", "thick_client", "component", 0, "!")]),
-    ("description characters, in the order typed", thick_client("Acme.exe", "Crashes <on> start!<"), [bad_scope("production", "thick_client", "description", 0, "<", ">", "!")]),
+    ("any printable character in a component or description", thick_client("App+Plus@2 #1!.exe", "Crashes <on> start? ~=$%"), []),
+    ("a character Word cannot store in a component", thick_client("Acme\x07.exe", "Main client"), [bad_scope("production", "thick_client", "component", 0, "\x07")]),
+    (
+        "characters Word cannot store in a description, in the order typed",
+        thick_client("Acme.exe", "Bad\x0bdata\ufffe\x0b"),
+        [bad_scope("production", "thick_client", "description", 0, "\x0b", "\ufffe")],
+    ),
+    ("a tab is a character Word can store", thick_client("Acme\t.exe", "Main\tclient"), []),
     ("an install path is allowed", thick_client("C:\\Program Files\\Acme\\acme.exe [x64]", "Client's \"main\" binary; build 2.1 (x64)"), []),
     ("a letter outside ASCII is allowed", thick_client("Café.exe", "Ünïcode client"), []),
     ("surrounding whitespace is trimmed before the check", thick_client("\tAcme.exe ", " Main client\t"), []),
     ("whitespace JavaScript's trim keeps is trimmed", thick_client("\u0085Acme.exe\x1c", "\u3000Main client\x1f"), []),
-    ("a byte-order mark is not whitespace", thick_client("\ufeffAcme.exe", "Main client"), [bad_scope("production", "thick_client", "component", 0, "\ufeff")]),
-    ("a # description is checked", thick_client("Acme.exe", "# main client"), [bad_scope("production", "thick_client", "description", 0, "#")]),
+    ("a byte-order mark is allowed", thick_client("\ufeffAcme.exe", "Main client"), []),
     (
         "a description against a blank or # component is not checked",
-        thick_client("\n# retired!\nAcme.exe", "stray!\nold?\nMain client"),
+        thick_client("\n# retired\x07\nAcme.exe", "stray\x07\nold\x07\nMain client"),
         [],
     ),
-    ("a line separator is not a line break", thick_client("Alpha\u2028Beta", "One"), [bad_scope("production", "thick_client", "component", 0, "\u2028")]),
-    ("web and API are not checked", scoped({("production", "web"): "https://app.example.test/path?x=1&y=2"}), []),
+    ("a component and a description at their limits", thick_client("c" * 200, "d" * 500), []),
+    (
+        "a component and a description one past their limits",
+        thick_client("c" * 201, "d" * 501),
+        [long_scope("production", "thick_client", "component", 0, 200), long_scope("production", "thick_client", "description", 0, 500)],
+    ),
+    ("a web line at its limit", scoped({("production", "web"): "h" * 500}), []),
+    (
+        "a web line one past its limit names its line",
+        scoped({("production", "web"): "# notes\n\nhttps://app.example.test\n" + "h" * 501}),
+        [long_scope("production", "web", "component", 3, 500)],
+    ),
+    ("a long # line is not a target", scoped({("production", "web"): "#" + "h" * 600 + "\nhttps://app.example.test"}), []),
+    (
+        "a character Word cannot store in a web or API line",
+        scoped({("production", "web"): "https://app.example.test\x00", ("production", "api"): "api\x1f.example.test"}, tested_channels=["web", "api"]),
+        [bad_scope("production", "web", "component", 0, "\x00"), bad_scope("production", "api", "component", 0, "\x1f")],
+    ),
+    ("any kind of scope line on web and API", scoped({("production", "web"): "https://app.example.test/path?x=1&y=2\n*.example.test\n10.0.0.0/24\napp.example.test/api/v1\nintranet"}), []),
     (
         "untested environments and uncovered app types are not checked",
         scoped(
-            {("non_production", "thick_client"): components("Bad!\nBad!", ""), ("production", "mobile"): components("Bad!", "")},
+            {("non_production", "thick_client"): components("Bad\x07\nBad\x07", ""), ("production", "mobile"): components("Bad\x07", "")},
             tested_environments=["production"], tested_channels=["web", "thick_client"],
         ),
         [],
     ),
     (
         "a repeated component's characters are checked on every row",
-        thick_client("Acme!\nAcme!", "Main\nSecond?"),
+        thick_client("Acme\x07\nAcme\x07", "Main\nSecond\x07"),
         [
-            repeated("production", "thick_client", "Acme!"),
-            bad_scope("production", "thick_client", "component", 0, "!"),
-            bad_scope("production", "thick_client", "component", 1, "!"), bad_scope("production", "thick_client", "description", 1, "?"),
+            repeated("production", "thick_client", "Acme\x07"),
+            bad_scope("production", "thick_client", "component", 0, "\x07"),
+            bad_scope("production", "thick_client", "component", 1, "\x07"), bad_scope("production", "thick_client", "description", 1, "\x07"),
         ],
     ),
     (
         "refusals come first, box by box, then issues",
         scoped(
             {
-                ("production", "thick_client"): components("Acme.exe\nTool!\nAcme.exe", "\nTool?\nAgain"),
+                ("production", "thick_client"): components("Acme.exe\nTool\x07\nAcme.exe", "\nTo\x0bol\nAgain"),
                 ("non_production", "thick_client"): components("Agent.exe\nAgent.exe", "Agent\nAgent"),
             },
             app_name="", tested_channels=["web", "thick_client"],
         ),
         [
             repeated("production", "thick_client", "Acme.exe"),
-            bad_scope("production", "thick_client", "component", 1, "!"), bad_scope("production", "thick_client", "description", 1, "?"),
+            bad_scope("production", "thick_client", "component", 1, "\x07"), bad_scope("production", "thick_client", "description", 1, "\x0b"),
             repeated("non_production", "thick_client", "Agent.exe"),
             issue("missing_app_name"), undescribed("production", "thick_client", "Acme.exe"),
         ],

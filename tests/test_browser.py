@@ -23,7 +23,7 @@ from playwright.sync_api import Error as PlaywrightError
 from app import acceptance, main
 from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import COMPONENT_SCOPE_SYMBOLS, finding_input_issues, invalid_character_issue, setup_input_issues, status_conclusion_runs
+from app.report_service import finding_input_issues, invalid_character_issue, setup_input_issues, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from tests.support import png_bytes, use_temp_workspace
 from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
@@ -124,6 +124,17 @@ class BrowserWorkflowTests(unittest.TestCase):
         except PlaywrightError:
             return 0
 
+    def choose_required_engagement_details(self) -> None:
+        """Network access and the report date start blank and are required before Findings."""
+        self.page.get_by_label("Network Access").select_option("Internal")
+        self.page.get_by_label("Report Date").fill("2026-01-03")
+
+    def choose_imported_network_access(self) -> None:
+        """An import leaves network access unset, because the cover always prints Internal."""
+        self.page.get_by_label("Network Access").select_option("Internal")
+        self.page.locator('#save-button:not([data-save-state="saved"])').wait_for(timeout=5_000)
+        self.page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
     def ready_report(self, include_finding: bool = False) -> str:
         report = main.workspace.create_report()
         report.app_id = "CI-BROWSER"
@@ -131,6 +142,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.engagement.ci_number = "CI-BROWSER"
         report.engagement.segment = "JH"
         report.engagement.report_type = "annual_pentest"
+        report.engagement.network = "Internal"
+        report.engagement.report_date = date(2026, 1, 3)
         report.engagement.tested_environments = ["production"]
         report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
         report.scope_targets = [ScopeTarget(target_id="tgt_browser", environment="production", channel="web", value="https://prod.example.test")]
@@ -240,6 +253,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_label("CI Number").fill("CI-BROWSER")
         page.get_by_label("BSN Number").fill("BSN-BROWSER")
         page.get_by_label("Application Owner").fill("QA")
+        self.choose_required_engagement_details()
         page.locator('input[aria-label="Production start date"]').fill("2026-01-01")
         page.locator('input[aria-label="Production end date"]').fill("2026-01-02")
         page.locator('input[aria-label="Non-Production start date"]').fill("2026-01-01")
@@ -506,14 +520,20 @@ class BrowserWorkflowTests(unittest.TestCase):
         next_button.press("Enter")
         page.wait_for_url(f"**/reports/{report_id}/findings")
 
-    def test_network_access_defaults_to_internal_and_persists_external(self) -> None:
+    def test_network_access_starts_unchosen_blocks_next_and_persists_external(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.network = None
+        main.workspace.save(report)
         page = self.page
-        page.goto(f"{self.base_url}/new")
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
         network = page.get_by_label("Network Access")
 
-        # No blank option: the value can never be empty, so there is no state the model rejects.
-        self.assertEqual(network.locator("option").all_text_contents(), ["Internal", "External"])
-        self.assertEqual(network.input_value(), "Internal")
+        self.assertEqual(network.locator("option").all_text_contents(), ["Select network access", "Internal", "External"])
+        self.assertEqual(network.input_value(), "")
+        page.get_by_role("button", name="Next: Findings").click()
+        self.assertIn("network access", page.locator("#setup-validation-note").text_content())
+        self.assertTrue(network.evaluate("select => select.classList.contains('validation-error')"))
 
         network.select_option("External")
         page.get_by_role("button", name="Save").click()
@@ -521,6 +541,44 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
 
         self.assertEqual(page.get_by_label("Network Access").input_value(), "External")
+
+    def test_removing_a_tested_environment_clears_its_dates_in_one_undo_step(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 5), end_date=date(2026, 1, 6), test_time="08:00-17:00")
+        report.scope_targets.append(ScopeTarget(target_id="tgt_test", environment="non_production", channel="web", value="https://test.example.test"))
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+
+        page.get_by_label("Non-Production", exact=True).uncheck()
+        page.get_by_role("button", name="Make the change anyway").click()
+        page.locator('#save-button:not([data-save-state="saved"])').wait_for(timeout=5_000)
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
+        window = main.workspace.load(report_id).engagement.test_windows["non_production"]
+        self.assertEqual((window.start_date, window.end_date, window.test_time), (None, None, "08:00-17:00"))
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        restored = main.workspace.load(report_id).engagement
+        self.assertIn("non_production", restored.tested_environments)
+        self.assertEqual((restored.test_windows["non_production"].start_date, restored.test_windows["non_production"].end_date), (date(2026, 1, 5), date(2026, 1, 6)))
+
+    def test_an_over_length_setup_field_shows_the_server_message_and_holds_the_save(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        name = page.get_by_label("Application Name")
+
+        name.fill("a" * 101)
+
+        self.assertEqual(name.evaluate("input => input.validationMessage"), setup_issue("app_name", "a" * 101))
+        self.assertEqual(name.input_value(), "a" * 101, "the value must not be cut short")
+        page.get_by_role("button", name="Save").click()
+        expect(page.locator("#save-button")).to_have_attribute("data-save-state", "unsaved")
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Browser QA")
 
     def test_segment_and_report_type_are_required(self) -> None:
         page = self.page
@@ -540,6 +598,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         page.get_by_label("Segment").select_option("GWAM")
         page.get_by_label("Report Type").select_option("new_test")
+        self.choose_required_engagement_details()
         page.get_by_role("button", name="Next: Findings").click()
         page.wait_for_url("**/findings")
 
@@ -560,26 +619,26 @@ class BrowserWorkflowTests(unittest.TestCase):
                 [label for _, label in vocabulary["statuses"]],
             )
 
-    def test_mobile_scope_allows_names_and_rejects_unapproved_special_characters(self) -> None:
+    def test_mobile_scope_allows_any_printable_name_and_refuses_what_word_cannot_store(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
         page.get_by_label("Test Mobile").check()
         page.get_by_label("Test Web").uncheck()
         production = page.locator("#scope-grid .scope-panel.production")
-        # A "#" row is a note to the tester, and is held to no character set at all.
+        # A "#" row is a note to the tester, and is held to no rule at all.
         note = production.get_by_role("textbox", name="Mobile Component", exact=True).first
-        note.fill("# ignored ! []")
+        note.evaluate("input => { input.value = '# ignored \\u0007 []'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
         production.get_by_role("button", name="Add component").click()
         mobile = production.get_by_role("textbox", name="Mobile Component", exact=True).nth(1)
 
-        mobile.fill("Client's \"Mobile\" App: iOS/Android_v2.1, QA-&")
+        mobile.fill("Client's \"Mobile\" App! iOS/Android_v2.1 @ QA+&")
         self.assertEqual(mobile.evaluate("input => input.validationMessage"), "")
         self.assertEqual(note.evaluate("input => input.validationMessage"), "")
 
-        mobile.fill("Mobile App!")
+        mobile.evaluate("input => { input.value = 'Mobile\\u0007App'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
         self.assertEqual(
             mobile.evaluate("input => input.validationMessage"),
-            invalid_character_issue("Production Mobile scope", "Mobile App!", COMPONENT_SCOPE_SYMBOLS),
+            invalid_character_issue("Production Mobile scope", "Mobile\x07App", "", portable_names=True),
         )
         self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
 
@@ -818,6 +877,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_label("Application Name").fill("Row Scope")
         page.get_by_label("Report Type").select_option("annual_pentest")
         page.get_by_label("Tester").fill("QA Tester")
+        self.choose_required_engagement_details()
         page.locator('input[aria-label="Production start date"]').fill("2026-01-01")
         page.locator('input[aria-label="Production end date"]').fill("2026-01-02")
 
@@ -938,6 +998,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_label("Application Name").fill("Binary Scope")
         page.get_by_label("Report Type").select_option("annual_pentest")
         page.get_by_label("Tester").fill("QA Tester")
+        self.choose_required_engagement_details()
         page.locator('input[aria-label="Production start date"]').fill("2026-01-01")
         page.locator('input[aria-label="Production end date"]').fill("2026-01-02")
 
@@ -959,11 +1020,10 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(description.evaluate("input => input.classList.contains('validation-error')"))
         self.assertEqual(description.evaluate("input => document.activeElement === input"), True)
 
-        # Both boxes share one character set, and the message names which of the two rejected it.
-        description.fill("Crashes on start!")
+        description.evaluate("input => { input.value = 'Crashes on start\\u0007'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
         self.assertEqual(
             description.evaluate("input => input.validationMessage"),
-            invalid_character_issue("Production Thick Client scope description", "Crashes on start!", COMPONENT_SCOPE_SYMBOLS),
+            invalid_character_issue("Production Thick Client scope description", "Crashes on start\x07", "", portable_names=True),
         )
 
         description.fill("Main desktop client")
@@ -2446,6 +2506,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
+        self.choose_imported_network_access()
 
         server_issues = generation_issues(main.workspace.load(imported_id))
         self.assertTrue(server_issues, "the fixture must still have gaps, or this only repeats the ready-side test")
@@ -5728,7 +5789,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         """The Section/CVSS table round trip is parser-tested in isolation, and the Asia CVSS
         readiness rule is contract-tested against a directly-saved report. Neither proves that an
         editable DOCX import of the same finding lands the browser at the same "ready" verdict, so
-        this drives the real upload and checks Generate is enabled with no further edit."""
+        this drives the real upload and checks Generate is enabled once the tester chooses network
+        access, the one value the document cannot give back."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         report.engagement.segment = "Asia"
@@ -5756,6 +5818,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
+        self.choose_imported_network_access()
 
         self.page.goto(f"{self.base_url}/reports/{imported_id}/edit")
         self.page.wait_for_selector("#issue-count")

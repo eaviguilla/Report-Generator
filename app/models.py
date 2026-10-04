@@ -189,15 +189,10 @@ class ScopeTarget(BaseModel):
 
 
 class TestWindow(BaseModel):
+    # Date order is a Setup refusal for tested environments only, never a load or validation error.
     start_date: date | None = None
     end_date: date | None = None
     test_time: str = "Anytime"
-
-    @model_validator(mode="after")
-    def validate_order(self) -> "TestWindow":
-        if self.start_date and self.end_date and self.end_date < self.start_date:
-            raise ValueError("test window end date cannot precede its start date")
-        return self
 
 
 class TestAccount(BaseModel):
@@ -252,9 +247,8 @@ class Engagement(BaseModel):
     app_owner: str = ""
     segment: Segment | None = None
     report_type: ReportType | None = None
-    # Defaulted rather than nullable, so no draft on disk and no fixture becomes incomplete. The
-    # cost is that an untouched External engagement prints Internal; see DATA_MAP section 13.
-    network: NetworkAccess = "Internal"
+    # Unset until the tester chooses; a missing choice is a Setup issue, never a load or save error.
+    network: NetworkAccess | None = None
     start_date: date | None = None
     end_date: date | None = None
     tested_environments: list[Environment] = Field(default_factory=lambda: ["production", "non_production"])

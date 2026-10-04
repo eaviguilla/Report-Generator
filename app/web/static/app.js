@@ -193,6 +193,7 @@
     RECOVERED: "recovered",
   });
   let validateSetupInputs = () => true;
+  let updateSetupFieldIssues = () => {};
   // Assigned by setup(); the server rejects a scope edit that strands a finding, so the save waits for a fix.
   let strandedByScopeEdit = () => [];
   let updateFindingSummary = () => {};
@@ -619,13 +620,14 @@
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
-    if (!notice?.dataset.validationAttempted) return;
     const results = window.vrRules.setupResults(report, vocabulary);
-    const messages = results.map(result => window.vrRules.formatRuleMessage(result, report, vocabulary, {
-      scopeContext:result.field === "scope" || result.code === "duplicate_component",
-    }));
-    notice.hidden = !messages.length;
-    notice.textContent = messages.join(" ");
+    const attempted = notice?.dataset.validationAttempted === "true";
+    updateSetupFieldIssues(attempted);
+    if (!attempted) return;
+    notice.hidden = !results.length;
+    notice.textContent = results.length === 1
+      ? "1 thing to fix before Findings. It is marked above, and the cursor is on it."
+      : `${results.length} things to fix before Findings. Each one is marked above, and the cursor is on the first.`;
   };
   // Each Setup card reports its own state on the right of its header strip, the way a Content
   // section reports its fragment count.
@@ -744,7 +746,7 @@
     }
     if (saveInFlight) return saveInFlight;
     if (!pendingSave || savedRevision >= saveRevision) return true;
-    if (root.dataset.step === "setup" && !validateSetupInputs(false)) {
+    if (root.dataset.step === "setup" && !validateSetupInputs(true)) {
       setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
       return false;
     }
@@ -1460,8 +1462,86 @@
       },
     };
     const setupNotice = document.querySelector("#setup-validation-note");
+    const setupMessageControllers = new Map();
+    const attachSetupMessage = (controls, placeMessage) => {
+      const messageElement = document.createElement("span");
+      messageElement.id = id("setup-field-message");
+      messageElement.className = "setup-field-message";
+      messageElement.hidden = true;
+      placeMessage(messageElement);
+      const messages = new Map();
+      const controller = {
+        hasText:() => [...messages.values()].some(Boolean),
+        set:(kind, text) => {
+          messages.set(kind, text);
+          const visible = [...messages.values()].filter(Boolean).join(" ");
+          messageElement.textContent = visible;
+          messageElement.hidden = !visible;
+          controls.forEach(control => {
+            const describedBy = new Set((control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+            if (visible) {
+              describedBy.add(messageElement.id);
+              control.setAttribute("aria-invalid", "true");
+            } else {
+              describedBy.delete(messageElement.id);
+              if (control.validity.valid) control.removeAttribute("aria-invalid");
+            }
+            if (describedBy.size) control.setAttribute("aria-describedby", [...describedBy].join(" "));
+            else control.removeAttribute("aria-describedby");
+          });
+        },
+      };
+      controls.forEach(control => {
+        control.dataset.setupMessageControl = "true";
+        setupMessageControllers.set(control, controller);
+      });
+      return controller;
+    };
+    const attachSimpleSetupMessage = control => {
+      const label = control.closest("label");
+      if (!label) return null;
+      if (label.parentElement?.classList.contains("fields") || label.classList.contains("coverage-option")) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "setup-field-wrap";
+        label.before(wrapper);
+        wrapper.append(label);
+        return attachSetupMessage([control], message => wrapper.append(message));
+      }
+      return attachSetupMessage([control], message => label.after(message));
+    };
+    const firstSetupMessageControl = () => [...root.querySelectorAll("[data-setup-message-control]")]
+      .find(control => setupMessageControllers.get(control)?.hasText());
+    const focusFirstSetupMessage = () => {
+      const control = firstSetupMessageControl();
+      if (!control) return null;
+      control.scrollIntoView({behavior:"smooth", block:"center"});
+      control.focus({preventScroll:true});
+      return control;
+    };
+    updateSetupFieldIssues = show => {
+      const issuePaths = {
+        missing_segment:"engagement.segment",
+        missing_app_name:"engagement.app_name",
+        missing_report_type:"engagement.report_type",
+        missing_network:"engagement.network",
+        missing_tester:"engagement.tester",
+        missing_report_date:"engagement.report_date",
+      };
+      const byPath = new Map();
+      if (show) {
+        window.vrRules.setupResults(report, vocabulary).forEach(result => {
+          const path = issuePaths[result.code];
+          if (path && !byPath.has(path)) byPath.set(path, window.vrRules.formatRuleMessage(result, report, vocabulary));
+        });
+      }
+      root.querySelectorAll("[data-path]").forEach(control => {
+        setupMessageControllers.get(control)?.set("issue", byPath.get(control.dataset.path) || "");
+      });
+    };
     const wireSetupRule = (input, rule, label = rule.label) => {
       input.dataset.setupValidated = "true";
+      const messageController = setupMessageControllers.get(input);
+      let revealMessage = !rule.valid(input.value);
       const validate = () => {
         const invalid = !rule.valid(input.value);
         const invalidCharacters = rule.invalidCharacters?.(input.value) || [];
@@ -1471,8 +1551,10 @@
         const message = result ? window.vrRules.formatRuleMessage({...result, label:result.label || label, value:result.value ?? input.value}, report, vocabulary) : "";
         input.setCustomValidity(invalid ? message : "");
         showRuleState(input, invalid, "ruleInvalid");
+        messageController?.set("refusal", revealMessage && invalid ? message : "");
       };
-      input.validateSetupRule = validate;
+      input.validateSetupRule = reveal => { if (reveal) revealMessage = true; validate(); };
+      input.addEventListener("blur", () => input.validateSetupRule(true));
       input.addEventListener("input", validate);
       input.addEventListener("change", validate);
       validate();
@@ -1481,11 +1563,12 @@
       const invalidInputs = [...root.querySelectorAll("[data-setup-validated]")].filter(input => !input.validity.valid);
       if (reveal && invalidInputs.length) {
         if (setupNotice) setupNotice.dataset.validationAttempted = "true";
-        invalidInputs.forEach(input => input.classList.add("validation-error"));
+        invalidInputs.forEach(input => {
+          input.classList.add("validation-error");
+          input.validateSetupRule?.(true);
+        });
         updateSetupValidationNotice();
-        invalidInputs[0].scrollIntoView({behavior:"smooth", block:"center"});
-        invalidInputs[0].focus({preventScroll:true});
-        invalidInputs[0].reportValidity();
+        focusFirstSetupMessage();
       }
       return !invalidInputs.length;
     };
@@ -1545,6 +1628,7 @@
     root.querySelectorAll("[data-path]").forEach(input => {
       const [section, field] = input.dataset.path.split(".");
       input.value = report[section][field] ?? "";
+      attachSimpleSetupMessage(input);
       const grow = input.tagName === "TEXTAREA"
         ? () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; }
         : null;
@@ -1557,6 +1641,7 @@
       input.oninput = () => { report[section][field] = input.value || (input.matches('select, input[type="date"]') ? null : ""); if (input.value.trim()) input.classList.remove("validation-error"); grow?.(); scheduleSave(); };
       if (setupRules[field]) wireSetupRule(input, setupRules[field]);
     });
+    updateSetupValidationNotice();
     // Offered, never written. A retest that covered one environment usually says so in Limitations,
     // but the wording stays the tester's to accept. Client-only: nothing server-side re-derives
     // limitations, so unlike the In Conclusion sentence there is no Python half to keep in step.
@@ -1952,6 +2037,7 @@
         }
         const customName = panel.querySelector(".coverage-name-custom");
         if (customName) {
+          attachSimpleSetupMessage(customName);
           wireSetupRule(customName, setupRules.non_production_label);
           // No renderCoverage here: it rebuilds this input and would take the caret mid-word.
           customName.oninput = () => {
@@ -2705,12 +2791,7 @@
     const validateSetupPage = reveal => {
       const results = window.vrRules.setupResults(report, vocabulary);
       const refused = results.some(result => result.kind === "refusal");
-      if (!validateSetupInputs(reveal) || refused) {
-        if (reveal) {
-          setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
-        }
-        return false;
-      }
+      const inputsValid = validateSetupInputs(reveal);
       const flagged = code => results.some(result => result.code === code);
       // In page order, so focus lands on the first highlighted field.
       const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_type", "report_type"], ["missing_network", "network"], ["missing_tester", "tester"], ["missing_report_date", "report_date"]]
@@ -2733,10 +2814,12 @@
         .filter(Boolean);
       const blankDescriptions = results.filter(result => result.code === "missing_component_description");
       const exclusion = flagged("mobile_and_thick_client");
-      if (results.length) {
+      if (reveal) {
+        if (setupNotice) setupNotice.dataset.validationAttempted = "true";
+        updateSetupValidationNotice();
+      }
+      if (results.length || !inputsValid) {
         if (reveal) {
-          const setupNotice = document.querySelector("#setup-validation-note");
-          if (setupNotice) setupNotice.dataset.validationAttempted = "true";
           incompleteSetup.forEach(input => input.classList.add("validation-error"));
           // Mark the box the tester has to type into: the component when none is named, the
           // description when one is named without it.
@@ -2749,10 +2832,11 @@
           blankDescriptionBoxes.forEach(input => input.classList.add("validation-error"));
           accountInputs.forEach(input => input.classList.add("validation-error"));
           const firstIncomplete = incompleteSetup[0] || accountInputs[0] || missingScopePanels[0]?.querySelector('[data-scope-field="component"]') || blankDescriptionBoxes[0];
-          firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
-          firstIncomplete?.focus({preventScroll:true});
-          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : accountInputs.length ? "Complete or remove the highlighted test accounts" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
-          updateSetupValidationNotice();
+          if (!focusFirstSetupMessage()) {
+            firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
+            firstIncomplete?.focus({preventScroll:true});
+          }
+          setSaveState(SAVE_STATES.UNSAVED, refused || !inputsValid ? "Correct invalid Setup fields" : missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : accountInputs.length ? "Complete or remove the highlighted test accounts" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
         }
         return false;
       }

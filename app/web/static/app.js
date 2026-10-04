@@ -1464,6 +1464,7 @@
     const setupNotice = document.querySelector("#setup-validation-note");
     const setupMessageControllers = new Map();
     const dateMessageControllers = new Map();
+    const accountMessageControllers = new Map();
     const attachSetupMessage = (controls, placeMessage) => {
       const messageElement = document.createElement("span");
       messageElement.id = id("setup-field-message");
@@ -1478,6 +1479,8 @@
           const visible = [...messages.values()].filter(Boolean).join(" ");
           messageElement.textContent = visible;
           messageElement.hidden = !visible;
+          const messageRow = messageElement.closest("tr");
+          if (messageRow) messageRow.hidden = !visible;
           controls.forEach(control => {
             const describedBy = new Set((control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
             if (visible) {
@@ -1543,8 +1546,15 @@
         const issue = results.find(result => result.code === "missing_test_dates" && result.environment === environment);
         controller.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
       });
+      accountMessageControllers.forEach((controller, index) => {
+        const messages = results
+          .filter(result => result.kind === "issue" && result.account === index + 1
+            && (result.code === "incomplete_test_account" || result.code === "repeated_test_account"))
+          .map(result => window.vrRules.formatRuleMessage(result, report, vocabulary));
+        controller.set("issue", messages.join(" "));
+      });
     };
-    const wireSetupRule = (input, rule, label = rule.label) => {
+    const wireSetupRule = (input, rule, label = rule.label, messageKind = "refusal") => {
       input.dataset.setupValidated = "true";
       const messageController = setupMessageControllers.get(input);
       let revealMessage = !rule.valid(input.value);
@@ -1557,7 +1567,7 @@
         const message = result ? window.vrRules.formatRuleMessage({...result, label:result.label || label, value:result.value ?? input.value}, report, vocabulary) : "";
         input.setCustomValidity(invalid ? message : "");
         showRuleState(input, invalid, "ruleInvalid");
-        messageController?.set("refusal", revealMessage && invalid ? message : "");
+        messageController?.set(messageKind, revealMessage && invalid ? message : "");
       };
       input.validateSetupRule = reveal => { if (reveal) revealMessage = true; validate(); };
       input.addEventListener("blur", () => input.validateSetupRule(true));
@@ -1711,16 +1721,27 @@
     if (accountBody) {
       const renderAccounts = () => {
         accountBody.innerHTML = "";
+        accountMessageControllers.clear();
         report.engagement.test_accounts.forEach((account, index) => {
           const row = document.createElement("tr");
           row.innerHTML = `<td><input aria-label="User role ${index + 1}" value="${escape(account.user_role)}"></td><td><input aria-label="Username ${index + 1}" value="${escape(account.username)}"></td><td><button class="remove-test-account" type="button" aria-label="Remove test account ${index + 1}" title="Remove account">x</button></td>`;
           const [roleInput, usernameInput] = row.querySelectorAll("input");
           roleInput.oninput = () => { account.user_role = roleInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
           usernameInput.oninput = () => { account.username = usernameInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
-          wireSetupRule(roleInput, setupRules.userRole, `User role ${index + 1}`);
-          wireSetupRule(usernameInput, setupRules.username, `Username ${index + 1}`);
           row.querySelector("button").onclick = () => { report.engagement.test_accounts.splice(index, 1); renderAccounts(); scheduleSave(); };
           accountBody.append(row);
+          const controller = attachSetupMessage([roleInput, usernameInput], message => {
+            const messageRow = document.createElement("tr");
+            messageRow.hidden = true;
+            const cell = document.createElement("td");
+            cell.colSpan = 3;
+            cell.append(message);
+            messageRow.append(cell);
+            row.after(messageRow);
+          });
+          accountMessageControllers.set(index, controller);
+          wireSetupRule(roleInput, setupRules.userRole, `User role ${index + 1}`, "refusal:user_role");
+          wireSetupRule(usernameInput, setupRules.username, `Username ${index + 1}`, "refusal:username");
         });
         const add = document.querySelector("#add-test-account");
         add.disabled = report.engagement.test_accounts.length >= vocabulary.max_test_accounts;

@@ -663,6 +663,82 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIsNone(start.get_attribute("aria-invalid"))
         self.assertIsNone(end.get_attribute("aria-invalid"))
 
+    def test_test_account_messages_span_the_row_and_clear_when_fixed(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.locator("#add-test-account").click()
+        role = page.get_by_label("User role 2", exact=True)
+        username = page.get_by_label("Username 2", exact=True)
+        role.fill("Service")
+        report = main.workspace.load(report_id)
+        report.engagement.test_accounts.append(TestAccount(user_role="Service", username=""))
+        incomplete_message = next(message for message in setup_issues(report) if "test account 2" in message.lower())
+
+        page.get_by_role("button", name="Next: Findings").click()
+
+        described_by = role.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(username.get_attribute("aria-describedby"), described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(incomplete_message)
+        self.assertEqual(message.evaluate("element => element.closest('td').colSpan"), 3)
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+        self.assertEqual(role.get_attribute("aria-invalid"), "true")
+        self.assertEqual(username.get_attribute("aria-invalid"), "true")
+        self.assertEqual(role.get_attribute("aria-label"), "User role 2")
+        self.assertEqual(username.get_attribute("aria-label"), "Username 2")
+
+        username.fill("service")
+        expect(message).to_be_hidden()
+        self.assertIsNone(role.get_attribute("aria-describedby"))
+        self.assertIsNone(username.get_attribute("aria-describedby"))
+        self.assertIsNone(role.get_attribute("aria-invalid"))
+        self.assertIsNone(username.get_attribute("aria-invalid"))
+
+        report.engagement.test_accounts[1].username = "service "
+        trailing_space_message = next(message for message in setup_input_issues(report.engagement) if "Username 2" in message)
+        username.fill("service ")
+        self.assertIsNone(username.get_attribute("aria-describedby"))
+        username.evaluate("input => input.blur()")
+        expect(message).to_have_text(trailing_space_message)
+        self.assertEqual(role.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(username.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(role.get_attribute("aria-invalid"), "true")
+        self.assertEqual(username.get_attribute("aria-invalid"), "true")
+
+        report.engagement.test_accounts[1].username = "bad/name"
+        invalid_character_message = next(message for message in setup_input_issues(report.engagement) if "Username 2" in message)
+        username.fill("bad/name")
+        expect(message).to_have_text(invalid_character_message)
+        username.fill("service")
+        expect(message).to_be_hidden()
+        self.assertIsNone(role.get_attribute("aria-describedby"))
+        self.assertIsNone(username.get_attribute("aria-describedby"))
+
+        page.locator("#add-test-account").click()
+        role_three = page.get_by_label("User role 3", exact=True)
+        username_three = page.get_by_label("Username 3", exact=True)
+        role_three.fill("N/A")
+        username_three.fill("N/A")
+        report.engagement.test_accounts.append(TestAccount(user_role="N/A", username="N/A"))
+        repeated_message = next(message for message in setup_issues(report) if "test account 3" in message.lower())
+
+        page.get_by_role("button", name="Next: Findings").click()
+
+        repeated_described_by = role_three.get_attribute("aria-describedby")
+        self.assertTrue(repeated_described_by)
+        self.assertEqual(username_three.get_attribute("aria-describedby"), repeated_described_by)
+        repeated_line = page.locator(f"#{repeated_described_by}")
+        expect(repeated_line).to_have_text(repeated_message)
+        self.assertEqual(repeated_line.evaluate("element => element.closest('td').colSpan"), 3)
+        self.assertEqual(role_three.get_attribute("aria-invalid"), "true")
+        self.assertEqual(username_three.get_attribute("aria-invalid"), "true")
+        username_three.fill("unique")
+        expect(repeated_line).to_be_hidden()
+        self.assertIsNone(role_three.get_attribute("aria-describedby"))
+        self.assertIsNone(username_three.get_attribute("aria-describedby"))
+
     def test_stored_invalid_setup_value_shows_its_refusal_immediately(self) -> None:
         report_id = self.ready_report()
         report = main.workspace.load(report_id)

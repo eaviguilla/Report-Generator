@@ -301,3 +301,4 @@ input[data-path*="scope"],
 .setup-field-message[hidden] { display: none; }
 #setup .limitations-field + .setup-field-message { margin: 4px 15px 15px; }
 }
+.setup-field-message.setup-character-limit-note { color: var(--muted); }

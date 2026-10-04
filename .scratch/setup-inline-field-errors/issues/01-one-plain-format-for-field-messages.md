@@ -38,3 +38,7 @@ The field's name is the one beside it on the page: `Application name`, `CI numbe
 ## Next steps
 
 1. `/implement`: The wording is agreed, and nothing waits on another ticket.
+
+## Comments
+
+2026-10-05: The browser and Python runtimes disagreed on Unicode categories for some code points, so the page now uses Python-generated C/Z ranges for hidden-character wording. Calling the shared formatter also exposed a date-pair local named `window` that shadowed the browser global; it is now `testWindow`.

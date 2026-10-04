@@ -129,12 +129,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.get_by_label("Network Access").select_option("Internal")
         self.page.get_by_label("Report Date").fill("2026-01-03")
 
-    def choose_imported_network_access(self) -> None:
-        """An import leaves network access unset, because the cover always prints Internal."""
-        self.page.get_by_label("Network Access").select_option("Internal")
-        self.page.locator('#save-button:not([data-save-state="saved"])').wait_for(timeout=5_000)
-        self.page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
-
     def ready_report(self, include_finding: bool = False) -> str:
         report = main.workspace.create_report()
         report.app_id = "CI-BROWSER"
@@ -2506,7 +2500,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
-        self.choose_imported_network_access()
 
         server_issues = generation_issues(main.workspace.load(imported_id))
         self.assertTrue(server_issues, "the fixture must still have gaps, or this only repeats the ready-side test")
@@ -5789,11 +5782,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         """The Section/CVSS table round trip is parser-tested in isolation, and the Asia CVSS
         readiness rule is contract-tested against a directly-saved report. Neither proves that an
         editable DOCX import of the same finding lands the browser at the same "ready" verdict, so
-        this drives the real upload and checks Generate is enabled once the tester chooses network
-        access, the one value the document cannot give back."""
+        this drives the real upload and checks Generate is enabled with nothing chosen by hand,
+        network access included: the cover gives it back."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         report.engagement.segment = "Asia"
+        report.engagement.network = "External"
         finding.cvss_score = "9.8"
         finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
         acceptance.provision(report)
@@ -5818,7 +5812,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
-        self.choose_imported_network_access()
+        self.assertEqual(self.page.get_by_label("Network Access").input_value(), "External")
 
         self.page.goto(f"{self.base_url}/reports/{imported_id}/edit")
         self.page.wait_for_selector("#issue-count")

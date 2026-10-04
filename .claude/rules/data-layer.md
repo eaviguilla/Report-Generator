@@ -37,7 +37,7 @@ You do not need to touch the map for changes with no data consequence, such as w
 - **Every read-modify-write goes through `Workspace._locked`.** A new mutating method without it is a race.
 - **Every mutating route carries `saved_at`**, in the body for the full save and in `X-Report-Saved-At` for delta endpoints, and returns 409 on mismatch.
 - **The server owns derived state.** `acceptance.provision` runs on every PUT; do not have the browser assert a value the server recomputes.
-- **A rule that exists on both sides changes on both sides**, and the pair is covered by `test_browser.py::test_browser_readiness_verdict_matches_server_generation_issues`. Which sections a status prints is `content_types_for_status` and `contentTypesForStatus`.
+- **A rule that exists on both sides changes on both sides.** The Setup rules in `setup_results` and `rules.js` are held to one case table in `tests/test_rule_cases.py`; generation readiness and finding completeness have the contract tests in `test_browser.py`; the other twins have no guard. Which sections a status prints is `content_types_for_status` and `contentTypesForStatus`.
 - **Never discard user content without a prompt.** Scope changes, environment deselection, library replacement, and finding deletion are the paths where this has gone wrong before.
 - **An existing `draft.json` must still load.** Migrate an old shape in memory, in the `Report` before-validator `normalise_legacy_shapes` (see `normalise_scope_modes`). `load_path` rewrites a draft only for its two existing repairs: the manager calls it once per draft per render, and every rewrite spends the single `draft.bak.json`.
 

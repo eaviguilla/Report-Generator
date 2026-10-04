@@ -117,6 +117,10 @@ def invalid_character_issue(
     )
     if not invalid:
         return None
+    return _invalid_character_text(label, invalid, portable_names=portable_names)
+
+
+def _invalid_character_text(label: str, invalid: list[str], *, portable_names: bool = False) -> str:
     descriptions = ", ".join(
         f"{json.dumps(character, ensure_ascii=False)} ({_character_name(character, portable=portable_names)})"
         for character in invalid
@@ -636,6 +640,47 @@ def scope_text_from_targets(targets) -> dict:
     return result
 
 
+def scope_box_refusals(environment: str, channel: str, component_text: str, description_text: str) -> list[dict]:
+    """Every refusal one scope box earns, in the order reconcile_targets raises them. Twin: scopeBoxRefusals in rules.js."""
+    # Web and API lines are URLs: they carry ? and =, and a URL typed twice is dropped, not refused.
+    if channel not in COMPONENT_CHANNELS:
+        return []
+    # Paired by raw index before cleaning, so a blank or # line cannot shift the descriptions below it.
+    named = [
+        (line, value.strip(), description.strip())
+        for line, (value, description) in enumerate(zip_longest(component_text.split("\n"), description_text.split("\n"), fillvalue=""))
+        if value.strip() and not value.strip().startswith("#")
+    ]
+    # A repeat would lose its description, and target IDs are reused by value. All of a box's repeats
+    # come before its characters, as the save has always raised them.
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for _, value, _ in named:
+        if value in seen and value not in repeated:
+            repeated.append(value)
+        seen.add(value)
+    results = [{"kind": "refusal", "code": "duplicate_component", "environment": environment, "app_type": channel, "component": value} for value in repeated]
+    rule = CHARACTER_RULES["component_scope"]
+    for line, value, description in named:
+        for box, text in (("component", value), ("description", description)):
+            characters = _invalid_characters(text, rule.symbols, allow_letters=rule.letters, allow_numbers=rule.numbers, allow_spaces=rule.spaces, allow_line_breaks=rule.line_breaks)
+            if characters:
+                results.append({"kind": "refusal", "code": "invalid_characters", "field": "component_scope", "environment": environment, "app_type": channel, "box": box, "line": line, "characters": characters})
+    return results
+
+
+def scope_refusal_message(result: dict) -> str:
+    """The words a save refuses a scope-text refusal with."""
+    if result["code"] == "no_app_type":
+        return "select at least one app type"
+    environment_label = "Production" if result["environment"] == "production" else "Non-Production"
+    scope_label = f"{environment_label} {CHANNEL_LABELS[result['app_type']]} scope"
+    if result["code"] == "duplicate_component":
+        return f"{scope_label} lists the same component twice: {json.dumps(result['component'], ensure_ascii=False)}"
+    label = f"{scope_label} description" if result["box"] == "description" else scope_label
+    return _invalid_character_text(label, result["characters"])
+
+
 def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     """Turn setup textarea values into stable scope targets and identify unsafe removals."""
     if "scope_text" not in payload:
@@ -649,7 +694,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
         raise ValueError("tested_environments must be a list")
     channels = resolve_tested_channels(payload)
     if not channels:
-        raise ValueError("select at least one app type")
+        raise ValueError(scope_refusal_message({"code": "no_app_type"}))
     # Written back for the same reason scope_targets is: this function replaces the target list, so a
     # later derive-from-targets would otherwise read the new one and resolve differently.
     payload["engagement"] = {key: value for key, value in engagement.items() if key != "test_type"}
@@ -676,30 +721,19 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             description_text = "" if description_text is None else description_text
             if not isinstance(component_text, str) or not isinstance(description_text, str):
                 raise ValueError("scope target values must be text")
-            environment_label = "Production" if environment == "production" else "Non-Production"
-            scope_label = f"{environment_label} {CHANNEL_LABELS[channel]} scope"
-            # Paired by raw index before cleaning, so a blank or commented component line still
-            # consumes its index and cannot shift every description below it onto the wrong row.
+            if refusals := scope_box_refusals(environment, channel, component_text, description_text):
+                raise ValueError(scope_refusal_message(refusals[0]))
+            # Paired by raw index before cleaning, as scope_box_refusals does.
             cleaned: list[tuple[str, str]] = []
             seen: set[str] = set()
             for value, description in zip_longest(component_text.split("\n"), description_text.split("\n"), fillvalue=""):
                 value, description = value.strip(), description.strip()
-                if not value or value.startswith("#"):
-                    continue
                 # Target IDs are reused by value, so a repeated line would claim the same ID twice.
-                # For a URL that is the same place typed twice; for a component it is a second build
-                # whose description would vanish with it, so say so rather than dropping it.
-                if value in seen:
-                    if channel in COMPONENT_CHANNELS:
-                        raise ValueError(f"{scope_label} lists the same component twice: {json.dumps(value, ensure_ascii=False)}")
+                if not value or value.startswith("#") or value in seen:
                     continue
                 seen.add(value)
                 cleaned.append((value, description))
             for order, (value, description) in enumerate(cleaned):
-                if channel in COMPONENT_CHANNELS:
-                    for label, text in ((scope_label, value), (f"{scope_label} description", description)):
-                        if issue := character_issue("component_scope", text, label):
-                            raise ValueError(issue)
                 targets.append({"target_id": old.get((environment, channel, value), f"tgt_{uuid.uuid4().hex[:8]}"), "environment": environment, "channel": channel, "value": value, "description": description, "order": order})
     payload["scope_targets"] = targets
     target_ids = {target["target_id"] for target in targets}
@@ -743,6 +777,17 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     return removed_references
 
 
+def _scope_box_text(by_channel, channel: str) -> tuple[str, str]:
+    """A scope box's component and description text, reading anything that is not text as blank."""
+    raw = by_channel.get(channel) if isinstance(by_channel, dict) else None
+    component_text = raw if isinstance(raw, str) else raw.get("component") if isinstance(raw, dict) else ""
+    description_text = raw.get("description") if isinstance(raw, dict) else ""
+    return (
+        component_text if isinstance(component_text, str) else "",
+        description_text if isinstance(description_text, str) else "",
+    )
+
+
 def scope_text_targets(report: dict) -> list[dict]:
     """The targets scope_text names in tested environments and covered app types. Twin: scopeTargets in rules.js."""
     engagement = report.get("engagement") or {}
@@ -752,11 +797,7 @@ def scope_text_targets(report: dict) -> list[dict]:
     for environment in engagement.get("tested_environments") or []:
         by_channel = scope_text.get(environment) or {}
         for channel in (channel for channel in CHANNELS if channel in covered):
-            raw = by_channel.get(channel) if isinstance(by_channel, dict) else None
-            component_text = raw if isinstance(raw, str) else raw.get("component") if isinstance(raw, dict) else ""
-            description_text = raw.get("description") if isinstance(raw, dict) else ""
-            component_text = component_text if isinstance(component_text, str) else ""
-            description_text = description_text if isinstance(description_text, str) else ""
+            component_text, description_text = _scope_box_text(by_channel, channel)
             seen: set[str] = set()
             # Paired by raw index before cleaning, as reconcile_targets does.
             for value, description in zip_longest(component_text.split("\n"), description_text.split("\n"), fillvalue=""):
@@ -768,10 +809,25 @@ def scope_text_targets(report: dict) -> list[dict]:
     return targets
 
 
+def scope_text_refusals(report: dict) -> list[dict]:
+    """Every refusal a save of this scope text would get, in reconcile_targets' order. Twin: scopeRefusals in rules.js."""
+    engagement = report.get("engagement") or {}
+    covered = engagement.get("tested_channels") or []
+    if not covered:
+        return [{"kind": "refusal", "code": "no_app_type"}]
+    scope_text = report.get("scope_text") or {}
+    results: list[dict] = []
+    for environment in engagement.get("tested_environments") or []:
+        by_channel = scope_text.get(environment) or {}
+        for channel in (channel for channel in CHANNELS if channel in covered):
+            results += scope_box_refusals(environment, channel, *_scope_box_text(by_channel, channel))
+    return results
+
+
 def setup_results(report: dict) -> list[dict]:
     """Ordered Setup results for a report in the browser's shape. Twin: setupResults in rules.js."""
     engagement = report.get("engagement") or {}
-    results: list[dict] = []
+    results: list[dict] = scope_text_refusals(report)
 
     def issue(code: str, **context) -> None:
         results.append({"kind": "issue", "code": code, **context})
@@ -835,7 +891,9 @@ def setup_issues(report: Report) -> list[str]:
     """Return the missing engagement details that block Findings entry."""
     engagement = report.engagement
     results = setup_results({"engagement": engagement.model_dump(mode="json"), "scope_text": scope_text_from_targets(report.scope_targets)})
-    return [*(_setup_issue_text(result) for result in results), *setup_input_issues(engagement)]
+    # A refusal belongs to the save; a hand-edited draft can store a target the save would refuse.
+    issues = [result for result in results if result["kind"] == "issue"]
+    return [*(_setup_issue_text(result) for result in issues), *setup_input_issues(engagement)]
 
 
 def setup_is_complete(report: Report) -> bool:

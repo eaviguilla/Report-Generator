@@ -995,13 +995,10 @@
   };
   // Built from the server's CHARACTER_RULES, judging letters and digits by the browser's own Unicode
   // categories. Setup has always worked this way; the Content page uses serverCharacterRule instead.
-  const browserCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
-    test: character => (letters && /\p{L}/u.test(character))
-      || (numbers && /\p{Nd}/u.test(character))
-      || (spaces && character === " ")
-      || (line_breaks && (character === "\r" || character === "\n"))
-      || symbols.includes(character),
-  });
+  const browserCharacterRule = rule => {
+    const invalidCharacters = value => window.vrRules.invalidCharacters(value, rule);
+    return {label:rule.label, invalidCharacters, valid:value => !invalidCharacters(value).length};
+  };
   const serverCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
     test: character => {
       const codePoint = character.codePointAt(0);
@@ -1466,16 +1463,6 @@
     let typingCustomLabel = false;
     // The space sits first inside the class so the trailing hyphen cannot become a range.
     const usernameCharacters = characterRule("Username", /^[ A-Za-z0-9._@\\-]$/);
-    // Applied to component channels only -- a URL carries ? and =.
-    const componentScopeCharacters = browserCharacterRule(vocabulary.character_rules.component_scope);
-    const componentScopeInvalidCharacters = value => componentScopeCharacters.invalidCharacters(
-      value.split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith("#")).join("")
-    );
-    const componentScopeRule = {
-      label:componentScopeCharacters.label,
-      invalidCharacters:componentScopeInvalidCharacters,
-      valid:value => !componentScopeInvalidCharacters(value).length,
-    };
     const setupRule = field => browserCharacterRule(vocabulary.character_rules[field]);
     const setupRules = {
       app_name: setupRule("app_name"),
@@ -2100,24 +2087,18 @@
                   scheduleSave();
                 };
               }
-              const rule = field === "description" ? (() => {
-                const invalidCharacters = value => {
-                  const component = row.querySelector('[data-scope-field="component"]')?.value.trim();
-                  return !component || component.startsWith("#") ? [] : componentScopeInvalidCharacters(value);
-                };
-                return {...componentScopeRule, invalidCharacters, valid:value => !invalidCharacters(value).length};
-              })() : (() => {
-                const repeated = value => {
-                  const normalized = value.trim();
-                  return Boolean(normalized && !normalized.startsWith("#") && [...body.querySelectorAll('[data-scope-field="component"]')]
-                    .filter(control => control.value.trim() === normalized).length > 1);
-                };
-                return {
-                  ...componentScopeRule,
-                  valid:value => componentScopeRule.valid(value) && !repeated(value),
-                  message:label => `${label} lists the same component twice: ${JSON.stringify(input.value.trim())}`,
-                };
-              })();
+              // The row index is the line index rules.js pairs the two boxes by.
+              const refusals = () => window.vrRules.scopeRefusals(report, vocabulary)
+                .filter(result => result.environment === environment && result.app_type === channel);
+              const invalidCharacters = () => refusals()
+                .find(result => result.code === "invalid_characters" && result.box === field && result.line === index)?.characters || [];
+              const repeated = () => field === "component" && refusals()
+                .some(result => result.code === "duplicate_component" && result.component === window.vrRules.strip(input.value));
+              const rule = {
+                invalidCharacters,
+                valid:() => !invalidCharacters().length && !repeated(),
+                message:label => `${label} lists the same component twice: ${JSON.stringify(window.vrRules.strip(input.value))}`,
+              };
               wireSetupRule(input, rule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
               cell.append(input);
               row.append(cell);

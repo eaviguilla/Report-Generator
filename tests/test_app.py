@@ -1049,6 +1049,16 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(repeated.json()["error"]["code"], "invalid_scope")
         self.assertIn('Production Mobile scope lists the same component twice: "Wallet app"', repeated.json()["error"]["message"])
 
+    def test_a_repeated_component_is_refused_before_an_earlier_lines_characters(self) -> None:
+        report_id = self.new_report()
+        response = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "mobile", {
+            "component": "Bad!\nGood\nGood",
+            "description": "One\nTwo\nThree",
+        }))
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["message"], 'Production Mobile scope lists the same component twice: "Good"')
+
     def test_component_scope_shares_one_widened_character_set_across_both_boxes(self) -> None:
         """A strict superset of the retired mobile set: an install path must be typable, and the
         message must name which of the two boxes rejected it."""
@@ -1963,6 +1973,16 @@ class ReportApiTests(unittest.TestCase):
         empty = self._component_scope_report(report_id, "thick_client", "Windows desktop client")
         empty.scope_targets = []
         self.assertIn("production scope target", report_service.setup_issues(empty))
+
+    def test_setup_issues_leave_scope_refusals_to_the_save(self) -> None:
+        """A refusal belongs to the save, so a stored target the save would refuse adds no Setup issue."""
+        report_id = self.new_report()
+        report = self._component_scope_report(report_id, "thick_client", "Crashes on start!")
+        self.assertEqual(
+            [result["code"] for result in report_service.setup_results({"engagement": report.engagement.model_dump(mode="json"), "scope_text": report_service.scope_text_from_targets(report.scope_targets)})],
+            ["invalid_characters"],
+        )
+        self.assertEqual(report_service.setup_issues(report), [])
 
     def _generatable_report(self) -> str:
         report_id = self.new_report()

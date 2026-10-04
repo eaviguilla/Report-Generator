@@ -4,6 +4,57 @@
 
   const asString = value => typeof value === "string" ? value : "";
 
+  // Python's str.strip(): String.prototype.trim also strips U+FEFF but keeps U+001C-U+001F and U+0085.
+  const strip = text => text.replace(/^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g, "");
+
+  // Letters and digits by the browser's own Unicode categories, as Setup has always judged them.
+  const invalidCharacters = (value, rule) => [...new Set([...value].filter(character => !(
+    (rule.letters && /\p{L}/u.test(character))
+    || (rule.numbers && /\p{Nd}/u.test(character))
+    || (rule.spaces && character === " ")
+    || (rule.line_breaks && (character === "\r" || character === "\n"))
+    || rule.symbols.includes(character)
+  )))];
+
+  const scopeBoxText = raw => [typeof raw === "string" ? raw : asString(raw?.component), asString(raw?.description)];
+
+  // Twin of report_service.scope_box_refusals.
+  const scopeBoxRefusals = (environment, channel, componentText, descriptionText, vocabulary) => {
+    if (!vocabulary.component_channels.includes(channel)) return [];
+    const components = componentText.split("\n");
+    const descriptions = descriptionText.split("\n");
+    const named = [];
+    for (let line = 0; line < Math.max(components.length, descriptions.length); line += 1) {
+      const component = strip(components[line] || "");
+      if (component && !component.startsWith("#")) named.push({line, component, description:strip(descriptions[line] || "")});
+    }
+    const seen = new Set();
+    const repeated = [];
+    named.forEach(({component}) => {
+      if (seen.has(component) && !repeated.includes(component)) repeated.push(component);
+      seen.add(component);
+    });
+    const results = repeated.map(component => ({kind:"refusal", code:"duplicate_component", environment, app_type:channel, component}));
+    const rule = vocabulary.character_rules.component_scope;
+    named.forEach(({line, component, description}) => {
+      [["component", component], ["description", description]].forEach(([box, text]) => {
+        const characters = invalidCharacters(text, rule);
+        if (characters.length) results.push({kind:"refusal", code:"invalid_characters", field:"component_scope", environment, app_type:channel, box, line, characters});
+      });
+    });
+    return results;
+  };
+
+  // Twin of report_service.scope_text_refusals.
+  const scopeRefusals = (report, vocabulary) => {
+    const engagement = report?.engagement || {};
+    const testedChannels = engagement.tested_channels || [];
+    if (!testedChannels.length) return [{kind:"refusal", code:"no_app_type"}];
+    const covered = vocabulary.channels.map(([channel]) => channel).filter(channel => testedChannels.includes(channel));
+    return (engagement.tested_environments || []).flatMap(environment => covered.flatMap(channel =>
+      scopeBoxRefusals(environment, channel, ...scopeBoxText(report?.scope_text?.[environment]?.[channel]), vocabulary)));
+  };
+
   // Twin of report_service.scope_text_targets; paired by raw index before cleaning, as reconcile_targets does.
   const scopeTargets = (report, vocabulary) => {
     const engagement = report?.engagement || {};
@@ -13,14 +64,15 @@
     (engagement.tested_environments || []).forEach(environment => {
       covered.forEach(channel => {
         const raw = report?.scope_text?.[environment]?.[channel];
-        const components = (typeof raw === "string" ? raw : asString(raw?.component)).split("\n");
-        const descriptions = asString(raw?.description).split("\n");
+        const [componentText, descriptionText] = scopeBoxText(raw);
+        const components = componentText.split("\n");
+        const descriptions = descriptionText.split("\n");
         const seen = new Set();
         for (let index = 0; index < Math.max(components.length, descriptions.length); index += 1) {
-          const component = (components[index] || "").trim();
+          const component = strip(components[index] || "");
           if (!component || component.startsWith("#") || seen.has(component)) continue;
           seen.add(component);
-          targets.push({environment, app_type:channel, component, description:(descriptions[index] || "").trim()});
+          targets.push({environment, app_type:channel, component, description:strip(descriptions[index] || "")});
         }
       });
     });
@@ -29,7 +81,7 @@
 
   const setupResults = (report, vocabulary) => {
     const engagement = report?.engagement || {};
-    const results = [];
+    const results = scopeRefusals(report, vocabulary);
     const issue = (code, context = {}) => results.push({kind:"issue", code, ...context});
     if (!(engagement.app_name || "").trim()) issue("missing_app_name");
     if (!engagement.segment) issue("missing_segment");
@@ -52,5 +104,5 @@
     return results;
   };
 
-  window.vrRules = {setupResults, scopeTargets};
+  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip};
 })();

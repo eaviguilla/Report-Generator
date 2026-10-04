@@ -162,7 +162,14 @@ CHARACTER_RULES: dict[str, CharacterRule] = {
     "severity_review_tickets": CharacterRule("Severity Review Tickets", "", letters=False, spaces=False, line_breaks=True),
     "cvss_score": CharacterRule("CVSS Score", ".", letters=False, spaces=False),
     "cvss_vector": CharacterRule("CVSS Vector", "./:", spaces=False),
+    # Checked only once a username fails USERNAME_PATTERN, to say which characters it refuses.
+    "username": CharacterRule("Username", "._@\\-"),
 }
+
+
+def _rule_characters(field: str, value: str) -> list[str]:
+    rule = CHARACTER_RULES[field]
+    return _invalid_characters(value, rule.symbols, allow_letters=rule.letters, allow_numbers=rule.numbers, allow_spaces=rule.spaces, allow_line_breaks=rule.line_breaks)
 
 
 def character_issue(field: str, value: str, label: str | None = None, *, portable_names: bool = False) -> str | None:
@@ -180,37 +187,78 @@ def character_issue(field: str, value: str, label: str | None = None, *, portabl
     )
 
 
+def setup_field_refusals(engagement: dict) -> list[dict]:
+    """The Setup values a save refuses, in field order, for an engagement in the browser's shape. Twin: fieldRefusals in rules.js."""
+    results: list[dict] = []
+
+    def refuse(code: str, **context) -> None:
+        results.append({"kind": "refusal", "code": code, **context})
+
+    def check(field: str, value, **context) -> None:
+        if isinstance(value, str) and value and (characters := _rule_characters(field, value)):
+            refuse("invalid_characters", field=field, **context, characters=characters)
+
+    for field in ("app_name", "ci_number", "bsn_number", "app_owner", "tester"):
+        check(field, engagement.get(field))
+    environments = engagement.get("tested_environments") or []
+    windows = engagement.get("test_windows")
+    windows = windows if isinstance(windows, dict) else {}
+    for environment in environments:
+        window = windows.get(environment)
+        if not isinstance(window, dict):
+            continue
+        start, end = window.get("start_date"), window.get("end_date")
+        if isinstance(start, str) and isinstance(end, str) and start and end and start > end:
+            refuse("test_dates_out_of_order", environment=environment)
+        check("test_time", window.get("test_time"), environment=environment)
+    for number, account in enumerate(engagement.get("test_accounts") or [], start=1):
+        if not isinstance(account, dict):
+            continue
+        check("user_role", account.get("user_role"), account=number)
+        username = account.get("username")
+        if isinstance(username, str) and username and username != "N/A" and not USERNAME_PATTERN.fullmatch(username):
+            if characters := _rule_characters("username", username):
+                refuse("invalid_characters", field="username", account=number, characters=characters)
+            else:
+                refuse("invalid_username", account=number)
+    check("limitations", engagement.get("limitations"))
+    # A disabled input is exempt from browser validation, so an unticked Non-Production goes unchecked.
+    if "non_production" in environments:
+        label = engagement.get("non_production_label")
+        # Stripped as the model's strip_label does.
+        check("non_production_label", label.strip() if isinstance(label, str) else label)
+    return results
+
+
+def _environment_label(environment: str) -> str:
+    return "Production" if environment == "production" else "Non-Production"
+
+
+def setup_refusal_message(result: dict) -> str:
+    """The words a save refuses a Setup refusal result with."""
+    code = result["code"]
+    if code == "no_app_type":
+        return "select at least one app type"
+    if code == "test_dates_out_of_order":
+        return f"{_environment_label(result['environment'])} start date cannot be after its end date"
+    if code == "invalid_username":
+        return f"Username {result['account']} must start and end with a letter or number"
+    scope_label = f"{_environment_label(result['environment'])} {CHANNEL_LABELS[result['app_type']]} scope" if "app_type" in result else ""
+    if code == "duplicate_component":
+        return f"{scope_label} lists the same component twice: {json.dumps(result['component'], ensure_ascii=False)}"
+    field = result["field"]
+    label = {
+        "component_scope": f"{scope_label} description" if result.get("box") == "description" else scope_label,
+        "test_time": f"{_environment_label(result.get('environment', ''))} time",
+        "user_role": f"User role {result.get('account')}",
+        "username": f"Username {result.get('account')}",
+    }.get(field, CHARACTER_RULES[field].label)
+    return _invalid_character_text(label, result["characters"])
+
+
 def setup_input_issues(engagement: Engagement) -> list[str]:
     """Return invalid Setup values without treating blank draft fields as errors."""
-    issues = []
-    for field in ("app_name", "ci_number", "bsn_number", "app_owner", "tester"):
-        value = getattr(engagement, field)
-        if value and (issue := character_issue(field, value)):
-            issues.append(issue)
-    for environment in engagement.tested_environments:
-        test_window = engagement.test_windows.get(environment)
-        if test_window is None:
-            continue
-        environment_label = "Production" if environment == "production" else "Non-Production"
-        if test_window.start_date and test_window.end_date and test_window.start_date > test_window.end_date:
-            issues.append(f"{environment_label} start date cannot be after its end date")
-        if test_window.test_time and (issue := character_issue("test_time", test_window.test_time, f"{environment_label} time")):
-            issues.append(issue)
-    for index, account in enumerate(engagement.test_accounts, start=1):
-        if account.user_role and (issue := character_issue("user_role", account.user_role, f"User role {index}")):
-            issues.append(issue)
-        if account.username and account.username != "N/A" and not USERNAME_PATTERN.fullmatch(account.username):
-            issue = invalid_character_issue(f"Username {index}", account.username, "._@\\-")
-            issues.append(issue or f"Username {index} must start and end with a letter or number")
-    if engagement.limitations and (issue := character_issue("limitations", engagement.limitations)):
-        issues.append(issue)
-    # Only when it can reach the document. An unticked Non-Production leaves the field disabled, and a
-    # disabled input is exempt from browser validation, so checking it here would 422 a save the
-    # client had no way to block.
-    if "non_production" in engagement.tested_environments and engagement.non_production_label:
-        if issue := character_issue("non_production_label", engagement.non_production_label):
-            issues.append(issue)
-    return issues
+    return [setup_refusal_message(result) for result in setup_field_refusals(engagement.model_dump(mode="json"))]
 
 
 def finding_input_issues(report: Report) -> list[str]:
@@ -660,25 +708,11 @@ def scope_box_refusals(environment: str, channel: str, component_text: str, desc
             repeated.append(value)
         seen.add(value)
     results = [{"kind": "refusal", "code": "duplicate_component", "environment": environment, "app_type": channel, "component": value} for value in repeated]
-    rule = CHARACTER_RULES["component_scope"]
     for line, value, description in named:
         for box, text in (("component", value), ("description", description)):
-            characters = _invalid_characters(text, rule.symbols, allow_letters=rule.letters, allow_numbers=rule.numbers, allow_spaces=rule.spaces, allow_line_breaks=rule.line_breaks)
-            if characters:
+            if characters := _rule_characters("component_scope", text):
                 results.append({"kind": "refusal", "code": "invalid_characters", "field": "component_scope", "environment": environment, "app_type": channel, "box": box, "line": line, "characters": characters})
     return results
-
-
-def scope_refusal_message(result: dict) -> str:
-    """The words a save refuses a scope-text refusal with."""
-    if result["code"] == "no_app_type":
-        return "select at least one app type"
-    environment_label = "Production" if result["environment"] == "production" else "Non-Production"
-    scope_label = f"{environment_label} {CHANNEL_LABELS[result['app_type']]} scope"
-    if result["code"] == "duplicate_component":
-        return f"{scope_label} lists the same component twice: {json.dumps(result['component'], ensure_ascii=False)}"
-    label = f"{scope_label} description" if result["box"] == "description" else scope_label
-    return _invalid_character_text(label, result["characters"])
 
 
 def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
@@ -694,7 +728,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
         raise ValueError("tested_environments must be a list")
     channels = resolve_tested_channels(payload)
     if not channels:
-        raise ValueError(scope_refusal_message({"code": "no_app_type"}))
+        raise ValueError(setup_refusal_message({"code": "no_app_type"}))
     # Written back for the same reason scope_targets is: this function replaces the target list, so a
     # later derive-from-targets would otherwise read the new one and resolve differently.
     payload["engagement"] = {key: value for key, value in engagement.items() if key != "test_type"}
@@ -722,7 +756,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             if not isinstance(component_text, str) or not isinstance(description_text, str):
                 raise ValueError("scope target values must be text")
             if refusals := scope_box_refusals(environment, channel, component_text, description_text):
-                raise ValueError(scope_refusal_message(refusals[0]))
+                raise ValueError(setup_refusal_message(refusals[0]))
             # Paired by raw index before cleaning, as scope_box_refusals does.
             cleaned: list[tuple[str, str]] = []
             seen: set[str] = set()
@@ -827,7 +861,7 @@ def scope_text_refusals(report: dict) -> list[dict]:
 def setup_results(report: dict) -> list[dict]:
     """Ordered Setup results for a report in the browser's shape. Twin: setupResults in rules.js."""
     engagement = report.get("engagement") or {}
-    results: list[dict] = scope_text_refusals(report)
+    results: list[dict] = [*scope_text_refusals(report), *setup_field_refusals(engagement)]
 
     def issue(code: str, **context) -> None:
         results.append({"kind": "issue", "code": code, **context})

@@ -79,14 +79,54 @@
     return targets;
   };
 
+  // Twin of report_service.USERNAME_PATTERN, which the vocabulary does not serve.
+  const USERNAME_PATTERN = /^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/;
+
+  // What a save says about one username: null, invalid characters, or a bad first or last character.
+  const usernameRefusal = (username, vocabulary) => {
+    if (!username || username === "N/A" || USERNAME_PATTERN.test(username)) return null;
+    const characters = invalidCharacters(username, vocabulary.character_rules.username);
+    return characters.length ? {code:"invalid_characters", field:"username", characters} : {code:"invalid_username"};
+  };
+
+  // Twin of report_service.setup_field_refusals.
+  const fieldRefusals = (engagement, vocabulary) => {
+    const results = [];
+    const refuse = (code, context = {}) => results.push({kind:"refusal", code, ...context});
+    const check = (field, value, context = {}) => {
+      if (typeof value !== "string" || !value) return;
+      const characters = invalidCharacters(value, vocabulary.character_rules[field]);
+      if (characters.length) refuse("invalid_characters", {field, ...context, characters});
+    };
+    ["app_name", "ci_number", "bsn_number", "app_owner", "tester"].forEach(field => check(field, engagement[field]));
+    const environments = engagement.tested_environments || [];
+    environments.forEach(environment => {
+      const testWindow = engagement.test_windows?.[environment];
+      if (!testWindow || typeof testWindow !== "object" || Array.isArray(testWindow)) return;
+      const {start_date:start, end_date:end} = testWindow;
+      if (typeof start === "string" && typeof end === "string" && start && end && start > end) refuse("test_dates_out_of_order", {environment});
+      check("test_time", testWindow.test_time, {environment});
+    });
+    (engagement.test_accounts || []).forEach((account, index) => {
+      if (!account || typeof account !== "object" || Array.isArray(account)) return;
+      check("user_role", account.user_role, {account:index + 1});
+      const username = usernameRefusal(typeof account.username === "string" ? account.username : "", vocabulary);
+      if (username) refuse(username.code, {...username, account:index + 1});
+    });
+    check("limitations", engagement.limitations);
+    // Stripped as the model's strip_label does before the save checks it.
+    if (environments.includes("non_production")) check("non_production_label", typeof engagement.non_production_label === "string" ? strip(engagement.non_production_label) : engagement.non_production_label);
+    return results;
+  };
+
   const setupResults = (report, vocabulary) => {
     const engagement = report?.engagement || {};
-    const results = scopeRefusals(report, vocabulary);
+    const results = [...scopeRefusals(report, vocabulary), ...fieldRefusals(engagement, vocabulary)];
     const issue = (code, context = {}) => results.push({kind:"issue", code, ...context});
-    if (!(engagement.app_name || "").trim()) issue("missing_app_name");
+    if (!strip(asString(engagement.app_name))) issue("missing_app_name");
     if (!engagement.segment) issue("missing_segment");
     if (!engagement.report_type) issue("missing_report_type");
-    if (!(engagement.tester || "").trim()) issue("missing_tester");
+    if (!strip(asString(engagement.tester))) issue("missing_tester");
     const environments = engagement.tested_environments || [];
     if (!environments.length) issue("no_tested_environment");
     const testedChannels = engagement.tested_channels || [];
@@ -104,5 +144,5 @@
     return results;
   };
 
-  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip};
+  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, usernameRefusal};
 })();

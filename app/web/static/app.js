@@ -1461,8 +1461,6 @@
     const OTHERS_OPTION = "OTHERS";
     // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
     let typingCustomLabel = false;
-    // The space sits first inside the class so the trailing hyphen cannot become a range.
-    const usernameCharacters = characterRule("Username", /^[ A-Za-z0-9._@\\-]$/);
     const setupRule = field => browserCharacterRule(vocabulary.character_rules[field]);
     const setupRules = {
       app_name: setupRule("app_name"),
@@ -1474,7 +1472,12 @@
       time: setupRule("test_time"),
       userRole: setupRule("user_role"),
       non_production_label: setupRule("non_production_label"),
-      username: {...usernameCharacters, valid:value => !value || value === "N/A" || /^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/.test(value), message:label => `${label} must start and end with a letter or number`},
+      username: {
+        label:"Username",
+        invalidCharacters:value => window.vrRules.usernameRefusal(value, vocabulary)?.characters || [],
+        valid:value => !window.vrRules.usernameRefusal(value, vocabulary),
+        message:label => `${label} must start and end with a letter or number`,
+      },
     };
     const setupNotice = document.querySelector("#setup-validation-note");
     const wireSetupRule = (input, rule, label = rule.label) => {
@@ -2701,13 +2704,14 @@
     search.onblur = () => setTimeout(() => { results.innerHTML = ""; search.setAttribute("aria-expanded", "false"); }, 150);
     }
     const validateSetupPage = reveal => {
-      if (!validateSetupInputs(reveal)) {
+      const results = window.vrRules.setupResults(report, vocabulary);
+      const refused = results.some(result => result.kind === "refusal");
+      if (!validateSetupInputs(reveal) || refused) {
         if (reveal) {
           setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
         }
         return false;
       }
-      const results = window.vrRules.setupResults(report, vocabulary);
       const flagged = code => results.some(result => result.code === code);
       // In page order, so focus lands on the first highlighted field.
       const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_type", "report_type"], ["missing_tester", "tester"]]

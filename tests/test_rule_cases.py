@@ -67,6 +67,24 @@ def undescribed(environment: str, channel: str, component: str) -> dict:
     return issue("missing_component_description", environment=environment, app_type=channel, component=component)
 
 
+def refusal(code: str, **context) -> dict:
+    return {"kind": "refusal", "code": code, **context}
+
+
+def repeated(environment: str, channel: str, component: str) -> dict:
+    return refusal("duplicate_component", environment=environment, app_type=channel, component=component)
+
+
+def bad_scope(environment: str, channel: str, box: str, line: int, *characters: str) -> dict:
+    return refusal("invalid_characters", field="component_scope", environment=environment, app_type=channel, box=box, line=line, characters=list(characters))
+
+
+def thick_client(component: str, description: str, **engagement) -> dict:
+    """A Production-only Thick Client report whose one scope box holds the given text."""
+    engagement = {"tested_environments": ["production"], "tested_channels": ["thick_client"], **engagement}
+    return scoped({("production", "thick_client"): components(component, description)}, **engagement)
+
+
 SETUP_CASES = [
     ("complete", setup_report(), []),
     ("missing app name", setup_report(app_name=""), [issue("missing_app_name")]),
@@ -156,6 +174,72 @@ SETUP_CASES = [
         [
             issue("missing_test_dates", environment="production"), undescribed("production", "thick_client", "Acme.exe"),
             issue("missing_test_dates", environment="non_production"), issue("missing_scope_target", environment="non_production"),
+        ],
+    ),
+    (
+        "no app type",
+        setup_report(tested_channels=[]),
+        [refusal("no_app_type"), issue("missing_scope_target", environment="production"), issue("missing_scope_target", environment="non_production")],
+    ),
+    ("a component typed twice", thick_client("Acme.exe\n Acme.exe ", "Main client\nSecond build"), [repeated("production", "thick_client", "Acme.exe")]),
+    (
+        "each repeated component once, in the order it repeats",
+        thick_client("Acme.exe\nUpdater.exe\nUpdater.exe\nAcme.exe\nAcme.exe", "a\nb\nc\nd\ne"),
+        [repeated("production", "thick_client", "Updater.exe"), repeated("production", "thick_client", "Acme.exe")],
+    ),
+    ("a repeated # line is not a component", thick_client("# old\n# old\nAcme.exe", "\n\nMain client"), []),
+    ("a URL typed twice on web is dropped", scoped({("production", "web"): "https://app.example.test\nhttps://app.example.test"}), []),
+    (
+        "a URL typed twice on API is dropped",
+        scoped({("production", "api"): "https://api.example.test\n https://api.example.test"}, tested_channels=["web", "api"]),
+        [],
+    ),
+    ("a component character", thick_client("Acme!.exe", "Main client"), [bad_scope("production", "thick_client", "component", 0, "!")]),
+    ("description characters, in the order typed", thick_client("Acme.exe", "Crashes <on> start!<"), [bad_scope("production", "thick_client", "description", 0, "<", ">", "!")]),
+    ("an install path is allowed", thick_client("C:\\Program Files\\Acme\\acme.exe [x64]", "Client's \"main\" binary; build 2.1 (x64)"), []),
+    ("a letter outside ASCII is allowed", thick_client("Café.exe", "Ünïcode client"), []),
+    ("surrounding whitespace is trimmed before the check", thick_client("\tAcme.exe ", " Main client\t"), []),
+    ("whitespace JavaScript's trim keeps is trimmed", thick_client("\u0085Acme.exe\x1c", "\u3000Main client\x1f"), []),
+    ("a byte-order mark is not whitespace", thick_client("\ufeffAcme.exe", "Main client"), [bad_scope("production", "thick_client", "component", 0, "\ufeff")]),
+    ("a # description is checked", thick_client("Acme.exe", "# main client"), [bad_scope("production", "thick_client", "description", 0, "#")]),
+    (
+        "a description against a blank or # component is not checked",
+        thick_client("\n# retired!\nAcme.exe", "stray!\nold?\nMain client"),
+        [],
+    ),
+    ("a line separator is not a line break", thick_client("Alpha\u2028Beta", "One"), [bad_scope("production", "thick_client", "component", 0, "\u2028")]),
+    ("web and API are not checked", scoped({("production", "web"): "https://app.example.test/path?x=1&y=2"}), []),
+    (
+        "untested environments and uncovered app types are not checked",
+        scoped(
+            {("non_production", "thick_client"): components("Bad!\nBad!", ""), ("production", "mobile"): components("Bad!", "")},
+            tested_environments=["production"], tested_channels=["web", "thick_client"],
+        ),
+        [],
+    ),
+    (
+        "a repeated component's characters are checked on every row",
+        thick_client("Acme!\nAcme!", "Main\nSecond?"),
+        [
+            repeated("production", "thick_client", "Acme!"),
+            bad_scope("production", "thick_client", "component", 0, "!"),
+            bad_scope("production", "thick_client", "component", 1, "!"), bad_scope("production", "thick_client", "description", 1, "?"),
+        ],
+    ),
+    (
+        "refusals come first, box by box, then issues",
+        scoped(
+            {
+                ("production", "thick_client"): components("Acme.exe\nTool!\nAcme.exe", "\nTool?\nAgain"),
+                ("non_production", "thick_client"): components("Agent.exe\nAgent.exe", "Agent\nAgent"),
+            },
+            app_name="", tested_channels=["web", "thick_client"],
+        ),
+        [
+            repeated("production", "thick_client", "Acme.exe"),
+            bad_scope("production", "thick_client", "component", 1, "!"), bad_scope("production", "thick_client", "description", 1, "?"),
+            repeated("non_production", "thick_client", "Agent.exe"),
+            issue("missing_app_name"), undescribed("production", "thick_client", "Acme.exe"),
         ],
     ),
 ]

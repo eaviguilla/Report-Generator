@@ -12,6 +12,10 @@ _Avoid_: save rules, intake, accepting a draft
 The answer acceptance gives a report it will not take, naming the rule the report broke, such as a stale save, a removed scope target or an invalid Setup field.
 _Avoid_: rejection
 
+**Issue**:
+Something in a report that the tester must fix before they can go past Setup or Findings, or build the Word report. A library offer is not an issue, and the server's answer to a save it will not take is a refusal, not an issue.
+_Avoid_: blocker, error, problem, gap
+
 **Finding**:
 One entry in a report about a vulnerability, with its severity, status and affected locations. A Resolved or Closed finding is still a finding.
 _Avoid_: vulnerability, when meaning the entry in the report

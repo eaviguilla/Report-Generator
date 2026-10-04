@@ -22,6 +22,7 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 | observatory | the page |
 | work item | one node with a status: a review item, plan, spec, issue, or wayfinder map or ticket |
 | decision record | a node with no status; it records a decision and is shown for reference |
+| out-of-scope file | a file `/triage` writes in `.out-of-scope/` for each feature idea it turns down; a node with no status, drawn only while an open work item came from it |
 | link | a connection from one node to another, of one of three kinds: came from, blocked by, or merged into |
 | thread | the nodes joined by links, drawn as one group; the item at its top, where the idea was first written down, stands for the feature |
 | next step | one of Matt's skills suggested for an open work item, with a short reason; an item can have several, and the first is the main one |
@@ -68,10 +69,9 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 
 - [Does a spec or map take its status from its tickets?](issues/04-does-a-spec-or-map-take-its-status-from-its-tickets.md): statuses stay explicit; the graph may separately show when all direct children are finished, without propagating status, including from a spec to its originating review item.
 - [Which layout shows the work items best](issues/06-which-layout-shows-the-work-items-best.md): a force-directed star map on a dark sky, one kind of star per status and a cloud per thread; links told apart by colour and dashes; the page is the observatory, in `tools/observatory/`; no commit list and no library.
+- [Whether the observatory shows out-of-scope files](issues/08-whether-the-observatory-shows-out-of-scope-files.md): a file `/triage` writes in `.out-of-scope/` is a node with no status, drawn only while an open item names it in a `From:` line, and it goes into that item's `context:`; when you change your mind about a turned-down idea, triage copies its reasons into the request and deletes the file; built on its own through [Show out-of-scope files on the observatory](../observatory/issues/01-show-out-of-scope-files.md), because the spec does not depend on it.
 
 ## Not yet specified
-
-- Whether the `.out-of-scope/` files that `/triage` writes when it rejects an enhancement are nodes, and how a closed request links to one. None exist yet.
 
 ## Out of scope
 
@@ -82,5 +82,4 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 
 ## Next steps
 
-1. `/wayfinder`: One question is still under Not yet specified: whether the `.out-of-scope/` files that `/triage` writes become stars.
-2. `/to-spec`: Once that is settled or ruled out, write the spec for the architecture review change.
+1. `/to-spec`: Every decision is settled. Write the spec for the architecture review change.

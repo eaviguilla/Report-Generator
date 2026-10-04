@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture reviews for Generator (VulnReport)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true } });
+    </script>
+    <style>
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .schematic { font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; }
+      .vhead { writing-mode: vertical-rl; transform: rotate(180deg); }
+      .dot { display: inline-block; width: 10px; height: 10px; border-radius: 9999px; }
+      .band { padding: 3px 6px; background: #f1f5f9; border-left: 3px solid #cbd5e1; font-size: 10px; line-height: 1.3; min-height: 20px; }
+      .band.copy { border-left-color: #dc2626; background: #fef2f2; }
+      .band.drift { border-left-color: #991b1b; background: #fee2e2; color: #7f1d1d; font-weight: 600; }
+      .band.shared { border-left-color: #059669; background: #ecfdf5; }
+      .dash-red { border-top: 2px dashed #dc2626; }
+      pre.mermaid { background: transparent; margin: 0; }
+      /* 3 October review */
+      #review-2026-10-03 .deep { color: #f8fafc; }
+      #review-2026-10-03 .schematic { font-size: 10px; }
+      #review-2026-10-03 .mermaid svg { max-height: 288px; }
+      .rung { height: 0; border-top-width: 2px; }
+      .rung-page { border-color: #d97706; }
+      .rung-none { border-color: #dc2626; border-top-style: dashed; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+  <main>
+    <nav class="max-w-6xl mx-auto px-6 pt-12 space-y-2">
+      <p class="schematic text-stone-500">Architecture reviews · newest first · each recommendation is a review item in issues/</p>
+      <ul class="text-sm space-y-1">
+        <li><a class="hover:underline" href="#review-2026-10-03">3 October 2026</a> <span class="text-slate-500">· 5 recommendations: review items 03 to 07</span></li>
+        <li><a class="hover:underline" href="#review-2026-10-02">2 October 2026</a> <span class="text-slate-500">· 4 recommendations: review items 01 to 04</span></li>
+      </ul>
+    </nav>
+  <section id="review-2026-10-03" class="max-w-6xl mx-auto px-6 py-12 space-y-14 border-t border-stone-300">
+
+  <header class="space-y-4">
+    <p class="schematic text-stone-500">Architecture review · 3 October 2026</p>
+    <h1 class="font-serif text-4xl">Generator (VulnReport)</h1>
+    <p class="text-sm text-slate-600">Second review. From the 2 October review, the vocabulary and acceptance modules shipped in 37593ea and af37291. Its other two candidates return below, marked found again.</p>
+    <p class="text-sm text-slate-600 font-mono">Hot spots in the last 70 commits: app.js 26 · docx_report.py 19 · report_service.py 18 · main.py 17 · models.py 15 · docx_import.py 14</p>
+    <div class="flex flex-wrap gap-6 text-xs text-slate-600 items-center pt-1">
+      <span class="flex items-center gap-2"><span class="inline-block w-7 h-4 border border-slate-500 bg-white"></span>module</span>
+      <span class="flex items-center gap-2"><svg width="32" height="10"><line x1="0" y1="5" x2="32" y2="5" stroke="#475569" stroke-width="2" class="seam"/></svg>seam</span>
+      <span class="flex items-center gap-2"><svg width="32" height="10"><defs><marker id="review-2026-10-03-lg-red" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="#dc2626"/></marker></defs><line x1="0" y1="5" x2="26" y2="5" stroke="#dc2626" stroke-width="2" marker-end="url(#review-2026-10-03-lg-red)"/></svg>leakage</span>
+      <span class="flex items-center gap-2"><span class="inline-block w-7 h-4 deep border-2 border-slate-900"></span>deep module</span>
+      <span class="flex items-center gap-2"><span class="inline-block w-7 h-4 bg-red-50 border border-red-600"></span>copy of the same logic</span>
+    </div>
+  </header>
+
+  <section id="review-2026-10-03-candidates" class="space-y-12">
+
+    <!-- 1 -->
+    <article id="review-2026-10-03-c1" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+      <div class="flex items-baseline gap-4">
+        <span class="font-serif text-4xl text-stone-300">1</span>
+        <h2 class="font-serif text-2xl">Twin rules become one interface with two adapters</h2>
+      </div>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <span class="rounded-full bg-emerald-600 text-white px-3 py-1 font-medium">Strong</span>
+        <span class="rounded-full border border-slate-300 text-slate-600 px-3 py-1">in-process</span>
+        <span class="rounded-full border border-stone-400 text-stone-600 px-3 py-1">found again · 2 October #3</span>
+        <a href="issues/03-twin-rules-become-one-interface-with-two-adapters.md" class="rounded-full border border-slate-300 text-slate-600 px-3 py-1 font-mono hover:underline">review item 03</a>
+      </div>
+      <ul class="font-mono text-sm text-slate-700 space-y-1">
+        <li>app/web/static/app.js · module-scope rules, lines 1066 to 1486</li>
+        <li>app/web/static/app.js · setup(): validateSetupPage, validateFindingsPage</li>
+        <li>app/web/static/app.js · continuousEditor(): updateReadinessPanel, fragmentIssues, additionalInformationFields</li>
+        <li>app/report_service.py · setup_issues, finding_is_complete, affected_channels, reconcile_targets, apply_poc_variant</li>
+        <li>app/docx_report.py · generation_issues</li>
+        <li>tests/test_browser.py · the readiness and Findings-gate contract tests</li>
+        <li>docs/DATA_MAP.md · §12</li>
+      </ul>
+      <div class="grid md:grid-cols-2 gap-6">
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">Before · 9 of the 38 twin rows</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex flex-col">
+            <div class="grid grid-cols-[1fr_84px_1fr] gap-x-2 schematic text-slate-500 pb-2 border-b border-slate-100">
+              <span>Python</span><span class="text-center">compared by</span><span class="text-right">app.js closure</span>
+            </div>
+            <div class="grid grid-cols-[1fr_84px_1fr] gap-x-2 gap-y-[8px] items-center font-mono text-[11px] pt-3 text-slate-800">
+              <span>generation_issues</span><span class="rung rung-page"></span><span class="text-right">updateReadinessPanel</span>
+              <span>finding_is_complete</span><span class="rung rung-page"></span><span class="text-right">validateFindingsPage</span>
+              <span>setup_issues</span><span class="rung rung-none"></span><span class="text-right text-red-600">validateSetupPage</span>
+              <span>affected_channels</span><span class="rung rung-none"></span><span class="text-right">affectedChannels</span>
+              <span>resolve_tested_channels</span><span class="rung rung-none"></span><span class="text-right">tested_channels seed</span>
+              <span>reconcile_targets</span><span class="rung rung-none"></span><span class="text-right">findingsStrandedBy</span>
+              <span>applicable_poc_variants</span><span class="rung rung-none"></span><span class="text-right">applicablePocVariants</span>
+              <span>apply_poc_variant</span><span class="rung rung-none"></span><span class="text-right">applyPocVariant</span>
+              <span>merge_step_lists</span><span class="rung rung-none"></span><span class="text-right">mergeStepLists</span>
+            </div>
+            <div class="mt-auto flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500">
+              <span class="flex items-center gap-2"><span class="inline-block w-6 rung rung-page"></span>one test loads a page, compares ready or not</span>
+              <span class="flex items-center gap-2"><span class="inline-block w-6 rung rung-none"></span>no test</span>
+              <span class="flex items-center gap-2"><span class="font-mono text-red-600">red name</span>counts fields on the page, not the report</span>
+            </div>
+          </div>
+          <p class="mt-2 text-xs text-slate-500">app.js returns on its third line unless a report page is loaded.</p>
+        </figure>
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">After · two adapters justify the seam</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex flex-col items-center">
+            <div class="flex gap-2 text-[11px] text-slate-600">
+              <span class="border border-slate-300 rounded px-2 py-0.5">save path</span>
+              <span class="border border-slate-300 rounded px-2 py-0.5">Setup</span>
+              <span class="border border-slate-300 rounded px-2 py-0.5">Findings</span>
+              <span class="border border-slate-300 rounded px-2 py-0.5">Content</span>
+            </div>
+            <svg width="20" height="16"><line x1="10" y1="0" x2="10" y2="16" stroke="#64748b" stroke-width="1.5"/></svg>
+            <div class="schematic text-slate-700 border border-slate-500 rounded px-3 py-1">one rule interface</div>
+            <svg width="360" height="28"><path d="M180 0 L84 28" stroke="#475569" stroke-width="2" fill="none" class="seam"/><path d="M180 0 L276 28" stroke="#475569" stroke-width="2" fill="none" class="seam"/></svg>
+            <div class="flex gap-6 w-[360px]">
+              <div class="deep border-2 border-slate-900 rounded-md w-[168px] h-[60px] flex flex-col justify-center px-3">
+                <span class="schematic">Python adapter</span>
+                <span class="text-[11px] text-slate-300">one rules module</span>
+              </div>
+              <div class="deep border-2 border-slate-900 rounded-md w-[168px] h-[60px] flex flex-col justify-center px-3">
+                <span class="schematic">browser adapter</span>
+                <span class="text-[11px] text-slate-300">one file, no DOM, report passed in</span>
+              </div>
+            </div>
+            <svg width="360" height="26"><path d="M84 0 L180 26" stroke="#059669" stroke-width="2" fill="none"/><path d="M276 0 L180 26" stroke="#059669" stroke-width="2" fill="none"/><text x="238" y="22" font-size="10" fill="#059669">both must pass</text></svg>
+            <div class="border border-slate-400 rounded-md px-4 py-2 w-[260px]">
+              <div class="schematic text-slate-700 mb-1">shared rule cases</div>
+              <div class="grid grid-cols-[1fr_1fr] gap-x-3 text-[10px] font-mono text-slate-500">
+                <span>report in</span><span>issues out</span>
+                <span class="border-t border-slate-200 pt-0.5">asia_without_cvss</span><span class="border-t border-slate-200 pt-0.5">2 issues</span>
+                <span>no_findings</span><span>none</span>
+              </div>
+            </div>
+          </div>
+          <p class="mt-2 text-xs text-slate-500">First cases: the 17 the readiness contract test already builds.</p>
+        </figure>
+      </div>
+      <dl class="grid md:grid-cols-[110px_1fr] gap-x-6 gap-y-3 text-[15px] leading-relaxed">
+        <dt class="schematic text-slate-500 pt-1.5">Problem</dt>
+        <dd>app.js returns on its third line unless a report page is loaded, so two page-load tests that compare one yes-or-no answer are the only check that its 38 twin rules agree with Python, and no test compares the app-type, scope-survival and proof-of-concept rows.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Solution</dt>
+        <dd>Move the browser's rules into one file with no DOM that takes the report as an argument, and run it and the Python rules against one shared table of cases that compares the full issue lists.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Wins</dt>
+        <dd><ul class="list-disc pl-5 space-y-1">
+          <li>Drift fails a shared case</li>
+          <li>Rule cases run without the app</li>
+          <li>Locality: one rules module per language</li>
+          <li>Readiness leaves the Word renderer</li>
+          <li>Leverage: four pages, one interface</li>
+        </ul></dd>
+      </dl>
+      <p class="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700">Found again from the 2 October review, #3. The vocabulary it waited for shipped in 37593ea. 23 of the 34 commits that ever changed app.js also changed report_service.py, docx_report.py, acceptance.py or models.py, including both report features shipped since 2 October.</p>
+      <p class="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700">DATA_MAP §12 keeps list paste and the retest Limitations sentence client-only by decision, so they stay out of this module.</p>
+    </article>
+
+    <!-- 2 -->
+    <article id="review-2026-10-03-c2" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+      <div class="flex items-baseline gap-4">
+        <span class="font-serif text-4xl text-stone-300">2</span>
+        <h2 class="font-serif text-2xl">One module builds the Word report</h2>
+      </div>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <span class="rounded-full bg-emerald-600 text-white px-3 py-1 font-medium">Strong</span>
+        <span class="rounded-full border border-slate-300 text-slate-600 px-3 py-1">mock</span>
+        <a href="issues/05-one-module-builds-the-word-report.md" class="rounded-full border border-slate-300 text-slate-600 px-3 py-1 font-mono hover:underline">review item 05</a>
+      </div>
+      <ul class="font-mono text-sm text-slate-700 space-y-1">
+        <li>app/main.py · finalized_report, unused_export_path, generate_report, generate_report_to_folder</li>
+        <li>scripts/generate_report.py · main</li>
+        <li>scripts/generate_showcase_reports.py · main, _verify_report</li>
+        <li>app/docx_report.py · generation_issues, main_template_path, render_report_docx</li>
+        <li>app/docx_captions.py · update_docx_bytes_with_word</li>
+        <li>tests/test_app.py, tests/test_browser.py · six patches of main.update_docx_bytes_with_word</li>
+      </ul>
+      <div class="grid md:grid-cols-2 gap-6">
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">Before · three copies of one sequence</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex items-center justify-center overflow-hidden">
+            <pre class="mermaid w-full">
+flowchart TB
+  G1["GET /generate"]
+  G2["POST /generate"]
+  FR["main.finalized_report<br/>lock · gate · confirm · template<br/>render · Word · number the file"]
+  CLI["scripts/generate_report.py<br/>load · confirm · template<br/>render · Word · name"]
+  SHOW["generate_showcase_reports.py<br/>gate · save · render · Word"]
+  APP["app.main<br/>prefs · library · web app"]
+  W["update_docx_bytes_with_word"]
+  T["tests: 6 patches of<br/>main.update_docx_bytes_with_word"]
+  G1 --> FR
+  G2 --> FR
+  CLI -->|imports ROOT and workspace| APP
+  FR --> W
+  CLI --> W
+  SHOW --> W
+  T -.->|patch| FR
+  classDef caller fill:#f8fafc,stroke:#94a3b8,color:#334155
+  classDef copy fill:#fef2f2,stroke:#dc2626,color:#7f1d1d,stroke-width:2px
+  classDef mod fill:#ffffff,stroke:#64748b,color:#0f172a
+  classDef test fill:#fffbeb,stroke:#d97706,color:#78350f
+  class G1,G2 caller
+  class FR,CLI,SHOW copy
+  class APP,W mod
+  class T test
+  linkStyle 2 stroke:#dc2626,stroke-width:2px
+  linkStyle 6 stroke:#dc2626,stroke-width:2px
+            </pre>
+          </div>
+        </figure>
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">After · callers only translate the answer</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex items-center justify-center overflow-hidden">
+            <pre class="mermaid w-full">
+flowchart TB
+  G1["GET /generate"]
+  G2["POST /generate"]
+  CLI["scripts/generate_report.py"]
+  SHOW["generate_showcase_reports.py"]
+  WR["Word report module<br/>gate · no-findings confirmation<br/>master template · render · file name"]
+  A1["Word adapter<br/>Windows with Word"]
+  A2["pass-through adapter<br/>tests · showcase without Word"]
+  G1 --> WR
+  G2 --> WR
+  CLI --> WR
+  SHOW --> WR
+  WR -.->|seam| A1
+  WR -.->|seam| A2
+  classDef caller fill:#f8fafc,stroke:#94a3b8,color:#334155
+  classDef deep fill:#0f172a,stroke:#0f172a,color:#f8fafc,stroke-width:3px
+  classDef mod fill:#ffffff,stroke:#64748b,color:#0f172a
+  class G1,G2,CLI,SHOW caller
+  class WR deep
+  class A1,A2 mod
+            </pre>
+          </div>
+        </figure>
+      </div>
+      <dl class="grid md:grid-cols-[110px_1fr] gap-x-6 gap-y-3 text-[15px] leading-relaxed">
+        <dt class="schematic text-slate-500 pt-1.5">Problem</dt>
+        <dd>The routes share finalized_report, but both scripts copy its sequence of gate, confirmation, master template, render, Word pass and file name, so ADR-0002's confirmation rule exists twice, the generate script imports the whole web app to reach the workspace, and tests swap out Word only by patching main.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Solution</dt>
+        <dd>One module takes a stored report and the tester's confirmation and returns the finished Word report or why it cannot, with Word behind a seam, and both routes and both scripts call it.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Wins</dt>
+        <dd><ul class="list-disc pl-5 space-y-1">
+          <li>Confirmation rule written once</li>
+          <li>Scripts stop importing the web app</li>
+          <li>Two adapters: Word and pass-through</li>
+          <li>Generation tests skip HTTP</li>
+          <li>Locality: one module per generate change</li>
+        </ul></dd>
+      </dl>
+      <p class="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700">ADR-0002 stands as decided. The confirmation still travels with each request, and every way to generate passes the same check.</p>
+    </article>
+
+    <!-- 3 -->
+    <article id="review-2026-10-03-c3" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+      <div class="flex items-baseline gap-4">
+        <span class="font-serif text-4xl text-stone-300">3</span>
+        <h2 class="font-serif text-2xl">Give the save machine its own module and a seam</h2>
+      </div>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <span class="rounded-full bg-amber-500 text-white px-3 py-1 font-medium">Worth exploring</span>
+        <span class="rounded-full border border-slate-300 text-slate-600 px-3 py-1">ports &amp; adapters</span>
+        <a href="issues/06-give-the-save-machine-its-own-module-and-a-seam.md" class="rounded-full border border-slate-300 text-slate-600 px-3 py-1 font-mono hover:underline">review item 06</a>
+      </div>
+      <ul class="font-mono text-sm text-slate-700 space-y-1">
+        <li>app/web/static/app.js · lines 36 to 110, local drafts and history at load</li>
+        <li>app/web/static/app.js · lines 172 to 960: scheduleSave, save, reconcileCanonicalObject, markSaveConflict, restoreHistory, undo, redo</li>
+        <li>app/web/static/app.js · setup(): validateSetupInputs, strandedByScopeEdit, pendingScopeDecision</li>
+        <li>tests/test_browser.py · 26 tests of saving, conflicts, recovery and undo</li>
+        <li>docs/DATA_MAP.md · §9, §10, §12</li>
+      </ul>
+      <div class="grid md:grid-cols-2 gap-6">
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">Before · app.js in cross-section, 4,265 lines</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px]">
+            <div class="relative h-[288px] w-[460px] max-w-full mx-auto">
+              <!-- what the save machine calls directly -->
+              <div class="absolute top-[10px] left-[0px] w-[106px] h-[32px] border border-slate-400 rounded text-[10px] leading-tight text-slate-700 flex items-center justify-center text-center">fetch<br/>PUT the report</div>
+              <div class="absolute top-[10px] left-[118px] w-[106px] h-[32px] border border-slate-400 rounded text-[10px] leading-tight text-slate-700 flex items-center justify-center text-center">localStorage<br/>sessionStorage</div>
+              <div class="absolute top-[10px] left-[236px] w-[106px] h-[32px] border border-slate-400 rounded text-[10px] leading-tight text-slate-700 flex items-center justify-center text-center">setTimeout</div>
+              <div class="absolute top-[10px] left-[354px] w-[106px] h-[32px] border border-slate-400 rounded text-[10px] leading-tight text-slate-700 flex items-center justify-center text-center">Save button<br/>diagnostics</div>
+              <!-- the file as a bar; dark = save machine -->
+              <div class="absolute top-[106px] left-0 w-[460px] h-[40px] flex border border-slate-300">
+                <div class="h-full bg-slate-800" style="width:11.9px"></div>
+                <div class="h-full bg-stone-100" style="width:6.5px"></div>
+                <div class="h-full bg-slate-800" style="width:3.2px"></div>
+                <div class="h-full bg-stone-100" style="width:8.3px"></div>
+                <div class="h-full bg-slate-800" style="width:36.6px"></div>
+                <div class="h-full bg-stone-300" style="width:11px" title="Setup notices, lines 618 to 719"></div>
+                <div class="h-full bg-slate-800" style="width:26px"></div>
+                <div class="h-full bg-stone-100" style="width:56.8px"></div>
+                <div class="h-full bg-stone-200" style="width:145.4px"></div>
+                <div class="h-full bg-stone-100" style="width:69.2px"></div>
+                <div class="h-full bg-stone-200 flex-1"></div>
+              </div>
+              <div class="absolute top-[150px] left-[0px] text-slate-800 font-medium" style="font-size:9px">save machine</div>
+              <div class="absolute top-[150px] left-[106px] text-slate-500" style="font-size:9px">rules</div>
+              <div class="absolute top-[150px] left-[162px] text-slate-500" style="font-size:9px">setup()</div>
+              <div class="absolute top-[150px] left-[308px] text-slate-500" style="font-size:9px">renderers</div>
+              <div class="absolute top-[150px] left-[377px] text-slate-500" style="font-size:9px">continuousEditor()</div>
+              <div class="absolute top-[205px] left-[96px] text-[10px] text-red-700 leading-tight">setup() reassigns 3 hooks<br/>that save() calls</div>
+              <div class="absolute top-[252px] left-[0px] text-[11px] text-slate-500">26 browser tests reach it, each through a loaded page.<br/>No JavaScript test runner exists.</div>
+              <svg class="absolute inset-0" width="460" height="288" style="overflow:visible">
+                <defs><marker id="review-2026-10-03-c3-red" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 z" fill="#dc2626"/></marker></defs>
+                <path d="M0 102 V96 H104 V102" stroke="#334155" stroke-width="1.5" fill="none"/>
+                <line x1="20" y1="96" x2="53" y2="46" stroke="#dc2626" stroke-width="1.5" marker-end="url(#review-2026-10-03-c3-red)"/>
+                <line x1="45" y1="96" x2="171" y2="46" stroke="#dc2626" stroke-width="1.5" marker-end="url(#review-2026-10-03-c3-red)"/>
+                <line x1="70" y1="96" x2="289" y2="46" stroke="#dc2626" stroke-width="1.5" marker-end="url(#review-2026-10-03-c3-red)"/>
+                <line x1="95" y1="96" x2="407" y2="46" stroke="#dc2626" stroke-width="1.5" marker-end="url(#review-2026-10-03-c3-red)"/>
+                <path d="M236 148 C 222 212, 104 212, 88 152" stroke="#dc2626" stroke-width="1.5" fill="none" marker-end="url(#review-2026-10-03-c3-red)"/>
+              </svg>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">After · storage, server and timers become adapters</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex flex-col items-center">
+            <div class="flex gap-3 text-[11px] text-slate-600">
+              <span class="border border-slate-300 rounded px-2 py-0.5">Setup</span>
+              <span class="border border-slate-300 rounded px-2 py-0.5">Findings</span>
+              <span class="border border-slate-300 rounded px-2 py-0.5">Content</span>
+            </div>
+            <svg width="300" height="30"><line x1="150" y1="0" x2="150" y2="30" stroke="#64748b" stroke-width="1.5"/><text x="158" y="19" font-size="10" fill="#475569">edits and save checks</text></svg>
+            <div class="deep border-2 border-slate-900 rounded-md w-[340px] px-4 py-3 space-y-2">
+              <div class="schematic">save machine module</div>
+              <div class="text-[11px] text-slate-300">autosave · conflict flow · local recovery · three-way merge · undo and redo</div>
+              <div class="font-mono text-[10px] text-slate-200 bg-slate-700/60 rounded px-2 py-1">scheduleSave · save · trackMutation · waitForMutations · undo · redo</div>
+            </div>
+            <svg width="340" height="34"><path d="M170 0 L80 34" stroke="#475569" stroke-width="2" fill="none" class="seam"/><path d="M170 0 L260 34" stroke="#475569" stroke-width="2" fill="none" class="seam"/><text x="158" y="31" font-size="10" fill="#475569">seam</text></svg>
+            <div class="flex gap-5">
+              <div class="border border-slate-500 rounded px-3 py-2 w-[160px] text-[11px] text-slate-700 leading-snug"><div class="schematic text-slate-800">browser adapter</div>fetch, Web Storage, timers, Save button</div>
+              <div class="border border-slate-500 rounded px-3 py-2 w-[160px] text-[11px] text-slate-700 leading-snug"><div class="schematic text-slate-800">in-memory adapter</div>tests drive conflicts and recovery</div>
+            </div>
+            <p class="mt-auto text-[11px] text-slate-500">Conflict, recovery and merge cases run with no app and no page.</p>
+          </div>
+        </figure>
+      </div>
+      <dl class="grid md:grid-cols-[110px_1fr] gap-x-6 gap-y-3 text-[15px] leading-relaxed">
+        <dt class="schematic text-slate-500 pt-1.5">Problem</dt>
+        <dd>About 700 lines of autosave, conflict handling, local recovery, a three-way merge of the server's reply and undo call fetch, Web Storage, timers and the Save button directly, and save() runs Setup's checks through three variables that setup() reassigns, so all 26 of its tests load a page.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Solution</dt>
+        <dd>Give the save machine its own file that takes storage, server calls and timers as adapters, and let each page pass in its own save checks.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Wins</dt>
+        <dd><ul class="list-disc pl-5 space-y-1">
+          <li>Conflict cases run without a page</li>
+          <li>Three-way merge gets direct tests</li>
+          <li>Setup checks cross the interface</li>
+          <li>Locality: saving lives in one file</li>
+        </ul></dd>
+      </dl>
+      <p class="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700">DATA_MAP §12 records the cost today. On any page but Setup, undo and local recovery save without the Setup check, so a Setup value the server refuses can block Back and Next.</p>
+    </article>
+
+    <!-- 4 -->
+    <article id="review-2026-10-03-c4" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+      <div class="flex items-baseline gap-4">
+        <span class="font-serif text-4xl text-stone-300">4</span>
+        <h2 class="font-serif text-2xl">One owner for the Additional Information fields</h2>
+      </div>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <span class="rounded-full bg-amber-500 text-white px-3 py-1 font-medium">Worth exploring</span>
+        <span class="rounded-full border border-slate-300 text-slate-600 px-3 py-1">in-process</span>
+        <a href="issues/07-one-owner-for-the-additional-information-fields.md" class="rounded-full border border-slate-300 text-slate-600 px-3 py-1 font-mono hover:underline">review item 07</a>
+      </div>
+      <ul class="font-mono text-sm text-slate-700 space-y-1">
+        <li>app/docx_report.py · generation_issues (101), main_template_path (162), _populate_cvss_table (617), _render_finding_component (766)</li>
+        <li>app/docx_import.py · reads the table named Section (807)</li>
+        <li>resources/MAIN_ASIA.docx, resources/MAIN_THICK_MOBILE_ASIA.docx, resources/finding_types/retest_finding.docx</li>
+        <li>app/web/static/app.js · additionalInformationFields (3495), cvssIssues (3603)</li>
+        <li>tests/test_browser.py · test_additional_information_shows_only_the_fields_that_apply</li>
+      </ul>
+      <div class="grid md:grid-cols-2 gap-6">
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">Before · eight places each decide part of it</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex flex-col gap-2">
+            <div class="text-center text-[12px] text-slate-800 border border-slate-300 rounded px-3 py-1.5">Which Additional Information fields does this finding print? <span class="text-red-600">No owner.</span></div>
+            <div class="grid grid-cols-2 gap-1.5 flex-1">
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-stone-500" style="font-size:9px">Word</div><div class="font-mono text-[10px]">MAIN_ASIA, MAIN_THICK_MOBILE_ASIA</div><div class="text-[10px] text-slate-600">carry the CVSS table</div></div>
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-stone-500" style="font-size:9px">Word</div><div class="font-mono text-[10px]">retest_finding.docx</div><div class="text-[10px] text-slate-600">carries the tickets token</div></div>
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-slate-500" style="font-size:9px">Python</div><div class="font-mono text-[10px]">main_template_path</div><div class="text-[10px] text-slate-600">Asia picks an _ASIA master</div></div>
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-slate-500" style="font-size:9px">Python</div><div class="font-mono text-[10px]">_render_finding_component</div><div class="text-[10px] text-slate-600">open_new picks new_finding.docx</div></div>
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-slate-500" style="font-size:9px">Python</div><div class="font-mono text-[10px]">_populate_cvss_table</div><div class="text-[10px] text-slate-600">a table named Section means Asia</div></div>
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-slate-500" style="font-size:9px">Python</div><div class="font-mono text-[10px]">generation_issues</div><div class="text-[10px] text-slate-600">Asia requires the CVSS pair</div></div>
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-slate-500" style="font-size:9px">Python</div><div class="font-mono text-[10px]">docx_import</div><div class="text-[10px] text-slate-600">reads the table named Section</div></div>
+              <div class="border border-dashed border-red-400 rounded px-2 py-1 leading-tight"><div class="schematic text-red-600" style="font-size:9px">JavaScript</div><div class="font-mono text-[10px]">additionalInformationFields, cvssIssues</div><div class="text-[10px] text-slate-600">state the rule, test Asia twice</div></div>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">After · one module states the rule</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex flex-col items-center">
+            <div class="deep border-2 border-slate-900 rounded-md w-[380px] px-4 py-3">
+              <div class="schematic mb-2">Additional Information fields</div>
+              <div class="grid grid-cols-[1.2fr_1fr_1.2fr] text-[11px]">
+                <span></span><span class="text-slate-400 pb-1">Open (New)</span><span class="text-slate-400 pb-1">every other status</span>
+                <span class="border-t border-slate-600 py-1 text-slate-300">Asia</span><span class="border-t border-slate-600 py-1">CVSS pair</span><span class="border-t border-slate-600 py-1">tickets, CVSS pair</span>
+                <span class="border-t border-slate-600 py-1 text-slate-300">JH, GWAM, GDT, GFT</span><span class="border-t border-slate-600 py-1 text-slate-400">none</span><span class="border-t border-slate-600 py-1">tickets</span>
+              </div>
+            </div>
+            <svg width="400" height="40">
+              <line x1="200" y1="0" x2="40" y2="40" stroke="#64748b" stroke-width="1.5"/>
+              <line x1="200" y1="0" x2="120" y2="40" stroke="#64748b" stroke-width="1.5"/>
+              <line x1="200" y1="0" x2="200" y2="40" stroke="#64748b" stroke-width="1.5"/>
+              <line x1="200" y1="0" x2="280" y2="40" stroke="#64748b" stroke-width="1.5"/>
+              <line x1="200" y1="0" x2="360" y2="40" stroke="#64748b" stroke-width="1.5"/>
+            </svg>
+            <div class="grid grid-cols-5 gap-1.5 w-[400px] text-[10px] text-center text-slate-700">
+              <span class="border border-slate-400 rounded py-1">master template</span>
+              <span class="border border-slate-400 rounded py-1">finding document</span>
+              <span class="border border-slate-400 rounded py-1">readiness</span>
+              <span class="border border-slate-400 rounded py-1">importer</span>
+              <span class="border border-slate-400 rounded py-1">browser</span>
+            </div>
+            <div class="mt-auto w-[400px] border border-emerald-600 rounded px-3 py-2 text-[11px] text-emerald-800">Template test: each Word document carries the tokens the rule promises.</div>
+          </div>
+        </figure>
+      </div>
+      <dl class="grid md:grid-cols-[110px_1fr] gap-x-6 gap-y-3 text-[15px] leading-relaxed">
+        <dt class="schematic text-slate-500 pt-1.5">Problem</dt>
+        <dd>No Python code states which Additional Information fields a finding prints, because the Word documents chosen decide it, docx_report.py tests for Asia three different ways, and only app.js states the rule, with one six-case browser test as its check.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Solution</dt>
+        <dd>One module states the field rule by segment and status, the generator, readiness, the importer and the browser read it, and a test checks that each Word document carries the tokens the rule promises.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Wins</dt>
+        <dd><ul class="list-disc pl-5 space-y-1">
+          <li>Asia decided in one place</li>
+          <li>A new segment edits one table</li>
+          <li>Templates checked against the rule</li>
+          <li>Python tests reach the rule</li>
+        </ul></dd>
+      </dl>
+      <p class="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700">These are two rows of candidate 1's twin table, so this can be that work's first slice.</p>
+    </article>
+
+    <!-- 5 -->
+    <article id="review-2026-10-03-c5" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+      <div class="flex items-baseline gap-4">
+        <span class="font-serif text-4xl text-stone-300">5</span>
+        <h2 class="font-serif text-2xl">One module prints and reads each document convention</h2>
+      </div>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <span class="rounded-full bg-slate-500 text-white px-3 py-1 font-medium">Speculative</span>
+        <span class="rounded-full border border-slate-300 text-slate-600 px-3 py-1">in-process</span>
+        <span class="rounded-full border border-stone-400 text-stone-600 px-3 py-1">found again · 2 October #4</span>
+        <a href="issues/04-one-module-prints-and-reads-every-document-convention.md" class="rounded-full border border-slate-300 text-slate-600 px-3 py-1 font-mono hover:underline">review item 04</a>
+      </div>
+      <ul class="font-mono text-sm text-slate-700 space-y-1">
+        <li>app/docx_report.py · _display_date (232), _environment_label (828), SEVERITY_TICKET_PREFIX (52), the no-findings row (530), "N/A" × 18, the import on line 36</li>
+        <li>app/docx_import.py · _display_date (448), "PROD:" (389, 689), TICKET_PREFIX (98), the no-findings row check (648), "N/A" × 9</li>
+        <li>tests/test_docx_import.py · 63 tests, 32 calls to render_report_docx</li>
+      </ul>
+      <div class="grid md:grid-cols-2 gap-6">
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">Before · a mirror kept by hand</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex flex-col">
+            <div class="grid grid-cols-[1fr_20px_118px_20px_1fr] items-center schematic text-slate-500 pb-2 border-b border-slate-100">
+              <span>docx_report prints</span><span></span><span class="text-center">convention</span><span></span><span class="text-right">docx_import reads</span>
+            </div>
+            <div class="grid grid-cols-[1fr_20px_118px_20px_1fr] items-center gap-y-[7px] pt-2 font-mono text-[10px]">
+              <span class="text-slate-400">STATUS_LABELS</span><span class="rung border-slate-300"></span><span class="text-center font-sans text-slate-400">status label, one owner</span><span class="rung border-slate-300"></span><span class="text-right text-slate-400">STATUS_BY_LABEL</span>
+              <span class="text-slate-400">get_args(Segment)</span><span class="rung border-slate-300"></span><span class="text-center font-sans text-slate-400">segment, one owner</span><span class="rung border-slate-300"></span><span class="text-right text-slate-400">get_args(Segment)</span>
+              <span class="text-slate-400">PRESETS</span><span class="rung border-slate-300"></span><span class="text-center font-sans text-slate-400">non-production label, one owner</span><span class="rung border-slate-300"></span><span class="text-right text-slate-400">PRESETS + legacy</span>
+              <span>_display_date f-string</span><span class="rung rung-none"></span><span class="text-center font-sans text-red-700">date</span><span class="rung rung-none"></span><span class="text-right">_display_date strptime</span>
+              <span>"PROD:", LABEL:</span><span class="rung rung-none"></span><span class="text-center font-sans text-red-700">environment heading</span><span class="rung rung-none"></span><span class="text-right">== "PROD:", label scan</span>
+              <span>"GRIMPEN-"</span><span class="rung rung-none"></span><span class="text-center font-sans text-red-700">ticket line</span><span class="rung rung-none"></span><span class="text-right">^[A-Za-z]+-</span>
+              <span>"N/A" × 18</span><span class="rung rung-none"></span><span class="text-center font-sans text-red-700">empty value</span><span class="rung rung-none"></span><span class="text-right">"N/A" × 9</span>
+              <span>[title, N/A × 5]</span><span class="rung rung-none"></span><span class="text-center font-sans text-red-700">no-findings row</span><span class="rung rung-none"></span><span class="text-right">[title, N/A × 5]</span>
+            </div>
+            <div class="mt-auto relative border-t border-slate-100 pt-3">
+              <svg width="100%" height="18" viewBox="0 0 400 18" preserveAspectRatio="none"><defs><marker id="review-2026-10-03-c5-red" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 z" fill="#dc2626"/></marker></defs><line x1="392" y1="9" x2="14" y2="9" stroke="#dc2626" stroke-width="2" marker-end="url(#review-2026-10-03-c5-red)"/></svg>
+              <p class="text-[10px] text-red-700 font-mono text-center">FINDING_HEADING_STYLE, INSTANCE_PREFIX, NO_FINDINGS_TITLE: the writer imports them from the reader</p>
+            </div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption class="schematic text-slate-500 mb-2">After · both sides call one owner</figcaption>
+          <div class="rounded-lg border border-slate-200 bg-white p-4 h-[320px] flex flex-col justify-center">
+            <div class="flex items-center justify-between gap-2">
+              <div class="border border-slate-500 rounded px-3 py-2 w-[96px] text-center"><div class="schematic text-slate-800">generator</div><div class="font-mono text-[10px] text-slate-500">docx_report</div></div>
+              <svg width="40" height="12"><defs><marker id="review-2026-10-03-c5-g1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 z" fill="#475569"/></marker></defs><line x1="0" y1="6" x2="34" y2="6" stroke="#475569" stroke-width="1.5" marker-end="url(#review-2026-10-03-c5-g1)"/></svg>
+              <div class="deep border-2 border-slate-900 rounded-md flex-1 px-4 py-3">
+                <div class="schematic mb-2">printed conventions</div>
+                <ul class="text-[11px] text-slate-200 space-y-0.5">
+                  <li>date</li><li>environment heading</li><li>ticket line</li><li>empty value</li><li>no-findings row</li><li>heading style, instance prefix</li>
+                </ul>
+                <div class="text-[10px] text-slate-400 mt-2">each one a print and read pair</div>
+              </div>
+              <svg width="40" height="12"><defs><marker id="review-2026-10-03-c5-g2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 z" fill="#475569"/></marker></defs><line x1="40" y1="6" x2="6" y2="6" stroke="#475569" stroke-width="1.5" marker-end="url(#review-2026-10-03-c5-g2)"/></svg>
+              <div class="border border-slate-500 rounded px-3 py-2 w-[96px] text-center"><div class="schematic text-slate-800">importer</div><div class="font-mono text-[10px] text-slate-500">docx_import</div></div>
+            </div>
+            <p class="mt-6 text-[11px] text-slate-500 text-center">One round-trip case per convention, with no document render.</p>
+          </div>
+        </figure>
+      </div>
+      <dl class="grid md:grid-cols-[110px_1fr] gap-x-6 gap-y-3 text-[15px] leading-relaxed">
+        <dt class="schematic text-slate-500 pt-1.5">Problem</dt>
+        <dd>Each remaining convention is printed in docx_report.py and parsed in docx_import.py with no shared owner, both files hold a function named _display_date that runs in opposite directions, and the writer imports three of its own constants from the reader.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Solution</dt>
+        <dd>One module owns each printed convention as a print and read pair, and the generator and the importer both call it.</dd>
+        <dt class="schematic text-slate-500 pt-1.5">Wins</dt>
+        <dd><ul class="list-disc pl-5 space-y-1">
+          <li>Writer stops importing from reader</li>
+          <li>One round-trip case per convention</li>
+          <li>Fewer whole-document renders in tests</li>
+        </ul></dd>
+      </dl>
+      <p class="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700">Found again from the 2 October review, #4. Since then 37593ea gave status labels and segments one owner, the master-template choice and the Asia checks went to card 4, and the 63 importer tests catch drift in the rest, so the payoff is smaller than it was.</p>
+    </article>
+
+  </section>
+
+  <section id="review-2026-10-03-examined" class="space-y-3">
+    <h2 class="schematic text-slate-500">Examined, nothing proposed</h2>
+    <ul class="text-sm text-slate-700 space-y-2">
+      <li><span class="font-mono">report_generator_burp.py</span>. It already injects its settings, dialogs, launcher and browser, and fakes drive it without Burp. One Jython file and two separate launchers are recorded decisions.</li>
+      <li><span class="font-mono">Workspace</span> is deep already. Its 15 public methods hide locking, folder renames, saved_at, the undo archive and the orphan sweep.</li>
+      <li>Bundle import, retest import, library insert and rename skip acceptance. That is filed as <span class="font-mono">.scratch/report-acceptance/issues/01</span> to <span class="font-mono">04</span>.</li>
+    </ul>
+  </section>
+
+  <section id="review-2026-10-03-top-recommendation">
+    <a href="#review-2026-10-03-c1" class="block rounded-2xl deep border-2 border-slate-900 p-10 space-y-3 hover:opacity-95">
+      <p class="schematic text-emerald-300">Top recommendation</p>
+      <h2 class="font-serif text-3xl">1 · Twin rules become one interface with two adapters</h2>
+      <p class="text-slate-300 max-w-3xl leading-relaxed">Both report features shipped since 2 October changed app.js and a Python rule module together, the vocabulary this waited for has shipped, and today two page-load tests that compare one yes-or-no answer are the only check that the two sides agree.</p>
+    </a>
+  </section>
+
+</section>
+  <section id="review-2026-10-02" class="max-w-6xl mx-auto px-6 py-12 space-y-12 border-t border-stone-300">
+      <header class="space-y-4 border-b border-stone-300 pb-6">
+        <p class="schematic text-slate-500">Architecture review · 2 October 2026</p>
+        <h1 class="font-serif text-4xl">Generator (VulnReport)</h1>
+        <p class="font-mono text-xs text-slate-500">Hot spots in 75 commits: app.js 30 · docx_report.py 24 · report_service.py 20 · main.py 20 · models.py 17 · docx_import.py 12</p>
+        <div class="flex flex-wrap items-center gap-6 text-xs text-slate-600">
+          <span class="flex items-center gap-2"><span class="inline-block w-7 h-4 border border-slate-500 bg-white"></span>module</span>
+          <span class="flex items-center gap-2"><svg width="32" height="8"><line x1="0" y1="4" x2="32" y2="4" stroke="#64748b" stroke-width="2" class="seam" /></svg>seam</span>
+          <span class="flex items-center gap-2">
+            <svg width="34" height="10"><defs><marker id="review-2026-10-02-lg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#dc2626" /></marker></defs><line x1="0" y1="5" x2="30" y2="5" stroke="#dc2626" stroke-width="2" marker-end="url(#review-2026-10-02-lg)" /></svg>leakage
+          </span>
+          <span class="flex items-center gap-2"><span class="inline-block w-7 h-4 deep border-2 border-slate-900"></span>deep module</span>
+        </div>
+      </header>
+
+      <section id="review-2026-10-02-candidates" class="space-y-10">
+        <!-- 1 -->
+        <article id="review-2026-10-02-c1" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+          <div class="flex flex-wrap items-baseline justify-between gap-3">
+            <h2 class="font-serif text-2xl">1. One vocabulary module for every closed list</h2>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+              <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs font-mono">in-process</span>
+            </div>
+          </div>
+          <ul class="font-mono text-sm text-slate-600 grid sm:grid-cols-3 gap-x-6">
+            <li>app/models.py</li>
+            <li>app/report_service.py</li>
+            <li>app/docx_report.py</li>
+            <li>app/docx_import.py</li>
+            <li>app/main.py</li>
+            <li>app/web/static/app.js</li>
+            <li>app/web/static/manager.js</li>
+            <li>app/web/templates/page1_setup.html</li>
+            <li>app/web/templates/library_editor.html</li>
+          </ul>
+
+          <div class="grid md:grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="schematic text-slate-500 mb-3">Before · where each list is spelled</p>
+              <div class="grid grid-cols-[8.5rem_repeat(9,minmax(0,1fr))] items-center gap-y-1 text-[10px]">
+                <span></span>
+                <span class="vhead schematic text-slate-500 justify-self-center">models</span>
+                <span class="vhead schematic text-slate-500 justify-self-center">report_service</span>
+                <span class="vhead schematic text-slate-500 justify-self-center">docx_report</span>
+                <span class="vhead schematic text-slate-500 justify-self-center">docx_import</span>
+                <span class="vhead schematic text-slate-500 justify-self-center">main</span>
+                <span class="vhead schematic text-red-700 justify-self-center">app.js</span>
+                <span class="vhead schematic text-red-700 justify-self-center">manager.js</span>
+                <span class="vhead schematic text-red-700 justify-self-center">setup.html</span>
+                <span class="vhead schematic text-red-700 justify-self-center">library_editor</span>
+
+                <span>statuses and labels</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span>
+
+                <span>segments</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span>
+
+                <span>report types and labels</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span>
+
+                <span>network access</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span>
+
+                <span>app types, in order</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span>
+
+                <span>app-type labels</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span><span></span>
+
+                <span>component app types</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span><span></span>
+
+                <span>non-production names</span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span><span></span>
+
+                <span>field character sets</span>
+                <span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700 ring-2 ring-red-500 ring-offset-1"></span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span><span></span>
+
+                <span>sections per status</span>
+                <span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span><span></span>
+
+                <span>placeholder text</span>
+                <span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span><span></span>
+
+                <span>resolved remediation sentence</span>
+                <span></span>
+                <span class="justify-self-center"><span class="dot bg-slate-700"></span></span><span></span><span></span><span></span>
+                <span class="justify-self-center"><span class="dot bg-red-600"></span></span><span></span><span></span><span></span>
+              </div>
+              <p class="mt-3 text-[11px] text-slate-500">Slate is Python, red is a browser copy. The ringed dot is the rename route's app-name set, which already differs from Setup's.</p>
+            </div>
+
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 space-y-3">
+              <p class="schematic text-slate-500">After · one owner, two ways to read it</p>
+              <div class="deep rounded-lg border-4 border-slate-900 p-4 text-stone-100">
+                <p class="schematic text-emerald-300">vocabulary module</p>
+                <ul class="mt-2 grid grid-cols-2 gap-x-4 text-[11px] text-stone-400">
+                  <li>statuses and labels</li><li>segments</li>
+                  <li>report types and labels</li><li>network access</li>
+                  <li>app types, in order</li><li>app-type labels</li>
+                  <li>component app types</li><li>non-production names</li>
+                  <li>field character sets</li><li>sections per status</li>
+                  <li>placeholder text</li><li>resolved remediation sentence</li>
+                </ul>
+              </div>
+              <svg viewBox="0 0 400 44" class="w-full h-auto">
+                <defs>
+                  <marker id="review-2026-10-02-c1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#334155" /></marker>
+                  <marker id="review-2026-10-02-c1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#64748b" /></marker>
+                </defs>
+                <line x1="100" y1="2" x2="100" y2="40" stroke="#334155" stroke-width="2" marker-end="url(#review-2026-10-02-c1a)" />
+                <line x1="300" y1="2" x2="300" y2="40" stroke="#64748b" stroke-width="2" class="seam" marker-end="url(#review-2026-10-02-c1b)" />
+                <text x="108" y="24" font-size="10" fill="#475569">import</text>
+                <text x="308" y="24" font-size="10" fill="#475569">page JSON</text>
+              </svg>
+              <div class="grid grid-cols-2 gap-4">
+                <div class="rounded-lg border border-slate-400 bg-white p-3">
+                  <p class="schematic text-slate-500">python callers</p>
+                  <p class="font-mono text-[11px] mt-1 text-slate-700">report_service · docx_report · docx_import · main</p>
+                </div>
+                <div class="rounded-lg border border-slate-400 bg-white p-3">
+                  <p class="schematic text-slate-500">browser readers</p>
+                  <p class="font-mono text-[11px] mt-1 text-slate-700">app.js · manager.js · setup.html · library_editor</p>
+                </div>
+              </div>
+              <p class="text-[11px] text-slate-500">32 spellings become 12. The Content page already reads its Unicode ranges this way.</p>
+            </div>
+          </div>
+
+          <dl class="grid md:grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
+            <dt class="schematic text-slate-500 pt-1">Problem</dt>
+            <dd>Twelve closed lists, such as statuses, segments, app types and field character sets, are spelled 32 times across nine files, so adding the GFT segment took three hand edits and an update to the test that pins the option list.</dd>
+            <dt class="schematic text-slate-500 pt-1">Solution</dt>
+            <dd>One Python module owns the lists, every page embeds them as JSON the way the Content page already embeds <code class="font-mono text-xs">_unicode_character_ranges</code>, and the JavaScript and templates read them from there.</dd>
+            <dt class="schematic text-slate-500 pt-1">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>A new segment is one edit</li>
+                <li>32 spellings become 12</li>
+                <li>Leverage: eight files read one table</li>
+                <li>Copy-pinning tests become unnecessary</li>
+              </ul>
+            </dd>
+          </dl>
+        </article>
+
+        <!-- 2 -->
+        <article id="review-2026-10-02-c2" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+          <div class="flex flex-wrap items-baseline justify-between gap-3">
+            <h2 class="font-serif text-2xl">2. One module accepts every draft on the write path</h2>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+              <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs font-mono">local-substitutable</span>
+            </div>
+          </div>
+          <ul class="font-mono text-sm text-slate-600 space-y-0.5">
+            <li>app/main.py · save_report, finalize_editable_import, rename_report, insert_library</li>
+            <li>app/report_service.py · reconcile_targets, setup_input_issues, finding_input_issues, provision</li>
+            <li>app/models.py · normalise_scope_modes</li>
+            <li>app/workspace.py · save_if_current</li>
+            <li>tests/test_app.py</li>
+          </ul>
+
+          <div class="grid md:grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="schematic text-slate-500 mb-3">Before · each route choreographs its own steps</p>
+              <div class="grid grid-cols-4 gap-2">
+                <div class="space-y-1">
+                  <p class="schematic text-slate-600 h-8">PUT save</p>
+                  <div class="band">stale check</div>
+                  <div class="band">reconcile scope</div>
+                  <div class="band">removed-target check</div>
+                  <div class="band">legacy scope modes</div>
+                  <div class="band">validate model</div>
+                  <div class="band">Setup input check</div>
+                  <div class="band">finding input check</div>
+                  <div class="band">app id</div>
+                  <div class="band">provision</div>
+                  <div class="band shared">locked save</div>
+                </div>
+                <div class="space-y-1">
+                  <p class="schematic text-slate-600 h-8">editable import</p>
+                  <div class="band">scope text from targets</div>
+                  <div class="band copy">reconcile scope</div>
+                  <div class="band copy">removed-target check</div>
+                  <div class="band copy">legacy scope modes</div>
+                  <div class="band copy">validate model</div>
+                  <div class="band copy">Setup input check</div>
+                  <div class="band copy">finding input check</div>
+                  <div class="band copy">provision, twice</div>
+                  <div class="band">projection checks</div>
+                  <div class="band shared">import_report</div>
+                </div>
+                <div class="space-y-1">
+                  <p class="schematic text-slate-600 h-8">rename</p>
+                  <div class="band drift">own app-name rule -:()</div>
+                  <div class="band">app id</div>
+                  <div class="band shared">locked save</div>
+                </div>
+                <div class="space-y-1">
+                  <p class="schematic text-slate-600 h-8">library insert</p>
+                  <div class="band">finding from entry</div>
+                  <div class="band">fresh fragment ids</div>
+                  <div class="band">provision</div>
+                  <div class="band">image slots</div>
+                  <div class="band">proof-of-concept variant</div>
+                  <div class="band shared">locked save</div>
+                </div>
+              </div>
+              <p class="mt-3 text-[11px] text-slate-500">Red edge: copied from PUT save. Red fill: a copy that drifted. Green: already shared through Workspace.</p>
+            </div>
+
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 space-y-2">
+              <p class="schematic text-slate-500 mb-1">After · routes only translate refusals</p>
+              <div class="grid grid-cols-4 gap-2">
+                <div class="band text-center">PUT save</div>
+                <div class="band text-center">editable import</div>
+                <div class="band text-center">rename</div>
+                <div class="band text-center">library insert</div>
+              </div>
+              <div class="relative py-2">
+                <div class="border-t-2 border-dashed border-slate-500"></div>
+                <span class="absolute right-0 top-0 bg-stone-50 px-1 text-[10px] text-slate-500">seam · routes and tests call here</span>
+              </div>
+              <div class="deep rounded-lg border-4 border-slate-900 p-4 text-stone-100 min-h-[11rem]">
+                <p class="schematic text-emerald-300">accept draft</p>
+                <ul class="mt-2 grid grid-cols-2 gap-x-4 text-[11px] text-stone-400 leading-5">
+                  <li>stale check</li><li>reconcile scope</li>
+                  <li>removed-target check</li><li>legacy scope modes</li>
+                  <li>validate model</li><li>Setup input check</li>
+                  <li>finding input check</li><li>app id</li>
+                  <li>provision</li><li>one app-name rule</li>
+                </ul>
+              </div>
+              <div class="band shared text-center">Workspace locked save, unchanged</div>
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-500 -mt-2">Today test_app.py reaches these rules through 160 HTTP calls across 105 tests.</p>
+
+          <dl class="grid md:grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
+            <dt class="schematic text-slate-500 pt-1">Problem</dt>
+            <dd>The write path runs as ten ordered steps inside <code class="font-mono text-xs">save_report</code>, <code class="font-mono text-xs">finalize_editable_import</code> repeats seven of them by hand, and <code class="font-mono text-xs">rename_report</code> checks names against <code class="font-mono text-xs">-:()</code> while Setup allows <code class="font-mono text-xs">-:;.()</code>, so a rename refuses <code class="font-mono text-xs">Portal v1.2; EU</code>.</dd>
+            <dt class="schematic text-slate-500 pt-1">Solution</dt>
+            <dd>One module takes the stored report and an incoming draft and returns the report to save or a named refusal, and every mutating route calls it and only maps refusals to status codes.</dd>
+            <dt class="schematic text-slate-500 pt-1">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>Save rules testable without HTTP</li>
+                <li>Editable import reuses the save rules</li>
+                <li>Rename gets Setup's app-name rule</li>
+                <li>Locality: one place defines saving</li>
+              </ul>
+            </dd>
+          </dl>
+        </article>
+
+        <!-- 3 -->
+        <article id="review-2026-10-02-c3" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+          <div class="flex flex-wrap items-baseline justify-between gap-3">
+            <h2 class="font-serif text-2xl">3. Make the twin rules one interface with two adapters</h2>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+              <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs font-mono">in-process</span>
+            </div>
+          </div>
+          <ul class="font-mono text-sm text-slate-600 space-y-0.5">
+            <li>app/report_service.py · provision, sync_evidence_image_slots, apply_poc_variant, conclusion sentence, scope rules</li>
+            <li>app/docx_report.py · generation_issues</li>
+            <li>app/web/static/app.js · module scope (lines 1150 to 1400), setup(), continuousEditor()</li>
+            <li>tests/test_browser.py · test_browser_readiness_verdict_matches_server_generation_issues</li>
+            <li>docs/DATA_MAP.md · §12</li>
+          </ul>
+
+          <div class="grid md:grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="schematic text-slate-500 mb-2">Before · two spellings, one guard</p>
+              <pre class="mermaid">
+flowchart LR
+  subgraph PY["Python"]
+    direction TB
+    RS["report_service.py<br/>provision · image slots<br/>proof-of-concept merge<br/>conclusion · scope rules"]
+    DR["docx_report.py<br/>generation_issues"]
+  end
+  subgraph JS["app.js, 4,229 lines"]
+    direction TB
+    MOD["module scope<br/>provision · image slots<br/>proof-of-concept merge<br/>conclusion · scope rules"]
+    SET["inside setup()<br/>setup gate reads the DOM<br/>scope survival"]
+    ED["inside continuousEditor()<br/>readiness · fragmentIssues"]
+  end
+  RS -.-|"no guard"| MOD
+  RS -.-|"no guard"| SET
+  DR ---|"1 contract test"| ED
+  linkStyle 0,1 stroke:#dc2626,stroke-width:2px
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="schematic text-slate-500 mb-2">After · two adapters justify the seam</p>
+              <pre class="mermaid max-w-[19rem] mx-auto">
+flowchart TB
+  CALL["callers<br/>save path · Setup · Findings · Content"]
+  IFACE["report rules<br/>one interface"]
+  PYA["Python adapter<br/>server side"]
+  JSA["JavaScript adapter<br/>one file, no DOM<br/>report passed in"]
+  CASES[("one table of rule cases")]
+  CALL --> IFACE
+  IFACE -.- PYA
+  IFACE -.- JSA
+  PYA ---|"must pass"| CASES
+  JSA ---|"must pass"| CASES
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a,stroke-width:3px
+  class IFACE deep
+              </pre>
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-500 -mt-2">DATA_MAP §12 records that the provisioning seed differed between the two sides until 2026-09-14. None of the 156 browser tests calls a rule directly.</p>
+
+          <dl class="grid md:grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
+            <dt class="schematic text-slate-500 pt-1">Problem</dt>
+            <dd>30 of the 42 rules in DATA_MAP §12 are logic written once in Python and again inside app.js closures that read <code class="font-mono text-xs">report</code> from scope, and the map names one contract test between them, for generation readiness alone.</dd>
+            <dt class="schematic text-slate-500 pt-1">Solution</dt>
+            <dd>Treat those rules as one module with two adapters, the Python one and a DOM-free JavaScript file that takes the report as an argument, and hold both to one shared table of rule cases.</dd>
+            <dt class="schematic text-slate-500 pt-1">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>Drift fails a shared case</li>
+                <li>JavaScript rules testable without page flows</li>
+                <li>Readiness leaves the Word renderer</li>
+                <li>Closures stop owning rules</li>
+              </ul>
+            </dd>
+          </dl>
+          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">Decided in DATA_MAP §12: list paste and the retest Limitations sentence are client-only on purpose. They stay out of this module.</div>
+          <p class="text-xs text-slate-500">Open for the grilling: keep the JavaScript adapter, or delete it for some rules and let the page ask the server.</p>
+        </article>
+
+        <!-- 4 -->
+        <article id="review-2026-10-02-c4" class="rounded-2xl border border-stone-200 bg-white shadow-sm p-8 space-y-6">
+          <div class="flex flex-wrap items-baseline justify-between gap-3">
+            <h2 class="font-serif text-2xl">4. One module prints and reads every document convention</h2>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+              <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs font-mono">in-process</span>
+            </div>
+          </div>
+          <ul class="font-mono text-sm text-slate-600 space-y-0.5">
+            <li>app/docx_report.py · STATUS_LABELS, _display_date, SEVERITY_TICKET_PREFIX, _environment_label, main_template_path</li>
+            <li>app/docx_import.py · STATUS_BY_LABEL, _display_date, TICKET_PREFIX, title parser, FINDING_HEADING_STYLE, INSTANCE_PREFIX</li>
+            <li>app/report_service.py · REPORT_TYPE_LABELS, RESOLVED_REMEDIATION</li>
+            <li>app/models.py · Segment, NON_PRODUCTION_LABEL_PRESETS</li>
+            <li>tests/test_docx_import.py</li>
+          </ul>
+
+          <div class="grid md:grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="schematic text-slate-500 mb-3">Before · a mirror kept by hand</p>
+              <div class="grid grid-cols-[1fr_6.5rem_1fr] items-center gap-y-1.5 text-[10px]">
+                <p class="schematic text-slate-600">docx_report.py writes</p><span></span><p class="schematic text-slate-600 text-right">docx_import.py reads</p>
+
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-start">STATUS_LABELS</code>
+                <div><p class="text-center text-slate-500">status label</p><div class="dash-red"></div></div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">STATUS_BY_LABEL</code>
+
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-start">%B d, Y f-string</code>
+                <div><p class="text-center text-slate-500">date</p><div class="dash-red"></div></div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">_display_date parser</code>
+
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-start">"N/A" × 17</code>
+                <div><p class="text-center text-slate-500">empty value</p><div class="dash-red"></div></div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">"N/A" × 10</code>
+
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-start">"PROD:", LABEL:</code>
+                <div><p class="text-center text-slate-500">environment heading</p><div class="dash-red"></div></div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">"PROD:", label scan</code>
+
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-start">"GRIMPEN-"</code>
+                <div><p class="text-center text-slate-500">ticket line</p><div class="dash-red"></div></div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">^[A-Za-z]+-</code>
+
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-start">Segment type</code>
+                <div><p class="text-center text-slate-500">segment in title</p><div class="dash-red"></div></div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">5-name tuple</code>
+
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-start">== "Asia" × 2, table sniff</code>
+                <div><p class="text-center text-slate-500">Asia template</p><div class="dash-red"></div></div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">table sniff</code>
+
+                <code class="font-mono bg-red-50 border border-red-300 rounded px-1.5 py-0.5 justify-self-start text-red-800">imports from reader</code>
+                <div>
+                  <p class="text-center text-red-700">heading style, prefix</p>
+                  <svg viewBox="0 0 100 10" class="w-full h-2.5"><defs><marker id="review-2026-10-02-c4l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#dc2626" /></marker></defs><line x1="98" y1="5" x2="4" y2="5" stroke="#dc2626" stroke-width="2" marker-end="url(#review-2026-10-02-c4l)" /></svg>
+                </div>
+                <code class="font-mono bg-white border border-slate-300 rounded px-1.5 py-0.5 justify-self-end">FINDING_HEADING_STYLE, INSTANCE_PREFIX</code>
+              </div>
+              <p class="mt-3 text-[11px] text-slate-500">About 35 of the 61 importer tests render a whole document to prove a round trip.</p>
+            </div>
+
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 space-y-3">
+              <p class="schematic text-slate-500">After · both sides call one owner</p>
+              <div class="grid grid-cols-2 gap-4">
+                <div class="rounded-lg border border-slate-400 bg-white p-3 text-center"><p class="schematic text-slate-600">docx_report</p><p class="text-[11px] text-slate-500 mt-1">generator</p></div>
+                <div class="rounded-lg border border-slate-400 bg-white p-3 text-center"><p class="schematic text-slate-600">docx_import</p><p class="text-[11px] text-slate-500 mt-1">importer</p></div>
+              </div>
+              <svg viewBox="0 0 400 44" class="w-full h-auto">
+                <defs><marker id="review-2026-10-02-c4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#334155" /></marker></defs>
+                <line x1="100" y1="2" x2="100" y2="40" stroke="#334155" stroke-width="2" marker-end="url(#review-2026-10-02-c4a)" />
+                <line x1="300" y1="2" x2="300" y2="40" stroke="#334155" stroke-width="2" marker-end="url(#review-2026-10-02-c4a)" />
+                <text x="108" y="24" font-size="10" fill="#475569">print</text>
+                <text x="308" y="24" font-size="10" fill="#475569">read</text>
+              </svg>
+              <div class="deep rounded-lg border-4 border-slate-900 p-4 text-stone-100">
+                <p class="schematic text-emerald-300">printed format</p>
+                <ul class="mt-2 grid grid-cols-2 gap-x-4 text-[11px] text-stone-400 leading-5">
+                  <li>status label</li><li>date</li>
+                  <li>empty value</li><li>environment heading</li>
+                  <li>ticket line</li><li>title line</li>
+                  <li>master template choice</li><li>heading style, instance prefix</li>
+                </ul>
+              </div>
+              <p class="text-[11px] text-slate-500">One round-trip case per convention, with no document render.</p>
+            </div>
+          </div>
+
+          <dl class="grid md:grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
+            <dt class="schematic text-slate-500 pt-1">Problem</dt>
+            <dd>Each convention the document prints is spelled once in docx_report.py and again in docx_import.py, and the writer imports two of its own constants from the reader.</dd>
+            <dt class="schematic text-slate-500 pt-1">Solution</dt>
+            <dd>One module owns each printed convention as a print and read pair, including which master template a report gets, and both the generator and the importer call it.</dd>
+            <dt class="schematic text-slate-500 pt-1">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>A format change edits one module</li>
+                <li>Round-trip case per convention</li>
+                <li>Writer stops importing from the reader</li>
+                <li>Asia decided in one place</li>
+              </ul>
+            </dd>
+          </dl>
+        </article>
+      </section>
+
+      <section id="review-2026-10-02-top-recommendation" class="rounded-2xl deep text-stone-50 p-10 space-y-4">
+        <p class="schematic text-emerald-300">Top recommendation</p>
+        <h2 class="font-serif text-3xl"><a href="#review-2026-10-02-c1" class="underline decoration-emerald-400 underline-offset-4">1. One vocabulary module for every closed list</a></h2>
+        <p class="text-stone-300 max-w-3xl">It deletes 20 of 32 hand-kept spellings by extending a seam the Content page already uses for its Unicode ranges, and the twin-rule work in candidate 3 needs these tables in one place before its JavaScript adapter can drop its copies.</p>
+      </section>
+    </section>
+  </main>
+  </body>
+</html>

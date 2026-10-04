@@ -2,6 +2,8 @@
 
 > **Status:** done · 2026-10-02 · `af37291`
 >
+> **From:** [One module accepts every draft on the write path](../../.scratch/architecture-review/issues/02-one-module-accepts-every-draft-on-the-write-path.md)
+>
 > **What deviated.**
 > - `save_report` now hands `save_if_current` the stored revision instead of `client_saved_at or
 >   prior.saved_at`. It is the same value: `acceptance.check` has already refused any other revision

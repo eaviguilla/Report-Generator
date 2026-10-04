@@ -1463,6 +1463,7 @@
     };
     const setupNotice = document.querySelector("#setup-validation-note");
     const setupMessageControllers = new Map();
+    const dateMessageControllers = new Map();
     const attachSetupMessage = (controls, placeMessage) => {
       const messageElement = document.createElement("span");
       messageElement.id = id("setup-field-message");
@@ -1500,7 +1501,7 @@
     const attachSimpleSetupMessage = control => {
       const label = control.closest("label");
       if (!label) return null;
-      if (label.parentElement?.classList.contains("fields") || label.classList.contains("coverage-option")) {
+      if (label.parentElement?.classList.contains("fields") || label.parentElement?.classList.contains("date-pair") || label.classList.contains("coverage-option")) {
         const wrapper = document.createElement("div");
         wrapper.className = "setup-field-wrap";
         label.before(wrapper);
@@ -1528,14 +1529,19 @@
         missing_report_date:"engagement.report_date",
       };
       const byPath = new Map();
+      const results = show ? window.vrRules.setupResults(report, vocabulary) : [];
       if (show) {
-        window.vrRules.setupResults(report, vocabulary).forEach(result => {
+        results.forEach(result => {
           const path = issuePaths[result.code];
           if (path && !byPath.has(path)) byPath.set(path, window.vrRules.formatRuleMessage(result, report, vocabulary));
         });
       }
       root.querySelectorAll("[data-path]").forEach(control => {
         setupMessageControllers.get(control)?.set("issue", byPath.get(control.dataset.path) || "");
+      });
+      dateMessageControllers.forEach((controller, environment) => {
+        const issue = results.find(result => result.code === "missing_test_dates" && result.environment === environment);
+        controller.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
       });
     };
     const wireSetupRule = (input, rule, label = rule.label) => {
@@ -2075,11 +2081,16 @@
         startDate.value = testWindow.start_date || "";
         endDate.value = testWindow.end_date || "";
         timeInput.value = testWindow.test_time;
+        const datePair = panel.querySelector(".date-pair");
+        const dateMessageController = attachSetupMessage([startDate, endDate], message => datePair.after(message));
+        dateMessageControllers.set(environment, dateMessageController);
+        attachSimpleSetupMessage(timeInput);
         startDate.oninput = () => { testWindow.start_date = startDate.value || null; if (startDate.value) startDate.classList.remove("validation-error"); scheduleSave(); };
         endDate.oninput = () => { testWindow.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
         timeInput.oninput = () => { testWindow.test_time = timeInput.value; scheduleSave(); };
         wireSetupRule(timeInput, setupRules.time, `${label} time`);
         [startDate, endDate].forEach(input => { input.dataset.setupValidated = "true"; });
+        let revealDateMessage = Boolean(startDate.value && endDate.value && startDate.value > endDate.value);
         const validateDateOrder = () => {
           startDate.max = endDate.value;
           endDate.min = startDate.value;
@@ -2089,9 +2100,14 @@
           endDate.setCustomValidity(message);
           showRuleState(startDate, invalid, "dateOrderInvalid");
           showRuleState(endDate, invalid, "dateOrderInvalid");
+          dateMessageController.set("refusal", revealDateMessage && invalid ? message : "");
         };
         startDate.addEventListener("input", validateDateOrder);
         endDate.addEventListener("input", validateDateOrder);
+        [startDate, endDate].forEach(input => input.addEventListener("blur", () => {
+          revealDateMessage = true;
+          validateDateOrder();
+        }));
         validateDateOrder();
         windows.append(panel);
       });

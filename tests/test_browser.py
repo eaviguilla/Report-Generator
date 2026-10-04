@@ -613,6 +613,56 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(name.get_attribute("aria-invalid"), None)
         self.assertEqual(name.get_attribute("aria-describedby"), None)
 
+    def test_date_pair_message_is_shared_below_the_row_and_clears_when_fixed(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        start = page.get_by_label("Production start date", exact=True)
+        end = page.get_by_label("Production end date", exact=True)
+        report = main.workspace.load(report_id)
+        report.engagement.test_windows["production"].start_date = date(2026, 1, 3)
+        order_message = next(message for message in setup_input_issues(report.engagement) if "start date is after" in message)
+
+        start.fill("2026-01-03")
+        start.evaluate("input => input.blur()")
+
+        start_described_by = start.get_attribute("aria-describedby")
+        self.assertTrue(start_described_by)
+        self.assertEqual(end.get_attribute("aria-describedby"), start_described_by)
+        message = page.locator(f"#{start_described_by}")
+        expect(message).to_have_text(order_message)
+        self.assertEqual(start.get_attribute("aria-invalid"), "true")
+        self.assertEqual(end.get_attribute("aria-invalid"), "true")
+        self.assertIsNone(message.evaluate("element => element.closest('label')"))
+        self.assertTrue(message.evaluate("element => element.previousElementSibling?.classList.contains('date-pair')"))
+
+        end.fill("2026-01-04")
+        expect(message).to_be_hidden()
+        self.assertIsNone(start.get_attribute("aria-describedby"))
+        self.assertIsNone(end.get_attribute("aria-describedby"))
+        self.assertIsNone(start.get_attribute("aria-invalid"))
+        self.assertIsNone(end.get_attribute("aria-invalid"))
+
+        report.engagement.test_windows["production"].start_date = None
+        missing_date_message = next(message for message in setup_issues(report) if "Production start date" in message)
+        start.fill("")
+        self.assertIsNone(start.get_attribute("aria-describedby"))
+        page.get_by_role("button", name="Next: Findings").click()
+
+        start_described_by = start.get_attribute("aria-describedby")
+        self.assertTrue(start_described_by)
+        self.assertEqual(end.get_attribute("aria-describedby"), start_described_by)
+        expect(page.locator(f"#{start_described_by}")).to_have_text(missing_date_message)
+        self.assertEqual(start.get_attribute("aria-invalid"), "true")
+        self.assertEqual(end.get_attribute("aria-invalid"), "true")
+
+        start.fill("2026-01-03")
+        expect(page.locator(f"#{start_described_by}")).to_be_hidden()
+        self.assertIsNone(start.get_attribute("aria-describedby"))
+        self.assertIsNone(end.get_attribute("aria-describedby"))
+        self.assertIsNone(start.get_attribute("aria-invalid"))
+        self.assertIsNone(end.get_attribute("aria-invalid"))
+
     def test_stored_invalid_setup_value_shows_its_refusal_immediately(self) -> None:
         report_id = self.ready_report()
         report = main.workspace.load(report_id)

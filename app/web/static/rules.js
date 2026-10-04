@@ -21,6 +21,10 @@
   // Twin of report_service.WORD_REFUSED_CHARACTERS: outside XML 1.0's Char production, so Word cannot store them.
   const wordRefused = character => /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/.test(character)
     || (character.length === 1 && character.charCodeAt(0) >= 0xd800 && character.charCodeAt(0) <= 0xdfff);
+  const inRanges = (character, ranges) => {
+    const codePoint = character.codePointAt(0);
+    return (ranges || []).some(([first, last]) => codePoint >= first && codePoint <= last);
+  };
 
   // Twin of report_service.scope_value_refusals.
   const scopeValueRefusals = (environment, channel, line, component, description, vocabulary) => {
@@ -187,5 +191,138 @@
     return results;
   };
 
-  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, usernameRefusals, tooLong};
+  const formatRuleMessage = (result, report, vocabulary, {scopeContext = false} = {}) => {
+    const fixedMessages = {
+      missing_app_name:"Enter the application name.",
+      missing_segment:"Choose a segment.",
+      missing_report_type:"Choose a report type.",
+      missing_network:"Choose the network access.",
+      missing_tester:"Enter the tester's name.",
+      missing_report_date:"Enter the report date.",
+      no_tested_environment:"Choose at least one environment to test.",
+      no_app_type:"Choose at least one app type.",
+    };
+    if (result.code in fixedMessages) return fixedMessages[result.code];
+    if (result.code === "too_many_accounts") {
+      return `A report can list at most ${result.limit} test accounts. Remove some.`;
+    }
+    if (result.code === "mobile_and_thick_client") {
+      const labels = result.app_types.map(channel => vocabulary.channels.find(([value]) => value === channel)?.[1]);
+      return `Choose ${labels.join(" or ")}, not both.`;
+    }
+    if (result.code === "repeated_test_account") {
+      return `Test account ${result.account} is the same as test account ${result.first}. Remove one of them.`;
+    }
+    if (result.code === "missing_test_dates") {
+      const environment = result.environment === "production" ? "Production" : "Non-Production";
+      const window = report?.engagement?.test_windows?.[result.environment] || {};
+      const missing = ["start", "end"].filter(name => !window[`${name}_date`]);
+      const dates = missing.length === 2 ? "start and end dates" : `${missing[0]} date`;
+      return `Enter the ${environment} ${dates}.`;
+    }
+    if (result.code === "missing_scope_target") {
+      return `Add a scope target for ${result.environment === "production" ? "Production" : "Non-Production"}.`;
+    }
+    if (result.code === "missing_component_description") {
+      const scope = report?.scope_text?.[result.environment]?.[result.app_type] || "";
+      const text = typeof scope === "object" ? scope.component || "" : scope;
+      const row = text.split("\n").findIndex(component => component.trim() === result.component) + 1;
+      return `Enter a description for component ${row}.`;
+    }
+    if (result.code === "incomplete_test_account") {
+      const detail = result.missing === "username" ? "username" : "user role";
+      const other = result.missing === "username" ? "user role" : "username";
+      return `Enter a ${detail} for test account ${result.account}, or clear its ${other}.`;
+    }
+    if (result.code === "invalid_username") {
+      const username = result.value ?? report?.engagement?.test_accounts?.[result.account - 1]?.username ?? "";
+      const starts = username.startsWith(" ");
+      const ends = username.endsWith(" ");
+      const position = starts && ends ? "starts and ends" : starts ? "starts" : "ends";
+      return `${result.label || `Username ${result.account}`} ${position} with a space. Delete ${starts && ends ? "them" : "it"}.`;
+    }
+    if (result.code === "test_dates_out_of_order") {
+      const environment = result.environment === "production" ? "Production" : "Non-Production";
+      return `${environment} start date is after its end date. Change one of them.`;
+    }
+    if (result.code === "duplicate_component") {
+      const scope = report?.scope_text?.[result.environment]?.[result.app_type] || "";
+      const text = typeof scope === "object" ? scope.component || "" : scope;
+      const seen = new Map();
+      let first = 0;
+      let row = 0;
+      text.split("\n").forEach((component, index) => {
+        component = component.trim();
+        if (component !== result.component) return;
+        if (seen.has(component) && !row) { first = seen.get(component); row = index + 1; }
+        else if (!seen.has(component)) seen.set(component, index + 1);
+      });
+      const message = `Component ${row} is the same as component ${first}. Remove one of them.`;
+      if (!scopeContext) return message;
+      const environment = result.environment === "production" ? "Production" : "Non-Production";
+      const channel = vocabulary.channels.find(([value]) => value === result.app_type)?.[1] || result.app_type;
+      return `In the ${environment} ${channel} scope, ${message}`;
+    }
+    if (result.code === "too_long") {
+      const field = result.field;
+      const rule = vocabulary.character_rules[field];
+      let label = result.label || rule?.label || "Scope target";
+      let value = result.value ?? report?.engagement?.[field] ?? "";
+      if (field === "test_time") {
+        value = result.value ?? report?.engagement?.test_windows?.[result.environment]?.test_time ?? "";
+        label = `${result.environment === "production" ? "Production" : "Non-Production"} time`;
+      } else if (result.account) {
+        value = result.value ?? report?.engagement?.test_accounts?.[result.account - 1]?.[field] ?? "";
+        label = `${label} ${result.account}`;
+      } else if (field === "scope") {
+        const scope = report?.scope_text?.[result.environment]?.[result.app_type] || "";
+        const boxValue = result.box === "description" && typeof scope === "object" ? scope.description || "" : typeof scope === "object" ? scope.component || "" : scope;
+        value = result.value ?? boxValue.split("\n")[result.line] ?? "";
+        const environment = result.environment === "production" ? "Production" : "Non-Production";
+        const channel = vocabulary.channels.find(([value]) => value === result.app_type)?.[1] || result.app_type;
+        label = scopeContext ? `In the ${environment} ${channel} scope, line ${result.line + 1}` : `Line ${result.line + 1}`;
+      }
+      return `${label} has ${[...value].length} characters. Shorten it to ${result.limit} or fewer.`;
+    }
+    if (result.code === "invalid_characters") {
+      const field = result.field;
+      const rule = vocabulary.character_rules[field];
+      const hiddenRanges = vocabulary.unicode_character_ranges?.hidden;
+      const label = result.label || rule?.label || "Scope target";
+      let value = result.value ?? report?.engagement?.[field] ?? "";
+      let fieldLabel = label;
+      if (field === "test_time") {
+        value = result.value ?? report?.engagement?.test_windows?.[result.environment]?.test_time ?? "";
+        fieldLabel = `${result.environment === "production" ? "Production" : "Non-Production"} time`;
+      } else if (result.account) {
+        value = result.value ?? report?.engagement?.test_accounts?.[result.account - 1]?.[field] ?? "";
+        fieldLabel = `${label} ${result.account}`;
+      } else if (field === "scope") {
+        const scope = report?.scope_text?.[result.environment]?.[result.app_type] || "";
+        const boxValue = result.box === "description" && typeof scope === "object" ? scope.description || "" : typeof scope === "object" ? scope.component || "" : scope;
+        value = result.value ?? boxValue.split("\n")[result.line] ?? "";
+        const environment = result.environment === "production" ? "Production" : "Non-Production";
+        const channel = vocabulary.channels.find(([value]) => value === result.app_type)?.[1] || result.app_type;
+        fieldLabel = scopeContext ? `In the ${environment} ${channel} scope, line ${result.line + 1}` : `Line ${result.line + 1}`;
+      }
+      for (const [index, character] of [...value].entries()) {
+        if (result.characters.includes(character) && ((inRanges(character, hiddenRanges) && character !== " ") || wordRefused(character))) {
+          const before = [...value].slice(0, index);
+          const context = before.length ? `${before.length > 12 ? "..." : ""}${before.slice(-12).join("")}` : null;
+          const detail = character === "\t" ? "a tab" : character === "\n" || character === "\r" ? "a line break" : character === "\u00a0" ? "a non-breaking space" : "a hidden character";
+          return `${fieldLabel} has ${detail} ${context === null ? "at the start" : `after ${JSON.stringify(context)}`}. Delete it.`;
+        }
+      }
+      if (rule && result.characters.length === 1 && result.characters[0] === " " && !rule.spaces) {
+        const plural = value.split(" ").length - 1 > 1;
+        return `${label} cannot have spaces. Remove ${plural ? "the spaces" : "the space"}.`;
+      }
+      const quoted = result.characters.map(character => JSON.stringify(character));
+      if (quoted.length === 1) return `${label} cannot have ${quoted[0]}. Remove or replace it.`;
+      return `${label} cannot have ${quoted.slice(0, -1).join(", ")} or ${quoted.at(-1)}. Remove or replace them.`;
+    }
+    throw new Error(`Unknown rule message: ${result.code}`);
+  };
+
+  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, usernameRefusals, tooLong, formatRuleMessage};
 })();

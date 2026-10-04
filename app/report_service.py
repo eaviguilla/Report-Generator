@@ -20,33 +20,6 @@ PLACEHOLDER_TEXT = re.compile(
     r"\(\s*insert[^)]*\)|insert\s+(technology|version|eol\s+date|cves|latest)\s+\w*\s*here",
     re.IGNORECASE,
 )
-CHARACTER_NAMES = {
-    " ": "space", "\t": "tab", "\n": "line feed", "\r": "carriage return",
-    "!": "exclamation mark", '"': "double quote", "#": "number sign", "$": "dollar sign",
-    "%": "percent sign", "&": "ampersand", "'": "apostrophe", "(": "left parenthesis",
-    ")": "right parenthesis", "*": "asterisk", "+": "plus sign", ",": "comma", "-": "hyphen",
-    ".": "period", "/": "slash", ":": "colon", ";": "semicolon", "<": "less-than sign",
-    "=": "equals sign", ">": "greater-than sign", "?": "question mark", "@": "at sign",
-    "[": "left bracket", "\\": "backslash", "]": "right bracket", "^": "caret", "_": "underscore",
-    "`": "grave accent", "{": "left brace", "|": "vertical bar", "}": "right brace", "~": "tilde",
-}
-DIGIT_NAMES = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
-
-
-def _character_name(character: str, *, portable: bool = False) -> str:
-    if character in CHARACTER_NAMES:
-        return CHARACTER_NAMES[character]
-    if "0" <= character <= "9":
-        return f"digit {DIGIT_NAMES[int(character)]}"
-    if "A" <= character <= "Z":
-        return f"latin capital letter {character.lower()}"
-    if "a" <= character <= "z":
-        return f"latin small letter {character}"
-    if not portable:
-        return unicodedata.name(character, f"Unicode U+{ord(character):04X}").lower()
-    return f"Unicode U+{ord(character):04X}"
-
-
 @cache
 def unicode_character_ranges() -> dict[str, tuple[tuple[int, int], ...]]:
     """Expose Python's exact character categories to the browser's twin validators."""
@@ -67,7 +40,11 @@ def unicode_character_ranges() -> dict[str, tuple[tuple[int, int], ...]]:
             result.append((start, previous))
         return tuple(result)
 
-    return {"letters": ranges(str.isalpha), "decimals": ranges(str.isdecimal)}
+    return {
+        "letters": ranges(str.isalpha),
+        "decimals": ranges(str.isdecimal),
+        "hidden": ranges(lambda character: unicodedata.category(character)[:1] in {"C", "Z"}),
+    }
 
 
 def _invalid_characters(
@@ -100,13 +77,13 @@ def invalid_character_issue(
     value: str,
     symbols: str,
     *,
+    field: str | None = None,
     allow_letters: bool = True,
     allow_numbers: bool = True,
     allow_spaces: bool = True,
     allow_line_breaks: bool = False,
-    portable_names: bool = False,
 ) -> str | None:
-    """Describe the unique invalid characters in a field value."""
+    """Return the plain message for invalid characters in a field value."""
     invalid = _invalid_characters(
         value,
         symbols,
@@ -117,16 +94,141 @@ def invalid_character_issue(
     )
     if not invalid:
         return None
-    return _invalid_character_text(label, invalid, portable_names=portable_names)
+    return format_rule_message({"code": "invalid_characters", "field": field, "label": label, "characters": invalid, "value": value})
 
 
-def _invalid_character_text(label: str, invalid: list[str], *, portable_names: bool = False) -> str:
-    descriptions = ", ".join(
-        f"{json.dumps(character, ensure_ascii=False)} ({_character_name(character, portable=portable_names)})"
-        for character in invalid
-    )
-    noun = "character" if len(invalid) == 1 else "characters"
-    return f"{label} contains invalid {noun}: {descriptions}"
+def format_rule_message(result: dict, report: dict | None = None, *, scope_context: bool = False) -> str:
+    """Turn one coded rule result into the words shown to the tester."""
+    code = result["code"]
+    engagement = (report or {}).get("engagement", {})
+    fixed_messages = {
+        "missing_app_name": "Enter the application name.",
+        "missing_segment": "Choose a segment.",
+        "missing_report_type": "Choose a report type.",
+        "missing_network": "Choose the network access.",
+        "missing_tester": "Enter the tester's name.",
+        "missing_report_date": "Enter the report date.",
+        "no_tested_environment": "Choose at least one environment to test.",
+        "no_app_type": "Choose at least one app type.",
+    }
+    if code in fixed_messages:
+        return fixed_messages[code]
+    if code == "too_many_accounts":
+        return f"A report can list at most {result['limit']} test accounts. Remove some."
+    if code == "mobile_and_thick_client":
+        return f"Choose {' or '.join(CHANNEL_LABELS[channel] for channel in result['app_types'])}, not both."
+    if code == "repeated_test_account":
+        return f"Test account {result['account']} is the same as test account {result['first']}. Remove one of them."
+    if code == "missing_test_dates":
+        environment = _environment_label(result["environment"])
+        window = engagement.get("test_windows", {}).get(result["environment"], {}) or {}
+        missing = [name for name in ("start", "end") if not window.get(f"{name}_date")]
+        dates = "start and end dates" if len(missing) == 2 else f"{missing[0]} date"
+        return f"Enter the {environment} {dates}."
+    if code == "missing_scope_target":
+        return f"Add a scope target for {_environment_label(result['environment'])}."
+    if code == "missing_component_description":
+        scope = (report or {}).get("scope_text", {}).get(result["environment"], {}).get(result["app_type"], "")
+        text = scope.get("component", "") if isinstance(scope, dict) else scope
+        row = next((index for index, component in enumerate(text.split("\n") if isinstance(text, str) else [], start=1) if component.strip() == result["component"]), 0)
+        return f"Enter a description for component {row}."
+    if code == "incomplete_test_account":
+        detail = "username" if result["missing"] == "username" else "user role"
+        other = "user role" if result["missing"] == "username" else "username"
+        return f"Enter a {detail} for test account {result['account']}, or clear its {other}."
+    if code == "invalid_username":
+        accounts = engagement.get("test_accounts") or []
+        account = result["account"]
+        username = accounts[account - 1].get("username", "") if account <= len(accounts) and isinstance(accounts[account - 1], dict) else ""
+        starts, ends = username.startswith(" "), username.endswith(" ")
+        position = "starts and ends" if starts and ends else "starts" if starts else "ends"
+        pronoun = "them" if starts and ends else "it"
+        return f"Username {account} {position} with a space. Delete {pronoun}."
+    if code == "test_dates_out_of_order":
+        environment = _environment_label(result["environment"])
+        return f"{environment} start date is after its end date. Change one of them."
+    if code == "duplicate_component":
+        scope = (report or {}).get("scope_text", {}).get(result["environment"], {}).get(result["app_type"], "")
+        text = scope.get("component", "") if isinstance(scope, dict) else scope
+        seen: dict[str, int] = {}
+        first = row = 0
+        for index, component in enumerate(text.split("\n") if isinstance(text, str) else [], start=1):
+            component = component.strip()
+            if component == result["component"]:
+                if component in seen:
+                    first, row = seen[component], index
+                    break
+                seen[component] = index
+        message = f"Component {row} is the same as component {first}. Remove one of them."
+        if scope_context:
+            scope_label = f"{_environment_label(result['environment'])} {CHANNEL_LABELS[result['app_type']]} scope"
+            return f"In the {scope_label}, {message}"
+        return message
+    if code == "too_long":
+        field = result["field"]
+        rule = CHARACTER_RULES.get(field)
+        label = result.get("label") or (rule.label if rule else "Scope target")
+        value = result.get("value")
+        if field == "scope":
+            scope = (report or {}).get("scope_text", {}).get(result["environment"], {}).get(result["app_type"], "")
+            value = value if value is not None else scope.get("description", "") if result.get("box") == "description" and isinstance(scope, dict) else scope.get("component", "") if isinstance(scope, dict) else scope
+            lines = value.split("\n") if isinstance(value, str) else []
+            value = lines[result["line"]] if result["line"] < len(lines) else ""
+            label = f"In the {_environment_label(result['environment'])} {CHANNEL_LABELS[result['app_type']]} scope, line {result['line'] + 1}" if scope_context else f"Line {result['line'] + 1}"
+        elif field == "test_time" and value is None:
+            value = (engagement.get("test_windows", {}).get(result["environment"], {}) or {}).get("test_time", "")
+            label = f"{_environment_label(result['environment'])} time"
+        elif "account" in result and value is None:
+            accounts = engagement.get("test_accounts") or []
+            account = accounts[result["account"] - 1] if result["account"] <= len(accounts) else {}
+            value = account.get(field, "") if isinstance(account, dict) else ""
+            label = f"{label} {result['account']}"
+        elif value is None:
+            value = engagement.get(field, "")
+        count = len(value) if isinstance(value, str) else 0
+        return f"{label} has {count} characters. Shorten it to {result['limit']} or fewer."
+    if code == "invalid_characters":
+        field = result.get("field")
+        rule = CHARACTER_RULES.get(field) if field else None
+        label = result.get("label") or (rule.label if rule else "Scope target")
+        characters = result["characters"]
+        engagement = (report or {}).get("engagement", {})
+        value = result.get("value")
+        if field == "scope" and value is None:
+            environment = result["environment"]
+            channel = result["app_type"]
+            scope = (report or {}).get("scope_text", {}).get(environment, {}).get(channel, "")
+            box_value = scope.get("description", "") if result.get("box") == "description" and isinstance(scope, dict) else scope.get("component", "") if isinstance(scope, dict) else scope
+            lines = box_value.split("\n") if isinstance(box_value, str) else []
+            value = lines[result["line"]] if result["line"] < len(lines) else ""
+            label = f"In the {_environment_label(result['environment'])} {CHANNEL_LABELS[result['app_type']]} scope, line {result['line'] + 1}" if scope_context else f"Line {result['line'] + 1}"
+        elif field == "test_time" and value is None:
+            environment = _environment_label(result["environment"])
+            value = (engagement.get("test_windows", {}).get(result["environment"], {}) or {}).get("test_time", "")
+            label = f"{environment} time"
+        elif "account" in result and value is None:
+            accounts = engagement.get("test_accounts") or []
+            account = accounts[result["account"] - 1] if result["account"] <= len(accounts) else {}
+            value = account.get(field, "") if isinstance(account, dict) else ""
+            label = f"{label} {result['account']}"
+        elif value is None and field:
+            value = engagement.get(field, "")
+        if isinstance(value, str):
+            for index, character in enumerate(value):
+                if character in characters and ((unicodedata.category(character)[:1] in {"C", "Z"} and character != " ") or WORD_REFUSED_CHARACTERS.fullmatch(character)):
+                    before = value[:index]
+                    context = f'after "{"..." if len(before) > 12 else ""}{before[-12:]}"' if before else "at the start"
+                    detail = {"\t": "a tab", "\n": "a line break", "\r": "a line break", "\u00a0": "a non-breaking space"}.get(character, "a hidden character")
+                    return f"{label} has {detail} {context}. Delete it."
+        if rule and characters == [" "] and not rule.spaces:
+            count = value.count(" ") if isinstance(value, str) else 1
+            instruction = "the spaces" if count > 1 else "the space"
+            return f"{label} cannot have spaces. Remove {instruction}."
+        if len(characters) == 1:
+            return f'{label} cannot have {json.dumps(characters[0], ensure_ascii=False)}. Remove or replace it.'
+        quoted = [json.dumps(character, ensure_ascii=False) for character in characters]
+        return f'{label} cannot have {", ".join(quoted[:-1])} or {quoted[-1]}. Remove or replace them.'
+    raise ValueError(f"Unknown rule message: {code}")
 
 
 # Outside XML 1.0's Char production: python-docx refuses them, so generation would abort.
@@ -182,18 +284,18 @@ def _rule_characters(field: str, value: str) -> list[str]:
     return _invalid_characters(value, rule.symbols, allow_letters=rule.letters, allow_numbers=rule.numbers, allow_spaces=rule.spaces, allow_line_breaks=rule.line_breaks)
 
 
-def character_issue(field: str, value: str, label: str | None = None, *, portable_names: bool = False) -> str | None:
+def character_issue(field: str, value: str, label: str | None = None) -> str | None:
     """Check a value against its field's rule. `label` names a numbered or per-environment copy."""
     rule = CHARACTER_RULES[field]
     return invalid_character_issue(
         label or rule.label,
         value,
         rule.symbols,
+        field=field,
         allow_letters=rule.letters,
         allow_numbers=rule.numbers,
         allow_spaces=rule.spaces,
         allow_line_breaks=rule.line_breaks,
-        portable_names=portable_names,
     )
 
 
@@ -256,33 +358,10 @@ def _environment_label(environment: str) -> str:
     return "Production" if environment == "production" else "Non-Production"
 
 
-def setup_refusal_message(result: dict) -> str:
-    """The words a save refuses a Setup refusal result with."""
-    code = result["code"]
-    if code == "no_app_type":
-        return "select at least one app type"
-    if code == "test_dates_out_of_order":
-        return f"{_environment_label(result['environment'])} start date cannot be after its end date"
-    if code == "invalid_username":
-        return f"Username {result['account']} cannot start or end with a space"
-    if code == "too_many_accounts":
-        return f"A report can list at most {result['limit']} test accounts"
-    scope_label = f"{_environment_label(result['environment'])} {CHANNEL_LABELS[result['app_type']]} scope" if "app_type" in result else ""
-    if code == "duplicate_component":
-        return f"{scope_label} lists the same component twice: {json.dumps(result['component'], ensure_ascii=False)}"
-    field = result["field"]
-    labels = {
-        "scope": f"{scope_label} description" if result.get("box") == "description" else scope_label,
-        "test_time": f"{_environment_label(result.get('environment', ''))} time",
-        "user_role": f"User role {result.get('account')}",
-        "username": f"Username {result.get('account')}",
-    }
-    label = labels[field] if field in labels else CHARACTER_RULES[field].label
-    if code == "too_long":
-        if field == "scope":
-            label = f"{label} line {result['line'] + 1}"
-        return f"{label} must be at most {result['limit']} characters"
-    return _invalid_character_text(label, result["characters"])
+def setup_refusal_message(result: dict, report: dict | None = None) -> str:
+    """Format a coded Setup refusal for the tester."""
+    scope_context = result.get("field") == "scope" or result.get("code") == "duplicate_component"
+    return format_rule_message(result, report, scope_context=scope_context)
 
 
 def _refused_value(engagement: dict, result: dict):
@@ -326,7 +405,8 @@ def setup_input_issues(engagement: Engagement, prior: Engagement | None = None) 
     if prior is not None:
         before = prior.model_dump(mode="json")
         results = [result for result in results if not _already_stored(result, current, before)]
-    return [setup_refusal_message(result) for result in results]
+    context = {"engagement": current}
+    return [setup_refusal_message(result, context) for result in results]
 
 
 def finding_input_issues(report: Report) -> list[str]:
@@ -337,7 +417,7 @@ def finding_input_issues(report: Report) -> list[str]:
     for finding in report.vulnerabilities:
         for field in ("severity_review_tickets", "cvss_score", "cvss_vector"):
             value = getattr(finding, field)
-            if value and (issue := character_issue(field, value, portable_names=True)):
+            if value and (issue := character_issue(field, value)):
                 issues.append(issue)
     return issues
 
@@ -870,7 +950,8 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
                 result for result in scope_box_refusals(environment, channel, component_text, description_text)
                 if not _stored_scope_refusal(result, component_lines, description_lines, stored)
             ]:
-                raise ValueError(setup_refusal_message(refusals[0]))
+                context = {"engagement": engagement, "scope_text": submitted}
+                raise ValueError(setup_refusal_message(refusals[0], context))
             # Paired by raw index before cleaning, as scope_box_refusals does.
             cleaned: list[tuple[str, str]] = []
             seen: set[str] = set()
@@ -1033,42 +1114,12 @@ def setup_results(report: dict) -> list[dict]:
     return results
 
 
-SETUP_ISSUE_TEXT = {
-    "missing_app_name": "application name",
-    "missing_segment": "segment",
-    "missing_report_type": "report type",
-    "missing_network": "network access",
-    "missing_tester": "tester",
-    "missing_report_date": "report date",
-    "no_tested_environment": "selected environment",
-}
-
-
-def _setup_issue_text(result: dict) -> str:
-    environment = result.get("environment", "").replace("_", "-")
-    if result["code"] == "mobile_and_thick_client":
-        return f"only one of {' and '.join(CHANNEL_LABELS[channel] for channel in result['app_types'])} -- deselect the other"
-    if result["code"] == "missing_test_dates":
-        return f"{environment} testing dates"
-    if result["code"] == "missing_scope_target":
-        return f"{environment} scope target"
-    if result["code"] == "missing_component_description":
-        return f"{environment} {CHANNEL_LABELS[result['app_type']]} description for \"{result['component']}\""
-    if result["code"] == "incomplete_test_account":
-        return f"test account {result['account']} {'username' if result['missing'] == 'username' else 'user role'}"
-    if result["code"] == "repeated_test_account":
-        return f"test account {result['account']} repeats test account {result['first']} -- remove one"
-    return SETUP_ISSUE_TEXT[result["code"]]
-
-
 def setup_issues(report: Report) -> list[str]:
     """Return the missing engagement details that block Findings entry."""
     engagement = report.engagement
     results = setup_results({"engagement": engagement.model_dump(mode="json"), "scope_text": scope_text_from_targets(report.scope_targets)})
-    # A refusal of a stored value, such as one an import brought in, is still something to fix before Findings.
-    issues = [result for result in results if result["kind"] == "issue"]
-    refusals = [result for result in results if result["kind"] == "refusal"]
-    return [*(_setup_issue_text(result) for result in issues), *(setup_refusal_message(result) for result in refusals)]
+    context = {"engagement": engagement.model_dump(mode="json"), "scope_text": scope_text_from_targets(report.scope_targets)}
+    return [format_rule_message(result, context, scope_context=result.get("field") == "scope" or result.get("code") == "duplicate_component") for result in results]
 
 
 def setup_is_complete(report: Report) -> bool:

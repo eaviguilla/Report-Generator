@@ -1,10 +1,12 @@
 # Setup network access field
 
-> **Status:** done · 2026-09-21 · `c599dc6`
+> **Status:** done · 2026-09-21 · `c599dc6`; step 6 done 2026-10-05
 >
-> Steps 1-5 are done. **Step 6 is deliberately not done** — it is the manual Word edit, and the
-> accepted consequence of answer Q1a is that every cover prints `Internal` until it is. Nothing in
-> the app will say so, which is why it is left unticked rather than quietly closed.
+> Steps 1-5 are done. **Step 6 was done in an earlier commit than this record says:** the eight cover
+> cells already held `{{network}}` in `f6c215d` ("support reports with no findings", 2026-10-03), whose
+> message does not mention it; the Remediation Timelines header was left alone. The render test it
+> asked for, and DOCX import reading the cover back (the recovery step 4 deferred), were added on
+> 2026-10-05 from `.scratch/network-access-on-word-cover/spec.md`.
 >
 > Two deviations. **The R16 whole-list-assertion class is real and wider than the three sites the
 > oracle named.** It broke `test_retest_default_preserves_the_retest_projection_except_named_neutral_fixes`
@@ -2003,7 +2005,7 @@ Three decisions carried from the rounds above, each on evidence rather than caut
   *Test:* none — documentation only, per the repo scope map.
   *Invariant:* the contracts describe the code that shipped, including the deliberate gap.
 
-- [ ] **Step 6 — Hand over the Word edit (not a code step).** In each of `resources/MAIN.docx`,
+- [x] **Step 6 — Hand over the Word edit (not a code step).** In each of `resources/MAIN.docx`,
   `MAIN_ASIA.docx`, `MAIN_THICK_MOBILE.docx` and `MAIN_THICK_MOBILE_ASIA.docx`, replace the cover
   value cell reading `Internal` with `{{network}}`. **That is 8 cells, not 4: the cover block occurs
   twice in every template** (verified — paragraphs 10-13 and 18-21 in `MAIN.docx`). Do **not** touch

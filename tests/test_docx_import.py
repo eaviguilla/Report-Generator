@@ -164,19 +164,39 @@ class FragmentRecognitionTests(unittest.TestCase):
             "summary": summary,
         }
 
-    def test_both_import_modes_leave_network_unset_and_say_so(self) -> None:
-        """The cover prints a hardcoded Internal, so reading it back would invent a choice. Retest is
-        the default mode, so warning only on the editable path would leave the commoner one silent."""
+    def test_both_import_modes_read_network_access_from_the_cover(self) -> None:
+        """Retest is the default mode, so reading it only on the editable path would leave the
+        commoner one unset."""
+        for mode in ("retest", "editable"):
+            for network in ("Internal", "External"):
+                with self.subTest(mode=mode, network=network), tempfile.TemporaryDirectory() as temporary_directory:
+                    folder = Path(temporary_directory)
+                    report = self._report(folder)
+                    report.engagement.network = network
+
+                    payload, _evidence, summary = parse_report_docx(render_report_docx(report, TEMPLATE, folder), mode=mode)
+
+                    self.assertEqual(Report.model_validate(payload).engagement.network, network)
+                    self.assertNotIn(NETWORK_IMPORT_WARNING, summary.get("warnings", []))
+                    if mode == "editable":
+                        self.assertIn("network access", summary["restored_engagement"])
+
+    def test_a_cover_without_a_network_access_imports_unset_and_says_so(self) -> None:
+        """Generation refuses an unset value, so N/A here means a hand-edited cover; it is not a
+        choice to restore."""
+        document = Document(BytesIO(base_render()))
+        for node in document.element.body.iter(qn("w:t")):
+            if node.text == "Internal" and any(ancestor.tag == qn("w:txbxContent") for ancestor in node.iterancestors()):
+                node.text = "N/A"
+        buffer = BytesIO()
+        document.save(buffer)
         for mode in ("retest", "editable"):
             with self.subTest(mode=mode):
-                data = base_render()
-
-                payload, _evidence, summary = parse_report_docx(data, mode=mode)
+                payload, _evidence, summary = parse_report_docx(buffer.getvalue(), mode=mode)
 
                 self.assertIsNone(Report.model_validate(payload).engagement.network)
                 self.assertIn(NETWORK_IMPORT_WARNING, summary["warnings"])
                 self.assertIn("Setup", NETWORK_IMPORT_WARNING)
-                self.assertNotIn("network", payload["engagement"])
                 self.assertNotIn("network access", summary.get("restored_engagement", []))
 
     def test_severity_review_tickets_survive_a_round_trip(self) -> None:
@@ -203,7 +223,7 @@ class FragmentRecognitionTests(unittest.TestCase):
         self.assertEqual(projection["engagement"], {
             "app_name": "Northstar Banking", "app_owner": "", "ci_number": "", "bsn_number": "",
             "segment": "JH", "report_type": None, "report_date": None, "tester": "",
-            "network": None,
+            "network": "Internal",
             "tested_environments": ["production"], "tested_channels": ["web"],
             "non_production_label": "NON-PROD", "start_date": None, "end_date": None,
             "test_windows": {}, "test_accounts": [{"user_role": "N/A", "username": "N/A"}],
@@ -233,7 +253,6 @@ class FragmentRecognitionTests(unittest.TestCase):
         self.assertEqual(record["sha256"], hashlib.sha256(next(iter(evidence.values()))).hexdigest())
         self.assertEqual(projection["summary"], {
             "retained": 1, "dropped_resolved": [], "statuses_rewritten": ["Authorization bypass"],
-            "warnings": [NETWORK_IMPORT_WARNING],
         })
         Report.model_validate(payload)
 

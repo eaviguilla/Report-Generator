@@ -20,7 +20,6 @@ from app.docx_report import (
     TESTING_RESULT_PARAGRAPH,
     ReportGenerationError,
     _find_table,
-    _metadata,
     _populate_scope_tables,
     _wrap_long_value,
     generation_issues,
@@ -1166,14 +1165,27 @@ class DocxReportTests(unittest.TestCase):
         # Written out by hand on purpose, so a new segment must be added here rather than guessed.
         self.assertEqual(covered, set(get_args(Segment)), "a segment has no row in the template table")
 
-    def test_network_metadata_prints_n_a_until_chosen_and_carries_the_selection(self) -> None:
-        """The templates carry no {{network}} token yet, so this assertion is the only thing
-        exercising the value until someone edits the eight cover cells in Word."""
-        report = Report(report_id="r_network", app_id="CI-NETWORK", saved_at=datetime.now().astimezone())
+    def test_both_cover_blocks_print_the_chosen_network_access_on_every_template(self) -> None:
+        """Each cover is drawn twice (the shape and its fallback); if only one carried the token the
+        two would disagree and import would refuse the document. The Remediation Timelines header
+        also reads Internal and must survive."""
+        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia")):
+            for network in ("External", "Internal"):
+                with self.subTest(channel=channel, segment=segment, network=network), tempfile.TemporaryDirectory() as temporary_directory:
+                    report_folder = Path(temporary_directory)
+                    report = self._component_report(report_folder, channel, segment, [
+                        ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
+                    ])
+                    report.engagement.network = network
+                    rendered = Document(BytesIO(render_report_docx(report, main_template_path(report, RESOURCES), report_folder)))
+                    texts = [
+                        "".join(node.text or "" for node in paragraph.iter(qn("w:t"))).strip()
+                        for paragraph in rendered.element.body.iter(qn("w:p"))
+                    ]
 
-        self.assertEqual(_metadata(report)["network"], "N/A")
-        report.engagement.network = "External"
-        self.assertEqual(_metadata(report)["network"], "External")
+                    self.assertEqual([texts[index + 1] for index, text in enumerate(texts) if text == "Application Type"], [network, network])
+                    header = next(table for table in rendered.tables if any(cell.text.strip() == "Emergency" for row in table.rows for cell in row.cells))
+                    self.assertIn("Internal", [cell.text.strip() for row in header.rows for cell in row.cells])
 
     def test_a_blank_account_row_is_left_out_of_the_user_roles_table(self) -> None:
         cases = [

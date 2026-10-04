@@ -35,6 +35,18 @@ _Avoid_: covered environment, selected environment
 A tested environment in which a finding has at least one location.
 _Avoid_: affected location environment, located environment
 
+**Scope target**:
+One thing the engagement may test, in one tested environment and app type. For Web and API it is whatever the tester names, such as a URL, hostname or IP range; for Mobile and Thick Client it is a named component.
+_Avoid_: target, scope line, scope entry, asset
+
+**Test account**:
+An account on the application under test that the tester used, named by its user role and username.
+_Avoid_: user, credential, login
+
+**Network access**:
+The access the tester had to the application: from inside the client's network (Internal) or from outside it (External).
+_Avoid_: network type, exposure
+
 **Supporting image**:
 A proof-of-concept image for a tested environment the finding does not affect.
 _Avoid_: extra image, stale image

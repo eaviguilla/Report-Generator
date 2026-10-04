@@ -32,7 +32,7 @@ document matching the house template. No database, no frontend framework, no bui
 - **Library:** `resources/vuln_library.json`, read by `app/library.py`; the editor at
   `/library-editor` (`app/library_editor.py`) mounts only when `VULNREPORT_LIBRARY_EDITOR` is set.
 - **Data:** `data/apps/<app>/<month>_<type>_<id>/draft.json` + `draft.bak.json` + `evidence/*.png`.
-  Real drafts — never delete anything under `data/`.
+  Test drafts, not real reports: base no decision on their contents, and change or delete them only when the user asks.
 - **Tests:** `tests/` (unittest; `test_browser.py` is Playwright). Dev deps in `requirements-dev.txt`.
 - **Observatory:** `py -3 tools/observatory/observatory.py` (`python3` on macOS) draws the work items in
   `docs/plans/`, `.scratch/` and `docs/adr/` as a star map, with next steps to copy, and opens it. It is

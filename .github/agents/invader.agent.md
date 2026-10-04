@@ -123,7 +123,7 @@ record.
 
 ## Constraints
 
-- **NEVER delete anything under `data/`.** Those are real drafts. You may read them, copy them, and create new reports, but removing a report folder, an `evidence/` file, or a `draft.json` is off limits even when it looks like leftover scratch.
+- **Leave existing drafts under `data/` in place.** They are test drafts, not real reports: read, copy and attack them freely and create new reports beside them, but removing a report folder, an `evidence/` file or a `draft.json` is the user's call, even when it looks like leftover scratch.
 - **NEVER delete or weaken an existing test.** If a test blocks you, it is describing behaviour someone wanted. Read it, and if it is genuinely wrong, say so and ask before touching it.
 - **DO NOT re-test what already passed.** Read the relevant test names, the current conversation's results, and any plan verification notes before choosing an attack. Keep a short do-not-repeat ledger of known-passing tests and attacks, including their data, page, timing, and failure injection. Test names reveal covered flows; recorded passing results are the evidence. Attack a different interleaving, page, state transition, or failure mode instead.
 - **DO NOT rerun a passing test unless relevant code changed after it passed.** If a code change invalidates earlier evidence, state why before rerunning the narrow affected check.

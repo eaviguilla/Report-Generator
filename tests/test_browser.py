@@ -678,6 +678,36 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(note).to_have_text(f"Tester holds up to {maximum} characters, so the paste was cut to fit.")
         self.assertIsNone(tester.get_attribute("aria-invalid"))
 
+    def test_over_limit_draft_stays_invalid_while_shortening_without_limit_note(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        maximum = vocabulary["character_rules"]["app_name"]["max_length"]
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        over_limit = "A" * (maximum + 2)
+        report.engagement.app_name = over_limit
+        main.workspace.save(report)
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, over_limit)
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        embedded_name = page.locator("main[data-report]").evaluate("element => JSON.parse(element.dataset.report).engagement.app_name")
+        self.assertEqual(embedded_name, over_limit)
+
+        name = page.get_by_label("Application Name", exact=True)
+        expect(name).to_have_value(over_limit)
+        described_by = name.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(setup_issue("app_name", over_limit))
+        self.assertEqual(name.get_attribute("aria-invalid"), "true")
+        self.assertNotIn("setup-character-limit-note", message.get_attribute("class"))
+
+        name.fill("A" * maximum)
+        expect(name).to_have_value("A" * maximum)
+        expect(message).to_be_hidden()
+        self.assertIsNone(name.get_attribute("aria-invalid"))
+        self.assertNotIn("setup-character-limit-note", message.get_attribute("class"))
+
     def test_held_autosave_shows_every_refusal_on_setup(self) -> None:
         report_id = self.ready_report()
         page = self.page

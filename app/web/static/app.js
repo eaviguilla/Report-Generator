@@ -1480,6 +1480,8 @@
     const accountMessageControllers = new Map();
     const componentMessageControllers = new Map();
     const scopeMessageControllers = new Map();
+    let appTypeMessageController = null;
+    let environmentMessageController = null;
     const attachSetupMessage = (controls, placeMessage, elementName = "span") => {
       const messageElement = document.createElement(elementName);
       messageElement.id = id("setup-field-message");
@@ -1585,6 +1587,10 @@
           && result.component === component && firstIndex === index);
         controller.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
       });
+      const appTypeIssues = results.filter(result => result.code === "no_app_type" || result.code === "mobile_and_thick_client");
+      appTypeMessageController?.set("issue", appTypeIssues.map(result => window.vrRules.formatRuleMessage(result, report, vocabulary)).join(" "));
+      const missingEnvironment = results.find(result => result.code === "no_tested_environment");
+      environmentMessageController?.set("issue", missingEnvironment ? window.vrRules.formatRuleMessage(missingEnvironment, report, vocabulary) : "");
       const scopedIssues = new Set();
       scopeMessageControllers.forEach(({controller, environment}) => {
         const issue = results.find(result => result.code === "missing_scope_target" && result.environment === environment);
@@ -2029,7 +2035,11 @@
       });
     };
     const renderCoverage = () => {
+      [configuration, windows].forEach(container => {
+        container.querySelectorAll("[data-setup-message-control]").forEach(control => setupMessageControllers.delete(control));
+      });
       configuration.innerHTML = "";
+      windows.innerHTML = "";
       scopeMessageControllers.clear();
       const typeGroup = document.createElement("div");
       typeGroup.className = "test-type-select";
@@ -2078,7 +2088,10 @@
       });
       typeGroup.append(typeHeading, typeOptions);
       configuration.append(typeGroup);
-      windows.innerHTML = "";
+      appTypeMessageController = attachSetupMessage(
+        [...typeOptions.querySelectorAll('input[type="checkbox"]')],
+        message => typeGroup.after(message),
+      );
       Object.entries(environmentLabels).forEach(([environment, label]) => {
         const testWindow = report.engagement.test_windows[environment];
         const panel = document.createElement("div");
@@ -2183,6 +2196,10 @@
         validateDateOrder();
         windows.append(panel);
       });
+      environmentMessageController = attachSetupMessage(
+        [...windows.querySelectorAll(':scope > .environment-window > .coverage-option > input[type="checkbox"]')],
+        message => windows.append(message),
+      );
       // Any named component anywhere satisfies "define a scope target", so the marking clears across
       // the whole grid rather than just the box being typed into.
       const clearScopeErrors = () => {

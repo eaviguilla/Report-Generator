@@ -519,6 +519,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report = main.workspace.load(report_id)
         report.engagement.network = None
         main.workspace.save(report)
+        expected_message = next(message for message in setup_issues(report) if "network access" in message.lower())
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
         network = page.get_by_label("Network Access")
@@ -526,7 +527,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(network.locator("option").all_text_contents(), ["Select network access", "Internal", "External"])
         self.assertEqual(network.input_value(), "")
         page.get_by_role("button", name="Next: Findings").click()
-        self.assertIn("network access", page.locator("#setup-validation-note").text_content())
+        described_by = network.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), expected_message)
         self.assertTrue(network.evaluate("select => select.classList.contains('validation-error')"))
 
         network.select_option("External")
@@ -535,6 +538,52 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
 
         self.assertEqual(page.get_by_label("Network Access").input_value(), "External")
+
+    def test_missing_test_environment_is_described_by_its_checkbox(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = []
+        main.workspace.save(report)
+        expected_message = next(message for message in setup_issues(report) if "environment" in message.lower())
+        page = self.page
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup?incomplete=setup")
+
+        production = page.get_by_label("Production", exact=True)
+        described_by = production.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), expected_message)
+        self.assertEqual(production.get_attribute("aria-invalid"), "true")
+        message = page.locator(f"#{described_by}")
+        page.get_by_label("Non-Production", exact=True).check()
+        expect(message).to_be_hidden()
+        self.assertIsNone(production.get_attribute("aria-describedby"))
+        self.assertIsNone(production.get_attribute("aria-invalid"))
+
+    def test_mutually_exclusive_app_types_share_their_issue_message(self) -> None:
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["mobile", "thick_client"]
+        report.scope_targets = []
+        main.workspace.save(report)
+        expected_message = next(message for message in setup_issues(report) if "not both" in message.lower())
+        page = self.page
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup?incomplete=setup")
+
+        mobile = page.get_by_label("Test Mobile", exact=True)
+        thick_client = page.get_by_label("Test Thick Client", exact=True)
+        described_by = mobile.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(thick_client.get_attribute("aria-describedby"), described_by)
+        self.assertEqual(page.locator(f"#{described_by}").inner_text(), expected_message)
+        self.assertEqual(mobile.get_attribute("aria-invalid"), "true")
+        self.assertEqual(thick_client.get_attribute("aria-invalid"), "true")
+        message = page.locator(f"#{described_by}")
+        mobile.uncheck()
+        expect(message).to_be_hidden()
+        self.assertIsNone(mobile.get_attribute("aria-describedby"))
+        self.assertIsNone(thick_client.get_attribute("aria-describedby"))
 
     def test_removing_a_tested_environment_clears_its_dates_in_one_undo_step(self) -> None:
         report_id = self.ready_report()
@@ -971,6 +1020,8 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_segment_and_report_type_are_required(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
+        report_id = page.url.split("/reports/")[1].split("/")[0]
+        expected_messages = setup_issues(main.workspace.load(report_id))
         self.assertEqual(page.get_by_label("Segment").locator("option").all_text_contents(), ["Select segment", "JH", "GWAM", "Asia", "GDT", "GFT"])
         self.assertEqual(page.get_by_label("Report Type").locator("option").all_text_contents(), ["Select report type", "Annual Pentest", "Retest", "Deployment Pentest", "New Test"])
         page.get_by_label("Application Name").fill("Required Fields")
@@ -981,8 +1032,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("textbox", name="Web", exact=True).nth(1).fill("https://test.example.test")
         page.get_by_role("button", name="Next: Findings").click()
         self.assertIn("/setup", page.url)
-        self.assertIn("segment", page.locator("#setup-validation-note").text_content())
-        self.assertIn("report type", page.locator("#setup-validation-note").text_content())
+        for label, field in (("Segment", "segment"), ("Report Type", "report type")):
+            control = page.get_by_label(label)
+            described_by = control.get_attribute("aria-describedby")
+            self.assertTrue(described_by)
+            message = page.locator(f"#{described_by}").inner_text()
+            self.assertIn(message, expected_messages)
+            self.assertIn(field, message.lower())
 
         page.get_by_label("Segment").select_option("GWAM")
         page.get_by_label("Report Type").select_option("new_test")
@@ -1471,16 +1527,20 @@ class BrowserWorkflowTests(unittest.TestCase):
         description.fill("Main desktop client")
         page.locator("#next").click()
         notice = page.locator("#setup-validation-note")
-        self.assertIn("Add a scope target for Production.", notice.text_content())
+        self.assertEqual(notice.text_content(), "1 thing to fix before Findings. It is marked above, and the cursor is on it.")
         self.assertTrue(component.evaluate("input => input.classList.contains('validation-error')"))
 
         # Component only: now a target exists, and the missing description is named by component.
         component.fill("Acme.exe")
         description.fill("")
         page.locator("#next").click()
-        self.assertIn("Enter a description for component 1.", notice.text_content())
+        self.assertEqual(notice.text_content(), "1 thing to fix before Findings. It is marked above, and the cursor is on it.")
+        described_by = component.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        self.assertEqual(description.get_attribute("aria-describedby"), described_by)
+        expect(page.locator(f"#{described_by}")).to_be_visible()
         self.assertTrue(description.evaluate("input => input.classList.contains('validation-error')"))
-        self.assertEqual(description.evaluate("input => document.activeElement === input"), True)
+        self.assertEqual(component.evaluate("input => document.activeElement === input"), True)
 
         description.evaluate("input => { input.value = 'Crashes on start\\u0007'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
         self.assertEqual(

@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
-from app.report_service import RESOLVED_REMEDIATION, finding_input_issues
+from app.report_service import RESOLVED_REMEDIATION, character_issue, finding_input_issues, setup_issues
 from tests.support import png_bytes, use_temp_workspace
 from app.models import (
     CodeFragment,
@@ -75,7 +75,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             report_id="r_import", app_id="CI-IMPORT", saved_at=now,
             engagement=Engagement(
                 app_name="Northstar Banking", ci_number="CI-IMPORT", segment="JH",
-                report_type="annual_pentest", report_date=date(2026, 9, 9), tester="QA Tester",
+                report_type="annual_pentest", report_date=date(2026, 9, 9), tester="QA Tester", network="Internal",
                 tested_environments=["production"], tested_channels=["web"],
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
             ),
@@ -164,17 +164,18 @@ class FragmentRecognitionTests(unittest.TestCase):
             "summary": summary,
         }
 
-    def test_both_import_modes_default_network_and_say_so(self) -> None:
-        """Retest is the default mode, so warning only on the editable path would leave the
-        commoner one silent about a value it quietly defaulted."""
+    def test_both_import_modes_leave_network_unset_and_say_so(self) -> None:
+        """The cover prints a hardcoded Internal, so reading it back would invent a choice. Retest is
+        the default mode, so warning only on the editable path would leave the commoner one silent."""
         for mode in ("retest", "editable"):
             with self.subTest(mode=mode):
                 data = base_render()
 
                 payload, _evidence, summary = parse_report_docx(data, mode=mode)
 
-                self.assertEqual(Report.model_validate(payload).engagement.network, "Internal")
+                self.assertIsNone(Report.model_validate(payload).engagement.network)
                 self.assertIn(NETWORK_IMPORT_WARNING, summary["warnings"])
+                self.assertIn("Setup", NETWORK_IMPORT_WARNING)
                 self.assertNotIn("network", payload["engagement"])
                 self.assertNotIn("network access", summary.get("restored_engagement", []))
 
@@ -202,7 +203,7 @@ class FragmentRecognitionTests(unittest.TestCase):
         self.assertEqual(projection["engagement"], {
             "app_name": "Northstar Banking", "app_owner": "", "ci_number": "", "bsn_number": "",
             "segment": "JH", "report_type": None, "report_date": None, "tester": "",
-            "network": "Internal",
+            "network": None,
             "tested_environments": ["production"], "tested_channels": ["web"],
             "non_production_label": "NON-PROD", "start_date": None, "end_date": None,
             "test_windows": {}, "test_accounts": [{"user_role": "N/A", "username": "N/A"}],
@@ -1407,10 +1408,20 @@ class ImportRouteTests(unittest.TestCase):
         duplicate["target_id"] = "tgt_duplicate"
         payload["scope_targets"].append(duplicate)
         payload["vulnerabilities"][0]["scope"]["target_ids"].append("tgt_duplicate")
+        payload["vulnerabilities"][0]["cvss_score"] = "9,8"
+
+        with self.assertRaisesRegex(ValueError, "^Imported report contains fields that cannot be saved: .*CVSS Score"):
+            main.finalize_editable_import(payload)
+
+    def test_an_editable_import_keeps_a_setup_value_that_breaks_a_rule_as_a_setup_issue(self) -> None:
+        """Only a changed Setup value is refused, and nothing has changed yet on import."""
+        payload, _evidence, _summary = parse_report_docx(self._docx(), mode="editable")
         payload["engagement"]["app_name"] = "Bad/App"
 
-        with self.assertRaisesRegex(ValueError, "^Imported report contains fields that cannot be saved: Application name"):
-            main.finalize_editable_import(payload)
+        imported, _normalizations = main.finalize_editable_import(payload)
+
+        self.assertEqual(imported["engagement"]["app_name"], "Bad/App")
+        self.assertIn(character_issue("app_name", "Bad/App"), setup_issues(Report.model_validate(imported)))
 
     def test_editable_import_rolls_back_when_an_evidence_write_fails(self) -> None:
         with patch("app.workspace.atomic_write_bytes", side_effect=OSError("disk full")):

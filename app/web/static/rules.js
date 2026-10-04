@@ -18,9 +18,27 @@
 
   const scopeBoxText = raw => [typeof raw === "string" ? raw : asString(raw?.component), asString(raw?.description)];
 
+  // Twin of report_service.WORD_REFUSED_CHARACTERS: outside XML 1.0's Char production, so Word cannot store them.
+  const wordRefused = character => /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/.test(character)
+    || (character.length === 1 && character.charCodeAt(0) >= 0xd800 && character.charCodeAt(0) <= 0xdfff);
+
+  // Twin of report_service.scope_value_refusals.
+  const scopeValueRefusals = (environment, channel, line, component, description, vocabulary) => {
+    const entry = (box, text, limit) => {
+      const context = {field:"scope", environment, app_type:channel, box, line};
+      const results = [];
+      const characters = [...new Set([...text].filter(wordRefused))];
+      if (characters.length) results.push({kind:"refusal", code:"invalid_characters", ...context, characters});
+      if (tooLong(text, limit)) results.push({kind:"refusal", code:"too_long", ...context, limit});
+      return results;
+    };
+    const limits = vocabulary.scope_limits;
+    if (!vocabulary.component_channels.includes(channel)) return entry("component", component, limits.line);
+    return [...entry("component", component, limits.component), ...entry("description", description, limits.description)];
+  };
+
   // Twin of report_service.scope_box_refusals.
   const scopeBoxRefusals = (environment, channel, componentText, descriptionText, vocabulary) => {
-    if (!vocabulary.component_channels.includes(channel)) return [];
     const components = componentText.split("\n");
     const descriptions = descriptionText.split("\n");
     const named = [];
@@ -28,20 +46,17 @@
       const component = strip(components[line] || "");
       if (component && !component.startsWith("#")) named.push({line, component, description:strip(descriptions[line] || "")});
     }
-    const seen = new Set();
-    const repeated = [];
-    named.forEach(({component}) => {
-      if (seen.has(component) && !repeated.includes(component)) repeated.push(component);
-      seen.add(component);
-    });
-    const results = repeated.map(component => ({kind:"refusal", code:"duplicate_component", environment, app_type:channel, component}));
-    const rule = vocabulary.character_rules.component_scope;
-    named.forEach(({line, component, description}) => {
-      [["component", component], ["description", description]].forEach(([box, text]) => {
-        const characters = invalidCharacters(text, rule);
-        if (characters.length) results.push({kind:"refusal", code:"invalid_characters", field:"component_scope", environment, app_type:channel, box, line, characters});
+    const results = [];
+    if (vocabulary.component_channels.includes(channel)) {
+      const seen = new Set();
+      const repeated = [];
+      named.forEach(({component}) => {
+        if (seen.has(component) && !repeated.includes(component)) repeated.push(component);
+        seen.add(component);
       });
-    });
+      results.push(...repeated.map(component => ({kind:"refusal", code:"duplicate_component", environment, app_type:channel, component})));
+    }
+    named.forEach(({line, component, description}) => results.push(...scopeValueRefusals(environment, channel, line, component, description, vocabulary)));
     return results;
   };
 
@@ -80,13 +95,22 @@
   };
 
   // Twin of report_service.USERNAME_PATTERN, which the vocabulary does not serve.
-  const USERNAME_PATTERN = /^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$/;
+  const USERNAME_PATTERN = /^[A-Za-z0-9._@\\-](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9._@\\-])?$/;
 
-  // What a save says about one username: null, invalid characters, or a bad first or last character.
-  const usernameRefusal = (username, vocabulary) => {
-    if (!username || username === "N/A" || USERNAME_PATTERN.test(username)) return null;
-    const characters = invalidCharacters(username, vocabulary.character_rules.username);
-    return characters.length ? {code:"invalid_characters", field:"username", characters} : {code:"invalid_username"};
+  // In UTF-16 units, which is what length and maxlength count. Twin: report_service.text_length.
+  const tooLong = (value, limit) => limit != null && value.length > limit;
+
+  // What a save says about one username, in order: invalid characters or a space at either end, then length.
+  const usernameRefusals = (username, vocabulary) => {
+    if (!username || username === "N/A") return [];
+    const rule = vocabulary.character_rules.username;
+    const results = [];
+    if (!USERNAME_PATTERN.test(username)) {
+      const characters = invalidCharacters(username, rule);
+      results.push(characters.length ? {code:"invalid_characters", field:"username", characters} : {code:"invalid_username"});
+    }
+    if (tooLong(username, rule.max_length)) results.push({code:"too_long", field:"username", limit:rule.max_length});
+    return results;
   };
 
   // Twin of report_service.setup_field_refusals.
@@ -95,8 +119,10 @@
     const refuse = (code, context = {}) => results.push({kind:"refusal", code, ...context});
     const check = (field, value, context = {}) => {
       if (typeof value !== "string" || !value) return;
-      const characters = invalidCharacters(value, vocabulary.character_rules[field]);
+      const rule = vocabulary.character_rules[field];
+      const characters = invalidCharacters(value, rule);
       if (characters.length) refuse("invalid_characters", {field, ...context, characters});
+      if (tooLong(value, rule.max_length)) refuse("too_long", {field, ...context, limit:rule.max_length});
     };
     ["app_name", "ci_number", "bsn_number", "app_owner", "tester"].forEach(field => check(field, engagement[field]));
     const environments = engagement.tested_environments || [];
@@ -107,11 +133,13 @@
       if (typeof start === "string" && typeof end === "string" && start && end && start > end) refuse("test_dates_out_of_order", {environment});
       check("test_time", testWindow.test_time, {environment});
     });
-    (engagement.test_accounts || []).forEach((account, index) => {
+    const accounts = engagement.test_accounts || [];
+    if (accounts.length > vocabulary.max_test_accounts) refuse("too_many_accounts", {limit:vocabulary.max_test_accounts});
+    accounts.forEach((account, index) => {
       if (!account || typeof account !== "object" || Array.isArray(account)) return;
       check("user_role", account.user_role, {account:index + 1});
-      const username = usernameRefusal(typeof account.username === "string" ? account.username : "", vocabulary);
-      if (username) refuse(username.code, {...username, account:index + 1});
+      usernameRefusals(typeof account.username === "string" ? account.username : "", vocabulary)
+        .forEach(({code, ...context}) => refuse(code, {...context, account:index + 1}));
     });
     check("limitations", engagement.limitations);
     // Stripped as the model's strip_label does before the save checks it.
@@ -126,7 +154,9 @@
     if (!strip(asString(engagement.app_name))) issue("missing_app_name");
     if (!engagement.segment) issue("missing_segment");
     if (!engagement.report_type) issue("missing_report_type");
+    if (!engagement.network) issue("missing_network");
     if (!strip(asString(engagement.tester))) issue("missing_tester");
+    if (!engagement.report_date) issue("missing_report_date");
     const environments = engagement.tested_environments || [];
     if (!environments.length) issue("no_tested_environment");
     const testedChannels = engagement.tested_channels || [];
@@ -141,8 +171,21 @@
       named.filter(target => vocabulary.component_channels.includes(target.app_type) && !target.description)
         .forEach(({app_type, component}) => issue("missing_component_description", {environment, app_type, component}));
     });
+    // Twin of the account loop in report_service.setup_results.
+    const firstRow = new Map();
+    (engagement.test_accounts || []).forEach((account, index) => {
+      if (!account || typeof account !== "object" || Array.isArray(account)) return;
+      const role = strip(asString(account.user_role));
+      const username = strip(asString(account.username));
+      if (!role && !username) return;
+      const key = JSON.stringify([role, username]);
+      if (!username) issue("incomplete_test_account", {account:index + 1, missing:"username"});
+      else if (!role) issue("incomplete_test_account", {account:index + 1, missing:"user_role"});
+      else if (firstRow.has(key)) issue("repeated_test_account", {account:index + 1, first:firstRow.get(key)});
+      else firstRow.set(key, index + 1);
+    });
     return results;
   };
 
-  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, usernameRefusal};
+  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, usernameRefusals, tooLong};
 })();

@@ -46,18 +46,23 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         return response.headers["location"].split("/")[2]
 
-    def test_network_access_defaults_to_internal_and_survives_a_save(self) -> None:
-        """A draft written before the field existed must keep loading. The default is what buys
-        that, and it is why no fixture or script needed repair."""
+    def test_network_access_starts_unset_and_a_stored_choice_survives_a_save(self) -> None:
+        """A draft written before the field existed must keep loading, now as unset rather than as
+        a guessed Internal; a stored choice stays a choice."""
         report_id = self.new_report()
+        self.assertIsNone(main.workspace.load(report_id).engagement.network)
         path = main.workspace.find_path(report_id)
         draft = read_json(path)
         draft["engagement"].pop("network", None)
         atomic_write_json(path, draft)
 
         recovered = main.workspace.load(report_id)
-        self.assertEqual(recovered.engagement.network, "Internal")
+        self.assertIsNone(recovered.engagement.network)
         self.assertEqual(main.workspace.list_legacy_reports(), [], "an older draft was demoted to the legacy list")
+
+        draft["engagement"]["network"] = "Internal"
+        atomic_write_json(path, draft)
+        self.assertEqual(main.workspace.load(report_id).engagement.network, "Internal")
 
         recovered.engagement.network = "External"
         main.workspace.save(recovered)
@@ -350,7 +355,6 @@ class ReportApiTests(unittest.TestCase):
         cases = [
             ("unsafe id", with_findings([{"uid": 'v_unsafe" onclick="alert(1)'}]), "String should match pattern"),
             ("duplicate id", with_findings([{"uid": "v_duplicate"}, {"uid": "v_duplicate"}]), "duplicate vulnerability id"),
-            ("reversed window", {"engagement": {"test_windows": {"production": {"start_date": "2026-01-02", "end_date": "2026-01-01"}}}}, "end date cannot precede its start date"),
             ("missing evidence", with_findings([{"uid": "v_image", "contents": [{"type": "description", "fragments": [{"frag_id": "f_image", "type": "image", "evidence_id": "ev_missing"}]}]}]), "references missing evidence"),
         ]
         for name, change, message in cases:
@@ -579,6 +583,8 @@ class ReportApiTests(unittest.TestCase):
         report.engagement.ci_number = "CI-VOCAB"
         report.engagement.segment = "JH"
         report.engagement.report_type = "annual_pentest"
+        report.engagement.network = "Internal"
+        report.engagement.report_date = date(2026, 1, 3)
         report.engagement.tested_environments = ["production"]
         report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
         report.scope_targets = [ScopeTarget(target_id="tgt_vocab", environment="production", channel="web", value="https://prod.example.test")]
@@ -628,7 +634,7 @@ class ReportApiTests(unittest.TestCase):
             "production": {"start_date": "2026-01-01", "end_date": "2026-01-02", "test_time": "Anytime"},
             "non_production": {"start_date": "2026-01-01", "end_date": "2026-01-02", "test_time": "7:00 EST"},
         }
-        report["engagement"].update({"segment": "JH", "report_type": "annual_pentest"})
+        report["engagement"].update({"segment": "JH", "report_type": "annual_pentest", "network": "Internal", "report_date": "2026-01-03"})
         report["scope_text"] = {
             "production": {"web": "https://prod.example.test"},
             "non_production": {"web": "https://test.example.test"},
@@ -954,7 +960,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(resolved["all_production"], ("custom", [by_environment["production"]]))
         self.assertEqual(resolved["all_non_production"], ("custom", [by_environment["non_production"]]))
 
-    def test_mobile_scope_uses_character_allowlist_instead_of_url_validation(self) -> None:
+    def test_mobile_scope_refuses_only_characters_word_cannot_store(self) -> None:
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
@@ -966,19 +972,19 @@ class ReportApiTests(unittest.TestCase):
             "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-01"}},
         })
-        allowed_target = "Client's \"Mobile\" App: iOS/Android_v2.1, QA-&"
-        report["scope_text"] = {"production": {"mobile": f"# ignored ! []\n{allowed_target}"}}
+        allowed_target = "Client's \"Mobile\" App! iOS/Android_v2.1 @ QA+&"
+        report["scope_text"] = {"production": {"mobile": f"# ignored \x07 []\n{allowed_target}"}}
 
         saved = self.client.put(f"/reports/{report_id}", json=report)
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(saved.json()["report"]["scope_targets"][0]["value"], allowed_target)
 
         invalid = saved.json()["report"]
-        invalid["scope_text"] = {"production": {"mobile": "Mobile App!"}}
+        invalid["scope_text"] = {"production": {"mobile": "Mobile\x07App"}}
         rejected = self.client.put(f"/reports/{report_id}", json=invalid)
         self.assertEqual(rejected.status_code, 422)
         self.assertEqual(rejected.json()["error"]["code"], "invalid_scope")
-        self.assertIn('Production Mobile scope contains invalid character: "!" (exclamation mark)', rejected.json()["error"]["message"])
+        self.assertIn('Production Mobile scope contains invalid character: "\\u0007" (unicode u+0007)', rejected.json()["error"]["message"])
 
         web = saved.json()["report"]
         web["engagement"]["tested_channels"] = ["web"]
@@ -1052,16 +1058,16 @@ class ReportApiTests(unittest.TestCase):
     def test_a_repeated_component_is_refused_before_an_earlier_lines_characters(self) -> None:
         report_id = self.new_report()
         response = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "mobile", {
-            "component": "Bad!\nGood\nGood",
+            "component": "Bad\x07\nGood\nGood",
             "description": "One\nTwo\nThree",
         }))
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"]["message"], 'Production Mobile scope lists the same component twice: "Good"')
 
-    def test_component_scope_shares_one_widened_character_set_across_both_boxes(self) -> None:
-        """A strict superset of the retired mobile set: an install path must be typable, and the
-        message must name which of the two boxes rejected it."""
+    def test_component_scope_checks_both_boxes_for_characters_word_cannot_store(self) -> None:
+        """Any printable character passes, so an install path is typable, and the message names
+        which of the two boxes holds the character Word cannot store."""
         report_id = self.new_report()
         allowed = "C:\\Program Files\\Acme\\acme.exe [x64]"
         saved = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", {
@@ -1073,26 +1079,26 @@ class ReportApiTests(unittest.TestCase):
 
         rejected = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", {
             "component": "Acme.exe",
-            "description": "Crashes on start!",
+            "description": "Crashes on start\x07",
         }))
         self.assertEqual(rejected.status_code, 422)
-        self.assertIn('Production Thick Client scope description contains invalid character: "!" (exclamation mark)', rejected.json()["error"]["message"])
+        self.assertIn('Production Thick Client scope description contains invalid character: "\\u0007" (unicode u+0007)', rejected.json()["error"]["message"])
 
         # The plain string form is still valid for every channel, so a browser cached from before
         # this shape existed degrades rather than 422ing.
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", "Acme.exe")).status_code, 200)
         self.assertEqual([(target.value, target.description) for target in main.workspace.load(report_id).scope_targets], [("Acme.exe", "")])
 
-    def test_component_scope_rejects_unicode_separators_instead_of_creating_hidden_rows(self) -> None:
+    def test_component_scope_keeps_a_unicode_separator_inside_one_row(self) -> None:
+        """Word can store a line separator, so it is kept; the server splits rows on newlines only."""
         report_id = self.new_report()
         response = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "mobile", {
             "component": "Alpha\u2028Beta",
             "description": "One\u2028Two",
         }))
 
-        self.assertEqual(response.status_code, 422)
-        self.assertEqual(response.json()["error"]["code"], "invalid_scope")
-        self.assertIn('"\u2028" (line separator)', response.json()["error"]["message"])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([(target.value, target.description) for target in main.workspace.load(report_id).scope_targets], [("Alpha\u2028Beta", "One\u2028Two")])
 
     def test_component_scope_accepts_null_legacy_pair_fields_as_blank(self) -> None:
         report_id = self.new_report()
@@ -1464,7 +1470,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
             "app_name": "Carry", "ci_number": "CI-CARRY", "segment": "JH", "report_type": "annual_pentest",
-            "tester": "QA Tester", "tested_environments": ["production"],
+            "tester": "QA Tester", "network": "Internal", "report_date": "2026-01-06", "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"}},
         })
         report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
@@ -1605,7 +1611,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
             "app_name": name, "ci_number": "CI-LOC", "segment": "JH", "report_type": "annual_pentest",
-            "tester": "QA Tester", "tested_channels": ["web"], "tested_environments": ["production"],
+            "tester": "QA Tester", "network": "Internal", "report_date": "2026-01-06", "tested_channels": ["web"], "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"}},
         })
         report["scope_text"] = {"production": {"web": "https://web.production.test"}}
@@ -1723,7 +1729,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
             "app_name": "No Identifier", "ci_number": "", "bsn_number": "",
-            "segment": "JH", "report_type": "annual_pentest", "tester": "QA Tester",
+            "segment": "JH", "report_type": "annual_pentest", "tester": "QA Tester", "network": "Internal", "report_date": "2026-08-03",
             "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-08-01", "end_date": "2026-08-02", "test_time": "Anytime"}},
         })
@@ -1878,6 +1884,8 @@ class ReportApiTests(unittest.TestCase):
         report.engagement.app_name = "Gate"
         report.engagement.report_type = "annual_pentest"
         report.engagement.tester = "QA Tester"
+        report.engagement.network = "Internal"
+        report.engagement.report_date = date(2026, 1, 3)
         report.engagement.tested_environments = ["production"]
         report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
         report.scope_targets = [ScopeTarget(target_id="tgt_gate", environment="production", channel="web", value="https://prod.example.test")]
@@ -1897,6 +1905,8 @@ class ReportApiTests(unittest.TestCase):
         report.engagement.app_name = "Binary"
         report.engagement.report_type = "annual_pentest"
         report.engagement.tester = "QA Tester"
+        report.engagement.network = "Internal"
+        report.engagement.report_date = date(2026, 1, 3)
         report.engagement.tested_environments = ["production"]
         report.engagement.tested_channels = [channel]
         report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
@@ -1974,26 +1984,26 @@ class ReportApiTests(unittest.TestCase):
         empty.scope_targets = []
         self.assertIn("production scope target", report_service.setup_issues(empty))
 
-    def test_setup_issues_leave_scope_refusals_to_the_save(self) -> None:
-        """A refusal belongs to the save, so a stored target the save would refuse adds no Setup issue."""
+    def test_setup_issues_list_a_stored_target_the_save_would_refuse(self) -> None:
+        """An import can store a target the save would refuse; it saves, so it must still block Findings."""
         report_id = self.new_report()
-        report = self._component_scope_report(report_id, "thick_client", "Crashes on start!")
+        report = self._component_scope_report(report_id, "thick_client", "Crashes on start\x07")
         self.assertEqual(
             [result["code"] for result in report_service.setup_results({"engagement": report.engagement.model_dump(mode="json"), "scope_text": report_service.scope_text_from_targets(report.scope_targets)})],
             ["invalid_characters"],
         )
-        self.assertEqual(report_service.setup_issues(report), [])
+        self.assertEqual(report_service.setup_issues(report), ['Production Thick Client scope description contains invalid character: "\\u0007" (unicode u+0007)'])
 
     def test_setup_input_issues_word_every_field_refusal_in_field_order(self) -> None:
         engagement = models.Engagement(
             app_name="Bad/App", ci_number="CI_1", bsn_number="BSN.1", app_owner="Owner 2", tester="QA_Tester",
             tested_environments=["production", "non_production"], non_production_label="UAT!",
-            test_accounts=[models.TestAccount(user_role="Admin_2", username="bad/user"), models.TestAccount(user_role="N/A", username="user.")],
+            test_accounts=[models.TestAccount(user_role="Admin_2", username="bad/user"), models.TestAccount(user_role="N/A", username="user ")],
             limitations="No testing @ prod",
         )
-        # The model refuses reversed dates on its own, so they are set past validation.
+        # Reversed dates are a Setup refusal, not a model error, so they validate here.
         engagement.test_windows = {
-            "production": TestWindow.model_construct(start_date=date(2026, 1, 3), end_date=date(2026, 1, 2), test_time="08:00_17:00"),
+            "production": TestWindow(start_date=date(2026, 1, 3), end_date=date(2026, 1, 2), test_time="08:00_17:00"),
             "non_production": TestWindow(test_time="Any\u00e9time\u0085"),
         }
         self.assertEqual(report_service.setup_input_issues(engagement), [
@@ -2007,7 +2017,7 @@ class ReportApiTests(unittest.TestCase):
             'Non-Production time contains invalid character: "\u0085" (unicode u+0085)',
             'User role 1 contains invalid character: "_" (underscore)',
             'Username 1 contains invalid character: "/" (slash)',
-            "Username 2 must start and end with a letter or number",
+            "Username 2 cannot start or end with a space",
             'Limitations contains invalid character: "@" (at sign)',
             'Non-Production name contains invalid character: "!" (exclamation mark)',
         ])
@@ -2023,6 +2033,7 @@ class ReportApiTests(unittest.TestCase):
             "report_type": "annual_pentest",
             "app_name": "Generated Report",
             "ci_number": "CI-GENERATE",
+            "network": "Internal",
             "report_date": "2026-09-09",
             "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-09-01", "end_date": "2026-09-02", "test_time": "Anytime"}},

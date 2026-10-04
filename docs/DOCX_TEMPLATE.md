@@ -74,7 +74,7 @@ are rendered by `_render_component_fragment`.
 | `tester-name` | Tester |
 | `prod-start`, `prod-end`, `prod-time` | Production test window |
 | `non-prod-start`, `non-prod-end`, `non-prod-time` | Non-Production test window |
-| `network` | `Internal` or `External`, from `Engagement.network` |
+| `network` | `Internal` or `External`, from `Engagement.network`; `N/A` while the tester has not chosen |
 
 **`{{network}}` is registered ahead of the templates, and is braced-only.** `_metadata` supplies it
 today, but none of the four shipped templates contains the token yet: each cover page still carries
@@ -112,7 +112,9 @@ component, production rows first. The table has no environment column or row
 count boundary, so a finished DOCX cannot prove which environment owns a row. An empty
 component list yields one `N/A` row, mirroring `User Roles` — leaving the
 prototype row intact would instead fail the unresolved-placeholder check at the
-very end of generation.
+very end of generation. `User Roles` leaves out a test account whose role and
+username are both blank (a leftover from Add); the draft keeps the row, so an
+import cannot bring it back.
 
 ## The Section table, in the two `ASIA` templates
 

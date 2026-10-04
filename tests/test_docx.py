@@ -19,7 +19,9 @@ from app.docx_report import (
     SCOPE_WRAP_CHARACTERS,
     TESTING_RESULT_PARAGRAPH,
     ReportGenerationError,
+    _find_table,
     _metadata,
+    _populate_scope_tables,
     _wrap_long_value,
     generation_issues,
     main_template_path,
@@ -68,6 +70,7 @@ class DocxReportTests(unittest.TestCase):
                     report_type="annual_pentest",
                     report_date=date(2026, 9, 9),
                     tester="QA Tester",
+                    network="Internal",
                     tested_environments=["production", "non_production"],
                     tested_channels=["web", "api"],
                     # Pinned, not defaulted: the assertion below counts "UAT:" headings.
@@ -328,6 +331,7 @@ class DocxReportTests(unittest.TestCase):
                 report_type="annual_pentest",
                 report_date=date(2026, 9, 9),
                 tester="QA Tester",
+                network="Internal",
                 tested_environments=tested_environments,
                 tested_channels=["web"],
                 non_production_label="UAT",
@@ -411,6 +415,7 @@ class DocxReportTests(unittest.TestCase):
                 report_type="retest",
                 report_date=date(2026, 9, 9),
                 tester="QA Tester",
+                network="Internal",
                 tested_environments=["production"],
                 tested_channels=["web"],
                 # Pinned, not defaulted: the caller counts "UAT:" headings.
@@ -487,7 +492,7 @@ class DocxReportTests(unittest.TestCase):
                 report_id="r_wrap", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
                     app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
-                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web", "api"],
+                    report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web", "api"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
                 scope_targets=[
@@ -538,7 +543,7 @@ class DocxReportTests(unittest.TestCase):
                 report_id="r_na", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
                     app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
-                    report_date=date(2026, 9, 9), tester="QA Tester",
+                    report_date=date(2026, 9, 9), tester="QA Tester", network="Internal",
                     tested_environments=["production", "non_production"], tested_channels=["web"],
                     test_windows={
                         "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2)),
@@ -620,7 +625,7 @@ class DocxReportTests(unittest.TestCase):
                 report_id="r_blank", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
                     app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
-                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web"],
+                    report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
                 scope_targets=[ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test")],
@@ -658,7 +663,7 @@ class DocxReportTests(unittest.TestCase):
                 report_id="r_pages", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
                     app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
-                    report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web"],
+                    report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
                 scope_targets=[ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test")],
@@ -871,7 +876,7 @@ class DocxReportTests(unittest.TestCase):
             report_id="r_layout", app_id="CI-DOCX", saved_at=now,
             engagement=Engagement(
                 app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
-                report_date=date(2026, 9, 9), tester="QA Tester", tested_environments=["production"], tested_channels=["web"],
+                report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web"],
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
             ),
             scope_targets=[ScopeTarget(target_id="t_web", environment="production", channel="web", value="https://prod.example.test")],
@@ -1112,6 +1117,7 @@ class DocxReportTests(unittest.TestCase):
                 report_type="annual_pentest",
                 report_date=date(2026, 9, 9),
                 tester="QA Tester",
+                network="Internal",
                 tested_environments=["production"],
                 tested_channels=[channel],
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST")},
@@ -1160,14 +1166,31 @@ class DocxReportTests(unittest.TestCase):
         # Written out by hand on purpose, so a new segment must be added here rather than guessed.
         self.assertEqual(covered, set(get_args(Segment)), "a segment has no row in the template table")
 
-    def test_network_metadata_defaults_to_internal_and_carries_the_selection(self) -> None:
+    def test_network_metadata_prints_n_a_until_chosen_and_carries_the_selection(self) -> None:
         """The templates carry no {{network}} token yet, so this assertion is the only thing
         exercising the value until someone edits the eight cover cells in Word."""
         report = Report(report_id="r_network", app_id="CI-NETWORK", saved_at=datetime.now().astimezone())
 
-        self.assertEqual(_metadata(report)["network"], "Internal")
+        self.assertEqual(_metadata(report)["network"], "N/A")
         report.engagement.network = "External"
         self.assertEqual(_metadata(report)["network"], "External")
+
+    def test_a_blank_account_row_is_left_out_of_the_user_roles_table(self) -> None:
+        cases = [
+            ("among filled rows", [TestAccount(user_role="Admin", username="qa.admin"), TestAccount(user_role=" ", username="")], [["Admin", "qa.admin"]]),
+            ("the only row", [TestAccount(user_role="", username="")], [["N/A", "N/A"]]),
+        ]
+        for label, accounts, expected in cases:
+            with self.subTest(label):
+                document = Document(RESOURCES / "MAIN.docx")
+                report = Report(report_id="r_accounts", app_id="CI-ACCOUNTS", saved_at=datetime.now().astimezone())
+                report.engagement.test_accounts = accounts
+
+                _populate_scope_tables(document, report)
+
+                table = _find_table(document, "User Roles")
+                self.assertEqual([[cell.text for cell in row.cells] for row in table.rows[1:]], expected)
+                self.assertEqual(report.engagement.test_accounts, accounts, "the draft's rows must not change")
 
     def test_every_shipped_template_renders_without_unresolved_placeholders(self) -> None:
         """None of the four has been through this renderer before. Each carries its own anchors,

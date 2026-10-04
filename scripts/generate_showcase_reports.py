@@ -429,6 +429,7 @@ def _build_report(spec: ReportSpec, report_number: int) -> tuple[Report, dict[st
             ],
             limitations="No destructive actions. Testing used synthetic accounts and records.",
             tester="Alex Morgan",
+            network="Internal",
             report_date=report_day,
             classification="Confidential",
         ),

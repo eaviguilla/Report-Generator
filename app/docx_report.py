@@ -273,7 +273,7 @@ def _metadata(report: Report) -> dict[str, str]:
     accounts = engagement.test_accounts
     values = {
         "segment": engagement.segment or "N/A",
-        "network": engagement.network,
+        "network": engagement.network or "N/A",
         "app-name": _display_value(engagement.app_name),
         "report-name": _display_value(engagement.app_name),
         "test-type": REPORT_TYPE_LABELS.get(engagement.report_type or "", "N/A"),
@@ -473,7 +473,8 @@ def _populate_scope_tables(document: DocumentType, report: Report) -> None:
 
     accounts = _find_table(document, "User Roles")
     prototype = _strip_data_rows(accounts)
-    for account in engagement.test_accounts or []:
+    # A blank row is a leftover from Add: it stays in the draft for the tester, not in the document.
+    for account in (account for account in engagement.test_accounts or [] if account.user_role.strip() or account.username.strip()):
         row = _append_prototype_row(accounts, prototype)
         _set_cell_lines(row.cells[0], [_display_value(account.user_role)])
         _set_cell_lines(row.cells[1], [_display_value(account.username)])

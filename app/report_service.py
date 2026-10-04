@@ -10,10 +10,10 @@ from functools import cache
 from itertools import zip_longest
 from typing import Callable, Literal
 
-from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, TableFragment, Vulnerability, resolve_tested_channels
+from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
 
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9])?$")
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@\\-](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9._@\\-])?$")
 RESOLVED_REMEDIATION = "None, the vulnerability has been remediated."
 # Guidance left in library text, such as "(insert version here)"; generation refuses it.
 PLACEHOLDER_TEXT = re.compile(
@@ -129,9 +129,10 @@ def _invalid_character_text(label: str, invalid: list[str], *, portable_names: b
     return f"{label} contains invalid {noun}: {descriptions}"
 
 
-# A strict superset of the retired mobile set, so every value that validated before still does; the
-# backslash and brackets are what make an install path typable.
-COMPONENT_SCOPE_SYMBOLS = "/,.;:()&'\"-_\\[]"
+# Outside XML 1.0's Char production: python-docx refuses them, so generation would abort.
+WORD_REFUSED_CHARACTERS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+# In UTF-16 units.
+SCOPE_LIMITS = {"line": 500, "component": 200, "description": 500}
 
 
 @dataclass(frozen=True)
@@ -144,27 +145,36 @@ class CharacterRule:
     numbers: bool = True
     spaces: bool = True
     line_breaks: bool = False
+    # In UTF-16 units, as the browser's maxlength counts; see text_length.
+    max_length: int | None = None
 
+
+ASCII_LETTERS_AND_DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+MAX_TEST_ACCOUNTS = 50
 
 CHARACTER_RULES: dict[str, CharacterRule] = {
-    "app_name": CharacterRule("Application name", "-:;.()"),
-    "ci_number": CharacterRule("CI number", "-", spaces=False),
-    "bsn_number": CharacterRule("BSN number", "-", spaces=False),
-    "app_owner": CharacterRule("Application owner", "-", numbers=False),
-    "tester": CharacterRule("Tester", "-", numbers=False),
-    "test_time": CharacterRule("Time", ":/-"),
-    "user_role": CharacterRule("User role", "/-"),
-    "limitations": CharacterRule("Limitations", "/,.;:()&'\"-", line_breaks=True),
+    "app_name": CharacterRule("Application name", "-:;.()", max_length=100),
+    "ci_number": CharacterRule("CI number", "-", spaces=False, max_length=30),
+    "bsn_number": CharacterRule("BSN number", "-", spaces=False, max_length=30),
+    "app_owner": CharacterRule("Application owner", "-'\u2019.", numbers=False, max_length=60),
+    "tester": CharacterRule("Tester", "-'\u2019.", numbers=False, max_length=60),
+    "test_time": CharacterRule("Time", ":/-", max_length=40),
+    "user_role": CharacterRule("User role", "/-", max_length=60),
+    "limitations": CharacterRule("Limitations", "/,.;:()&'\"-", line_breaks=True, max_length=2000),
     # A subset of Limitations, because the retest suggestion writes this name into that field.
     "non_production_label": CharacterRule("Non-Production name", "/-"),
-    "component_scope": CharacterRule("Component scope", COMPONENT_SCOPE_SYMBOLS),
     # No symbol at all: the GRIMPEN- prefix belongs to the document, not to the stored value.
     "severity_review_tickets": CharacterRule("Severity Review Tickets", "", letters=False, spaces=False, line_breaks=True),
     "cvss_score": CharacterRule("CVSS Score", ".", letters=False, spaces=False),
     "cvss_vector": CharacterRule("CVSS Vector", "./:", spaces=False),
-    # Checked only once a username fails USERNAME_PATTERN, to say which characters it refuses.
-    "username": CharacterRule("Username", "._@\\-"),
+    # ASCII only, so a letter such as é is named rather than reported as a bad first or last character.
+    "username": CharacterRule("Username", f"{ASCII_LETTERS_AND_DIGITS}._@\\-", letters=False, numbers=False, max_length=100),
 }
+
+
+def text_length(value: str) -> int:
+    """Length in UTF-16 units, as HTML maxlength and JavaScript's length count. Twin: value.length in rules.js."""
+    return len(value.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def _rule_characters(field: str, value: str) -> list[str]:
@@ -195,8 +205,13 @@ def setup_field_refusals(engagement: dict) -> list[dict]:
         results.append({"kind": "refusal", "code": code, **context})
 
     def check(field: str, value, **context) -> None:
-        if isinstance(value, str) and value and (characters := _rule_characters(field, value)):
+        if not isinstance(value, str) or not value:
+            return
+        if characters := _rule_characters(field, value):
             refuse("invalid_characters", field=field, **context, characters=characters)
+        limit = CHARACTER_RULES[field].max_length
+        if limit is not None and text_length(value) > limit:
+            refuse("too_long", field=field, **context, limit=limit)
 
     for field in ("app_name", "ci_number", "bsn_number", "app_owner", "tester"):
         check(field, engagement.get(field))
@@ -211,16 +226,23 @@ def setup_field_refusals(engagement: dict) -> list[dict]:
         if isinstance(start, str) and isinstance(end, str) and start and end and start > end:
             refuse("test_dates_out_of_order", environment=environment)
         check("test_time", window.get("test_time"), environment=environment)
-    for number, account in enumerate(engagement.get("test_accounts") or [], start=1):
+    test_accounts = engagement.get("test_accounts") or []
+    if len(test_accounts) > MAX_TEST_ACCOUNTS:
+        refuse("too_many_accounts", limit=MAX_TEST_ACCOUNTS)
+    for number, account in enumerate(test_accounts, start=1):
         if not isinstance(account, dict):
             continue
         check("user_role", account.get("user_role"), account=number)
         username = account.get("username")
-        if isinstance(username, str) and username and username != "N/A" and not USERNAME_PATTERN.fullmatch(username):
+        if not isinstance(username, str) or not username or username == "N/A":
+            continue
+        if not USERNAME_PATTERN.fullmatch(username):
             if characters := _rule_characters("username", username):
                 refuse("invalid_characters", field="username", account=number, characters=characters)
             else:
                 refuse("invalid_username", account=number)
+        if text_length(username) > (limit := CHARACTER_RULES["username"].max_length):
+            refuse("too_long", field="username", account=number, limit=limit)
     check("limitations", engagement.get("limitations"))
     # A disabled input is exempt from browser validation, so an unticked Non-Production goes unchecked.
     if "non_production" in environments:
@@ -242,23 +264,69 @@ def setup_refusal_message(result: dict) -> str:
     if code == "test_dates_out_of_order":
         return f"{_environment_label(result['environment'])} start date cannot be after its end date"
     if code == "invalid_username":
-        return f"Username {result['account']} must start and end with a letter or number"
+        return f"Username {result['account']} cannot start or end with a space"
+    if code == "too_many_accounts":
+        return f"A report can list at most {result['limit']} test accounts"
     scope_label = f"{_environment_label(result['environment'])} {CHANNEL_LABELS[result['app_type']]} scope" if "app_type" in result else ""
     if code == "duplicate_component":
         return f"{scope_label} lists the same component twice: {json.dumps(result['component'], ensure_ascii=False)}"
     field = result["field"]
-    label = {
-        "component_scope": f"{scope_label} description" if result.get("box") == "description" else scope_label,
+    labels = {
+        "scope": f"{scope_label} description" if result.get("box") == "description" else scope_label,
         "test_time": f"{_environment_label(result.get('environment', ''))} time",
         "user_role": f"User role {result.get('account')}",
         "username": f"Username {result.get('account')}",
-    }.get(field, CHARACTER_RULES[field].label)
+    }
+    label = labels[field] if field in labels else CHARACTER_RULES[field].label
+    if code == "too_long":
+        if field == "scope":
+            label = f"{label} line {result['line'] + 1}"
+        return f"{label} must be at most {result['limit']} characters"
     return _invalid_character_text(label, result["characters"])
 
 
-def setup_input_issues(engagement: Engagement) -> list[str]:
-    """Return invalid Setup values without treating blank draft fields as errors."""
-    return [setup_refusal_message(result) for result in setup_field_refusals(engagement.model_dump(mode="json"))]
+def _refused_value(engagement: dict, result: dict):
+    """The value a Setup field refusal is about, so a value the stored report already held can be told apart."""
+    windows = engagement.get("test_windows")
+    window = windows.get(result["environment"]) if isinstance(windows, dict) and "environment" in result else None
+    window = window if isinstance(window, dict) else {}
+    accounts = engagement.get("test_accounts") or []
+    if result["code"] == "test_dates_out_of_order":
+        return (window.get("start_date"), window.get("end_date"))
+    if result["code"] == "too_many_accounts":
+        return len(accounts)
+    # invalid_username is the one account result that names no field.
+    field = result.get("field", "username")
+    if field == "test_time":
+        return window.get("test_time")
+    if "account" in result:
+        row = accounts[result["account"] - 1] if result["account"] <= len(accounts) else None
+        return row.get(field) if isinstance(row, dict) else None
+    return engagement.get(field)
+
+
+def _already_stored(result: dict, engagement: dict, prior: dict) -> bool:
+    value = _refused_value(engagement, result)
+    if result["code"] == "too_many_accounts":
+        return value <= _refused_value(prior, result)
+    # Any row, so removing or reordering accounts does not turn an old value into a new one.
+    if "account" in result:
+        field = result.get("field", "username")
+        return any(isinstance(row, dict) and row.get(field) == value for row in prior.get("test_accounts") or [])
+    return value == _refused_value(prior, result)
+
+
+def setup_input_issues(engagement: Engagement, prior: Engagement | None = None) -> list[str]:
+    """Return invalid Setup values without treating blank draft fields as errors.
+
+    With `prior`, only values that differ from it: a stored value that breaks a rule, such as one an
+    import brought in, stays savable and is reported by setup_issues instead."""
+    current = engagement.model_dump(mode="json")
+    results = setup_field_refusals(current)
+    if prior is not None:
+        before = prior.model_dump(mode="json")
+        results = [result for result in results if not _already_stored(result, current, before)]
+    return [setup_refusal_message(result) for result in results]
 
 
 def finding_input_issues(report: Report) -> list[str]:
@@ -688,31 +756,72 @@ def scope_text_from_targets(targets) -> dict:
     return result
 
 
+def _scope_entry_refusals(environment: str, channel: str, box: str, line: int, text: str, limit: int) -> list[dict]:
+    context = {"field": "scope", "environment": environment, "app_type": channel, "box": box, "line": line}
+    results = []
+    if characters := list(dict.fromkeys(WORD_REFUSED_CHARACTERS.findall(text))):
+        results.append({"kind": "refusal", "code": "invalid_characters", **context, "characters": characters})
+    if text_length(text) > limit:
+        results.append({"kind": "refusal", "code": "too_long", **context, "limit": limit})
+    return results
+
+
+def scope_value_refusals(environment: str, channel: str, line: int, value: str, description: str) -> list[dict]:
+    """What one scope line or component row is refused for. Twin: scopeValueRefusals in rules.js."""
+    if channel not in COMPONENT_CHANNELS:
+        return _scope_entry_refusals(environment, channel, "component", line, value, SCOPE_LIMITS["line"])
+    return [
+        *_scope_entry_refusals(environment, channel, "component", line, value, SCOPE_LIMITS["component"]),
+        *_scope_entry_refusals(environment, channel, "description", line, description, SCOPE_LIMITS["description"]),
+    ]
+
+
 def scope_box_refusals(environment: str, channel: str, component_text: str, description_text: str) -> list[dict]:
     """Every refusal one scope box earns, in the order reconcile_targets raises them. Twin: scopeBoxRefusals in rules.js."""
-    # Web and API lines are URLs: they carry ? and =, and a URL typed twice is dropped, not refused.
-    if channel not in COMPONENT_CHANNELS:
-        return []
     # Paired by raw index before cleaning, so a blank or # line cannot shift the descriptions below it.
     named = [
         (line, value.strip(), description.strip())
         for line, (value, description) in enumerate(zip_longest(component_text.split("\n"), description_text.split("\n"), fillvalue=""))
         if value.strip() and not value.strip().startswith("#")
     ]
-    # A repeat would lose its description, and target IDs are reused by value. All of a box's repeats
-    # come before its characters, as the save has always raised them.
-    seen: set[str] = set()
-    repeated: list[str] = []
-    for _, value, _ in named:
-        if value in seen and value not in repeated:
-            repeated.append(value)
-        seen.add(value)
-    results = [{"kind": "refusal", "code": "duplicate_component", "environment": environment, "app_type": channel, "component": value} for value in repeated]
+    results: list[dict] = []
+    # Web and API drop a repeated line; a repeated component would lose its description, so it is refused.
+    if channel in COMPONENT_CHANNELS:
+        seen: set[str] = set()
+        repeated: list[str] = []
+        for _, value, _ in named:
+            if value in seen and value not in repeated:
+                repeated.append(value)
+            seen.add(value)
+        results += [{"kind": "refusal", "code": "duplicate_component", "environment": environment, "app_type": channel, "component": value} for value in repeated]
     for line, value, description in named:
-        for box, text in (("component", value), ("description", description)):
-            if characters := _rule_characters("component_scope", text):
-                results.append({"kind": "refusal", "code": "invalid_characters", "field": "component_scope", "environment": environment, "app_type": channel, "box": box, "line": line, "characters": characters})
+        results += scope_value_refusals(environment, channel, line, value, description)
     return results
+
+
+def _stored_scope_refusal(result: dict, component_lines: list[str], description_lines: list[str], stored: dict[str, str]) -> bool:
+    """Whether a box refusal is about a line the stored report already held, word for word."""
+    if result["code"] == "duplicate_component":
+        return False
+    line = result["line"]
+    value = component_lines[line].strip() if line < len(component_lines) else ""
+    if value not in stored:
+        return False
+    if result["box"] == "component":
+        return True
+    return stored[value] == (description_lines[line].strip() if line < len(description_lines) else "")
+
+
+def changed_target_refusals(targets: list[ScopeTarget], prior: list[ScopeTarget]) -> list[dict]:
+    """Refusals for the targets a save without scope text changed, which the Setup checks never saw."""
+    stored = {(target.environment, target.channel, target.value): target.description for target in prior}
+    return [
+        refusal
+        for target in targets
+        for refusal in scope_value_refusals(target.environment, target.channel, target.order, target.value, target.description)
+        if (key := (target.environment, target.channel, target.value)) not in stored
+        or (refusal["box"] == "description" and stored[key] != target.description)
+    ]
 
 
 def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
@@ -755,7 +864,12 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             description_text = "" if description_text is None else description_text
             if not isinstance(component_text, str) or not isinstance(description_text, str):
                 raise ValueError("scope target values must be text")
-            if refusals := scope_box_refusals(environment, channel, component_text, description_text):
+            stored = {target.value: target.description for target in prior.scope_targets if target.environment == environment and target.channel == channel}
+            component_lines, description_lines = component_text.split("\n"), description_text.split("\n")
+            if refusals := [
+                result for result in scope_box_refusals(environment, channel, component_text, description_text)
+                if not _stored_scope_refusal(result, component_lines, description_lines, stored)
+            ]:
                 raise ValueError(setup_refusal_message(refusals[0]))
             # Paired by raw index before cleaning, as scope_box_refusals does.
             cleaned: list[tuple[str, str]] = []
@@ -872,8 +986,12 @@ def setup_results(report: dict) -> list[dict]:
         issue("missing_segment")
     if not engagement.get("report_type"):
         issue("missing_report_type")
+    if not engagement.get("network"):
+        issue("missing_network")
     if not (engagement.get("tester") or "").strip():
         issue("missing_tester")
+    if not engagement.get("report_date"):
+        issue("missing_report_date")
     environments = engagement.get("tested_environments") or []
     if not environments:
         issue("no_tested_environment")
@@ -896,6 +1014,22 @@ def setup_results(report: dict) -> list[dict]:
         for target in named:
             if target["app_type"] in COMPONENT_CHANNELS and not target["description"]:
                 issue("missing_component_description", environment=environment, app_type=target["app_type"], component=target["component"])
+    # A blank row is a leftover from Add and is left out of the document; N/A counts as filled.
+    first_row: dict[tuple[str, str], int] = {}
+    for number, account in enumerate(engagement.get("test_accounts") or [], start=1):
+        if not isinstance(account, dict):
+            continue
+        role, username = (value.strip() if isinstance(value, str) else "" for value in (account.get("user_role"), account.get("username")))
+        if not role and not username:
+            continue
+        if not username:
+            issue("incomplete_test_account", account=number, missing="username")
+        elif not role:
+            issue("incomplete_test_account", account=number, missing="user_role")
+        elif (role, username) in first_row:
+            issue("repeated_test_account", account=number, first=first_row[(role, username)])
+        else:
+            first_row[(role, username)] = number
     return results
 
 
@@ -903,7 +1037,9 @@ SETUP_ISSUE_TEXT = {
     "missing_app_name": "application name",
     "missing_segment": "segment",
     "missing_report_type": "report type",
+    "missing_network": "network access",
     "missing_tester": "tester",
+    "missing_report_date": "report date",
     "no_tested_environment": "selected environment",
 }
 
@@ -918,6 +1054,10 @@ def _setup_issue_text(result: dict) -> str:
         return f"{environment} scope target"
     if result["code"] == "missing_component_description":
         return f"{environment} {CHANNEL_LABELS[result['app_type']]} description for \"{result['component']}\""
+    if result["code"] == "incomplete_test_account":
+        return f"test account {result['account']} {'username' if result['missing'] == 'username' else 'user role'}"
+    if result["code"] == "repeated_test_account":
+        return f"test account {result['account']} repeats test account {result['first']} -- remove one"
     return SETUP_ISSUE_TEXT[result["code"]]
 
 
@@ -925,9 +1065,10 @@ def setup_issues(report: Report) -> list[str]:
     """Return the missing engagement details that block Findings entry."""
     engagement = report.engagement
     results = setup_results({"engagement": engagement.model_dump(mode="json"), "scope_text": scope_text_from_targets(report.scope_targets)})
-    # A refusal belongs to the save; a hand-edited draft can store a target the save would refuse.
+    # A refusal of a stored value, such as one an import brought in, is still something to fix before Findings.
     issues = [result for result in results if result["kind"] == "issue"]
-    return [*(_setup_issue_text(result) for result in issues), *setup_input_issues(engagement)]
+    refusals = [result for result in results if result["kind"] == "refusal"]
+    return [*(_setup_issue_text(result) for result in issues), *(setup_refusal_message(result) for result in refusals)]
 
 
 def setup_is_complete(report: Report) -> bool:

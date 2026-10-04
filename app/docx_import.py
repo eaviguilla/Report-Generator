@@ -66,7 +66,7 @@ PRODUCTION_ROW = "Production Environment"
 MAX_IMAGE_WIDTH_MM = 155
 # The cover prints a hardcoded word today, so reading it back would return Internal for every
 # report, including the External ones. Warn instead of recovering.
-NETWORK_IMPORT_WARNING = "Network access was not read from the DOCX; it defaults to Internal -- change it in Setup if this engagement was External."
+NETWORK_IMPORT_WARNING = "Network access was not read from the DOCX, because the cover always prints Internal -- choose it in Setup before continuing."
 
 
 class ReportImportError(ValueError):

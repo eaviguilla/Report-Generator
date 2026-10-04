@@ -628,6 +628,7 @@
     const exclusion = results.find(result => result.code === "mobile_and_thick_client");
     if (exclusion) missing.push(componentExclusionIssue(exclusion));
     missing.push(...results.filter(result => result.code === "missing_component_description").map(componentDescriptionIssue));
+    missing.push(...results.filter(result => ["incomplete_test_account", "repeated_test_account"].includes(result.code)).map(accountIssue));
     const invalidMessages = [...new Set(
       [...root.querySelectorAll("[data-setup-validated]")]
         .filter(input => !input.validity.valid)
@@ -997,7 +998,12 @@
   // categories. Setup has always worked this way; the Content page uses serverCharacterRule instead.
   const browserCharacterRule = rule => {
     const invalidCharacters = value => window.vrRules.invalidCharacters(value, rule);
-    return {label:rule.label, invalidCharacters, valid:value => !invalidCharacters(value).length};
+    return {
+      label:rule.label,
+      invalidCharacters,
+      valid:value => !invalidCharacters(value).length && !window.vrRules.tooLong(value, rule.max_length),
+      message:label => `${label} must be at most ${rule.max_length} characters`,
+    };
   };
   const serverCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
     test: character => {
@@ -1215,7 +1221,10 @@
   };
   // Words rules.js's Setup results as report_service.setup_issues does, or the Setup notice and the
   // server's page gate describe the same report differently.
-  const SETUP_DETAIL_TEXT = {missing_app_name:"application name", missing_segment:"segment", missing_report_type:"report type", missing_tester:"tester", no_tested_environment:"selected environment"};
+  const SETUP_DETAIL_TEXT = {missing_app_name:"application name", missing_segment:"segment", missing_report_type:"report type", missing_network:"network access", missing_tester:"tester", missing_report_date:"report date", no_tested_environment:"selected environment"};
+  const accountIssue = result => result.code === "repeated_test_account"
+    ? `test account ${result.account} repeats test account ${result.first} -- remove one`
+    : `test account ${result.account} ${result.missing === "username" ? "username" : "user role"}`;
   const componentExclusionIssue = result => `only one of ${result.app_types.map(channel => channelLabels[channel]).join(" and ")} -- deselect the other`;
   const componentDescriptionIssue = result => `${result.environment.replace("_", "-")} ${channelLabels[result.app_type]} description for "${result.component}"`;
   // Twin of report_service.affected_channels; keep both in step.
@@ -1474,9 +1483,11 @@
       non_production_label: setupRule("non_production_label"),
       username: {
         label:"Username",
-        invalidCharacters:value => window.vrRules.usernameRefusal(value, vocabulary)?.characters || [],
-        valid:value => !window.vrRules.usernameRefusal(value, vocabulary),
-        message:label => `${label} must start and end with a letter or number`,
+        invalidCharacters:value => window.vrRules.usernameRefusals(value, vocabulary).find(result => result.characters)?.characters || [],
+        valid:value => !window.vrRules.usernameRefusals(value, vocabulary).length,
+        message:(label, value) => window.vrRules.usernameRefusals(value, vocabulary)[0]?.code === "too_long"
+          ? `${label} must be at most ${vocabulary.character_rules.username.max_length} characters`
+          : `${label} cannot start or end with a space`,
       },
     };
     const setupNotice = document.querySelector("#setup-validation-note");
@@ -1485,7 +1496,7 @@
       const validate = () => {
         const invalid = !rule.valid(input.value);
         const invalidCharacters = rule.invalidCharacters?.(input.value) || [];
-        const message = invalidCharacters.length ? invalidCharacterMessage(label, invalidCharacters) : rule.message?.(label);
+        const message = !invalid ? "" : invalidCharacters.length ? invalidCharacterMessage(label, invalidCharacters) : rule.message?.(label, input.value);
         input.setCustomValidity(invalid ? message : "");
         showRuleState(input, invalid, "ruleInvalid");
       };
@@ -1641,13 +1652,16 @@
           const row = document.createElement("tr");
           row.innerHTML = `<td><input aria-label="User role ${index + 1}" value="${escape(account.user_role)}"></td><td><input aria-label="Username ${index + 1}" value="${escape(account.username)}"></td><td><button class="remove-test-account" type="button" aria-label="Remove test account ${index + 1}" title="Remove account">x</button></td>`;
           const [roleInput, usernameInput] = row.querySelectorAll("input");
-          roleInput.oninput = () => { account.user_role = roleInput.value; scheduleSave(); };
-          usernameInput.oninput = () => { account.username = usernameInput.value; scheduleSave(); };
+          roleInput.oninput = () => { account.user_role = roleInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
+          usernameInput.oninput = () => { account.username = usernameInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
           wireSetupRule(roleInput, setupRules.userRole, `User role ${index + 1}`);
           wireSetupRule(usernameInput, setupRules.username, `Username ${index + 1}`);
           row.querySelector("button").onclick = () => { report.engagement.test_accounts.splice(index, 1); renderAccounts(); scheduleSave(); };
           accountBody.append(row);
         });
+        const add = document.querySelector("#add-test-account");
+        add.disabled = report.engagement.test_accounts.length >= vocabulary.max_test_accounts;
+        add.title = add.disabled ? `A report can list at most ${vocabulary.max_test_accounts} test accounts` : "";
       };
       document.querySelector("#add-test-account").onclick = () => {
         report.engagement.test_accounts.push({user_role:"", username:""});
@@ -1982,7 +1996,12 @@
           }
           // The server rebuilds scope_targets from the surviving environments, so clear the
           // selections that pointed into this one before they reach a save that would drop them.
-          if (!event.target.checked) dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => target.environment === environment).map(target => target.target_id)));
+          if (!event.target.checked) {
+            dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => target.environment === environment).map(target => target.target_id)));
+            // Its dates go with it, so adding it back starts from empty pickers; the time is kept.
+            const removedWindow = report.engagement.test_windows[environment];
+            if (removedWindow) Object.assign(removedWindow, {start_date:null, end_date:null});
+          }
           report.engagement.tested_environments = next;
           renderCoverage();
           scheduleSave();
@@ -2093,14 +2112,17 @@
               // The row index is the line index rules.js pairs the two boxes by.
               const refusals = () => window.vrRules.scopeRefusals(report, vocabulary)
                 .filter(result => result.environment === environment && result.app_type === channel);
-              const invalidCharacters = () => refusals()
-                .find(result => result.code === "invalid_characters" && result.box === field && result.line === index)?.characters || [];
+              const ownRefusals = () => refusals().filter(result => result.box === field && result.line === index);
+              const invalidCharacters = () => ownRefusals().find(result => result.code === "invalid_characters")?.characters || [];
+              const overLimit = () => ownRefusals().find(result => result.code === "too_long");
               const repeated = () => field === "component" && refusals()
                 .some(result => result.code === "duplicate_component" && result.component === window.vrRules.strip(input.value));
               const rule = {
                 invalidCharacters,
-                valid:() => !invalidCharacters().length && !repeated(),
-                message:label => `${label} lists the same component twice: ${JSON.stringify(window.vrRules.strip(input.value))}`,
+                valid:() => !invalidCharacters().length && !overLimit() && !repeated(),
+                message:label => overLimit()
+                  ? `${label} line ${index + 1} must be at most ${overLimit().limit} characters`
+                  : `${label} lists the same component twice: ${JSON.stringify(window.vrRules.strip(input.value))}`,
               };
               wireSetupRule(input, rule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
               cell.append(input);
@@ -2180,6 +2202,16 @@
             textarea.style.height = `${textarea.scrollHeight}px`;
           };
           textarea.oninput = () => { setScopeTextField(environment, channel, "component", textarea.value); grow(); clearScopeErrors(); scheduleSave(); };
+          const lineRefusals = () => window.vrRules.scopeRefusals(report, vocabulary)
+            .filter(result => result.environment === environment && result.app_type === channel);
+          wireSetupRule(textarea, {
+            invalidCharacters:() => [...new Set(lineRefusals().filter(result => result.code === "invalid_characters").flatMap(result => result.characters))],
+            valid:() => !lineRefusals().length,
+            message:label => {
+              const overLimit = lineRefusals().find(result => result.code === "too_long");
+              return `${label} line ${overLimit.line + 1} must be at most ${overLimit.limit} characters`;
+            },
+          }, `${environmentLabels[environment]} ${channelLabels[channel]} scope`);
           textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
           // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
           textarea.onchange = async () => {
@@ -2714,7 +2746,7 @@
       }
       const flagged = code => results.some(result => result.code === code);
       // In page order, so focus lands on the first highlighted field.
-      const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_type", "report_type"], ["missing_tester", "tester"]]
+      const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_type", "report_type"], ["missing_network", "network"], ["missing_tester", "tester"], ["missing_report_date", "report_date"]]
         .filter(([code]) => flagged(code))
         .map(([, field]) => root.querySelector(`[data-path="engagement.${field}"]`));
       const undated = results.filter(result => result.code === "missing_test_dates").map(result => result.environment);
@@ -2722,6 +2754,12 @@
         .filter(panel => undated.includes(panel.querySelector('input[type="checkbox"]')?.value))
         .flatMap(panel => [...panel.querySelectorAll('input[type="date"]')]);
       const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => input && !input.value.trim());
+      // The half a row lacks, or both halves of a row that repeats an earlier one.
+      const accountInputs = results.flatMap(result => {
+        if (result.code === "incomplete_test_account") return [root.querySelector(`#test-accounts input[aria-label="${result.missing === "username" ? "Username" : "User role"} ${result.account}"]`)];
+        if (result.code === "repeated_test_account") return [...root.querySelectorAll(`#test-accounts tr:nth-child(${result.account}) input`)];
+        return [];
+      }).filter(Boolean);
       const missingEnvironment = flagged("no_tested_environment");
       const missingScopePanels = results.filter(result => result.code === "missing_scope_target")
         .map(result => root.querySelector(`#scope-grid .scope-panel.${result.environment}`))
@@ -2742,10 +2780,11 @@
               ?.querySelector('[data-scope-field="description"]')
           ).filter(Boolean);
           blankDescriptionBoxes.forEach(input => input.classList.add("validation-error"));
-          const firstIncomplete = incompleteSetup[0] || missingScopePanels[0]?.querySelector('[data-scope-field="component"]') || blankDescriptionBoxes[0];
+          accountInputs.forEach(input => input.classList.add("validation-error"));
+          const firstIncomplete = incompleteSetup[0] || accountInputs[0] || missingScopePanels[0]?.querySelector('[data-scope-field="component"]') || blankDescriptionBoxes[0];
           firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
           firstIncomplete?.focus({preventScroll:true});
-          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
+          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : accountInputs.length ? "Complete or remove the highlighted test accounts" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
           updateSetupValidationNotice();
         }
         return false;

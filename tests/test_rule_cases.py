@@ -341,6 +341,12 @@ SETUP_CASES = [
         [long_scope("production", "thick_client", "component", 0, 200), long_scope("production", "thick_client", "description", 0, 500)],
     ),
     ("a web line at its limit", scoped({("production", "web"): "h" * 500}), []),
+    ("the web limit is per line, not per box", scoped({("production", "web"): "\n".join(f"{index}" + "h" * 450 for index in range(3))}), []),
+    (
+        "component limits are per row, not per box",
+        thick_client("\n".join(f"{index}" + "c" * 190 for index in range(3)), "\n".join(f"{index}" + "d" * 490 for index in range(3))),
+        [],
+    ),
     (
         "a web line one past its limit names its line",
         scoped({("production", "web"): "# notes\n\nhttps://app.example.test\n" + "h" * 501}),

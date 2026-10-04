@@ -295,4 +295,9 @@ input[data-path*="scope"],
   .finding-header { grid-template-columns: 1fr; }
         .finding-card .finding-title h1 { font-size: 15px; }
   #setup[data-step="findings"] .table-wrap { overflow-x: auto !important; overflow-y: visible !important; }
+
+.setup-field-wrap { display: grid; gap: 4px; min-width: 0; }
+.setup-field-message { display: block; color: var(--danger); font-size: 11px; line-height: 1.35; }
+.setup-field-message[hidden] { display: none; }
+#setup .limitations-field + .setup-field-message { margin: 4px 15px 15px; }
 }

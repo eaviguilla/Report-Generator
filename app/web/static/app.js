@@ -193,6 +193,7 @@
     RECOVERED: "recovered",
   });
   let validateSetupInputs = () => true;
+  let updateSetupFieldIssues = () => {};
   // Assigned by setup(); the server rejects a scope edit that strands a finding, so the save waits for a fix.
   let strandedByScopeEdit = () => [];
   let updateFindingSummary = () => {};
@@ -619,13 +620,23 @@
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
-    if (!notice?.dataset.validationAttempted) return;
     const results = window.vrRules.setupResults(report, vocabulary);
-    const messages = results.map(result => window.vrRules.formatRuleMessage(result, report, vocabulary, {
-      scopeContext:result.field === "scope" || result.code === "duplicate_component",
-    }));
-    notice.hidden = !messages.length;
-    notice.textContent = messages.join(" ");
+    const scopeLines = new Set();
+    const noticeCount = results.reduce((total, result) => {
+      if (result.field === "scope" && !vocabulary.component_channels.includes(result.app_type)) {
+        const key = JSON.stringify([result.environment, result.app_type, result.line]);
+        if (scopeLines.has(key)) return total;
+        scopeLines.add(key);
+      }
+      return total + 1;
+    }, 0);
+    const attempted = notice?.dataset.validationAttempted === "true";
+    updateSetupFieldIssues(attempted);
+    if (!attempted) return;
+    notice.hidden = !noticeCount;
+    notice.textContent = noticeCount === 1
+      ? "1 thing to fix before Findings. It is marked above, and the cursor is on it."
+      : `${noticeCount} things to fix before Findings. Each one is marked above, and the cursor is on the first.`;
   };
   // Each Setup card reports its own state on the right of its header strip, the way a Content
   // section reports its fragment count.
@@ -744,7 +755,7 @@
     }
     if (saveInFlight) return saveInFlight;
     if (!pendingSave || savedRevision >= saveRevision) return true;
-    if (root.dataset.step === "setup" && !validateSetupInputs(false)) {
+    if (root.dataset.step === "setup" && !validateSetupInputs(true)) {
       setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
       return false;
     }
@@ -972,13 +983,17 @@
   };
   // Built from the server's CHARACTER_RULES, judging letters and digits by the browser's own Unicode
   // categories. Setup has always worked this way; the Content page uses serverCharacterRule instead.
-  const browserCharacterRule = (rule, field) => {
+  const browserCharacterRule = (rule, field, context = {}) => {
     const invalidCharacters = value => window.vrRules.invalidCharacters(value, rule);
     return {
       label:rule.label,
       invalidCharacters,
       valid:value => !invalidCharacters(value).length && !window.vrRules.tooLong(value, rule.max_length),
-      message:(label, value) => ({code:"too_long", field, label, value, limit:rule.max_length}),
+      result:(label, value) => {
+        const characters = invalidCharacters(value);
+        return characters.length ? {code:"invalid_characters", field, label, characters, value, ...context} : null;
+      },
+      message:(label, value) => ({code:"too_long", field, label, value, limit:rule.max_length, ...context}),
     };
   };
   const serverCharacterRule = ({label, symbols, letters, numbers, spaces, line_breaks}) => characterRule(label, {
@@ -1440,7 +1455,7 @@
     const OTHERS_OPTION = "OTHERS";
     // Survives renderCoverage so picking OTHERS does not snap back to the stored preset.
     let typingCustomLabel = false;
-    const setupRule = field => browserCharacterRule(vocabulary.character_rules[field], field);
+    const setupRule = (field, context = {}) => browserCharacterRule(vocabulary.character_rules[field], field, context);
     const setupRules = {
       app_name: setupRule("app_name"),
       ci_number: setupRule("ci_number"),
@@ -1448,7 +1463,7 @@
       app_owner: setupRule("app_owner"),
       tester: setupRule("tester"),
       limitations: setupRule("limitations"),
-      time: setupRule("test_time"),
+      time: environment => setupRule("test_time", {environment}),
       userRole: setupRule("user_role"),
       non_production_label: setupRule("non_production_label"),
       username: {
@@ -1460,19 +1475,158 @@
       },
     };
     const setupNotice = document.querySelector("#setup-validation-note");
-    const wireSetupRule = (input, rule, label = rule.label) => {
+    const setupMessageControllers = new Map();
+    const dateMessageControllers = new Map();
+    const accountMessageControllers = new Map();
+    const componentMessageControllers = new Map();
+    const scopeMessageControllers = new Map();
+    let appTypeMessageController = null;
+    let environmentMessageController = null;
+    const attachSetupMessage = (controls, placeMessage, elementName = "span") => {
+      const messageElement = document.createElement(elementName);
+      messageElement.id = id("setup-field-message");
+      messageElement.className = "setup-field-message";
+      messageElement.hidden = true;
+      placeMessage(messageElement);
+      const messages = new Map();
+      const controller = {
+        hasText:() => [...messages.values()].some(value => Array.isArray(value) ? value.some(Boolean) : Boolean(value)),
+        set:(kind, text) => {
+          messages.set(kind, text);
+          const visibleMessages = [...messages.values()].flatMap(value => Array.isArray(value) ? value.filter(Boolean) : value ? [value] : []);
+          if (messageElement.tagName === "UL") {
+            messageElement.replaceChildren(...visibleMessages.map(text => {
+              const item = document.createElement("li");
+              item.textContent = text;
+              return item;
+            }));
+          } else {
+            messageElement.textContent = visibleMessages.join(" ");
+          }
+          messageElement.hidden = !visibleMessages.length;
+          const messageRow = messageElement.closest("tr");
+          if (messageRow) messageRow.hidden = !visibleMessages.length;
+          controls.forEach(control => {
+            const describedBy = new Set((control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+            if (visibleMessages.length) {
+              describedBy.add(messageElement.id);
+              control.setAttribute("aria-invalid", "true");
+            } else {
+              describedBy.delete(messageElement.id);
+              if (control.validity.valid) control.removeAttribute("aria-invalid");
+            }
+            if (describedBy.size) control.setAttribute("aria-describedby", [...describedBy].join(" "));
+            else control.removeAttribute("aria-describedby");
+          });
+        },
+      };
+      controls.forEach(control => {
+        control.dataset.setupMessageControl = "true";
+        setupMessageControllers.set(control, controller);
+      });
+      return controller;
+    };
+    const attachSimpleSetupMessage = control => {
+      const label = control.closest("label");
+      if (!label) return null;
+      if (label.parentElement?.classList.contains("fields") || label.parentElement?.classList.contains("date-pair") || label.classList.contains("coverage-option")) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "setup-field-wrap";
+        label.before(wrapper);
+        wrapper.append(label);
+        return attachSetupMessage([control], message => wrapper.append(message));
+      }
+      return attachSetupMessage([control], message => label.after(message));
+    };
+    const firstSetupMessageControl = () => [...root.querySelectorAll("[data-setup-message-control]")]
+      .find(control => setupMessageControllers.get(control)?.hasText());
+    const focusFirstSetupMessage = () => {
+      const control = firstSetupMessageControl();
+      if (!control) return null;
+      control.scrollIntoView({behavior:"smooth", block:"center"});
+      control.focus({preventScroll:true});
+      return control;
+    };
+    updateSetupFieldIssues = show => {
+      const issuePaths = {
+        missing_segment:"engagement.segment",
+        missing_app_name:"engagement.app_name",
+        missing_report_type:"engagement.report_type",
+        missing_network:"engagement.network",
+        missing_tester:"engagement.tester",
+        missing_report_date:"engagement.report_date",
+      };
+      const byPath = new Map();
+      const results = show ? window.vrRules.setupResults(report, vocabulary) : [];
+      if (show) {
+        results.forEach(result => {
+          const path = issuePaths[result.code];
+          if (path && !byPath.has(path)) byPath.set(path, window.vrRules.formatRuleMessage(result, report, vocabulary));
+        });
+      }
+      root.querySelectorAll("[data-path]").forEach(control => {
+        setupMessageControllers.get(control)?.set("issue", byPath.get(control.dataset.path) || "");
+      });
+      dateMessageControllers.forEach((controller, environment) => {
+        const issue = results.find(result => result.code === "missing_test_dates" && result.environment === environment);
+        controller.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
+      });
+      accountMessageControllers.forEach((controller, index) => {
+        const messages = results
+          .filter(result => result.kind === "issue" && result.account === index + 1
+            && (result.code === "incomplete_test_account" || result.code === "repeated_test_account"))
+          .map(result => window.vrRules.formatRuleMessage(result, report, vocabulary));
+        controller.set("issue", messages.join(" "));
+      });
+      componentMessageControllers.forEach(({controller, environment, channel, index, input}) => {
+        const component = window.vrRules.strip(input.value);
+        const componentLines = componentText(scopeTextField(environment, channel, "component")).split(/\r?\n/);
+        const firstIndex = componentLines.findIndex(value => window.vrRules.strip(value) === component);
+        const issue = results.find(result => result.code === "missing_component_description"
+          && result.environment === environment && result.app_type === channel
+          && result.component === component && firstIndex === index);
+        controller.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
+      });
+      const appTypeIssues = results.filter(result => result.code === "no_app_type" || result.code === "mobile_and_thick_client");
+      appTypeMessageController?.set("issue", appTypeIssues.map(result => window.vrRules.formatRuleMessage(result, report, vocabulary)).join(" "));
+      const missingEnvironment = results.find(result => result.code === "no_tested_environment");
+      environmentMessageController?.set("issue", missingEnvironment ? window.vrRules.formatRuleMessage(missingEnvironment, report, vocabulary) : "");
+      const scopedIssues = new Set();
+      scopeMessageControllers.forEach(({controller, environment}) => {
+        const issue = results.find(result => result.code === "missing_scope_target" && result.environment === environment);
+        const show = issue && !scopedIssues.has(environment);
+        controller.set("issue", show ? [window.vrRules.formatRuleMessage(issue, report, vocabulary)] : []);
+        if (show) scopedIssues.add(environment);
+      });
+    };
+    const scopeLineMessages = results => {
+      const byLine = new Map();
+      results.forEach(result => {
+        const line = result.line + 1;
+        const message = window.vrRules.formatRuleMessage(result, report, vocabulary).replace(/^Line \d+ /, "");
+        byLine.set(line, [...(byLine.get(line) || []), message]);
+      });
+      return [...byLine].map(([line, messages]) => `Line ${line} ${messages.join(" ")}`);
+    };
+    const wireSetupRule = (input, rule, label = rule.label, messageKind = "refusal") => {
       input.dataset.setupValidated = "true";
+      const messageController = setupMessageControllers.get(input);
+      let revealMessage = !rule.valid(input.value);
       const validate = () => {
         const invalid = !rule.valid(input.value);
+        const results = invalid && rule.results ? rule.results() : [];
         const invalidCharacters = rule.invalidCharacters?.(input.value) || [];
-        const result = !invalid ? null : rule.result?.(label, input.value) || (invalidCharacters.length
+        const result = !invalid ? null : rule.result?.(label, input.value, results) || results[0] || (invalidCharacters.length
           ? {code:"invalid_characters", field:rule.field, label, characters:invalidCharacters, value:input.value}
           : rule.message?.(label, input.value));
         const message = result ? window.vrRules.formatRuleMessage({...result, label:result.label || label, value:result.value ?? input.value}, report, vocabulary) : "";
+        const shownMessage = rule.messages ? rule.messages(results) : message;
         input.setCustomValidity(invalid ? message : "");
         showRuleState(input, invalid, "ruleInvalid");
+        messageController?.set(messageKind, revealMessage && invalid ? shownMessage : "");
       };
-      input.validateSetupRule = validate;
+      input.validateSetupRule = reveal => { if (reveal) revealMessage = true; validate(); };
+      input.addEventListener("blur", () => input.validateSetupRule(true));
       input.addEventListener("input", validate);
       input.addEventListener("change", validate);
       validate();
@@ -1481,11 +1635,12 @@
       const invalidInputs = [...root.querySelectorAll("[data-setup-validated]")].filter(input => !input.validity.valid);
       if (reveal && invalidInputs.length) {
         if (setupNotice) setupNotice.dataset.validationAttempted = "true";
-        invalidInputs.forEach(input => input.classList.add("validation-error"));
+        invalidInputs.forEach(input => {
+          input.classList.add("validation-error");
+          input.validateSetupRule?.(true);
+        });
         updateSetupValidationNotice();
-        invalidInputs[0].scrollIntoView({behavior:"smooth", block:"center"});
-        invalidInputs[0].focus({preventScroll:true});
-        invalidInputs[0].reportValidity();
+        focusFirstSetupMessage();
       }
       return !invalidInputs.length;
     };
@@ -1545,6 +1700,7 @@
     root.querySelectorAll("[data-path]").forEach(input => {
       const [section, field] = input.dataset.path.split(".");
       input.value = report[section][field] ?? "";
+      attachSimpleSetupMessage(input);
       const grow = input.tagName === "TEXTAREA"
         ? () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; }
         : null;
@@ -1557,6 +1713,7 @@
       input.oninput = () => { report[section][field] = input.value || (input.matches('select, input[type="date"]') ? null : ""); if (input.value.trim()) input.classList.remove("validation-error"); grow?.(); scheduleSave(); };
       if (setupRules[field]) wireSetupRule(input, setupRules[field]);
     });
+    updateSetupValidationNotice();
     // Offered, never written. A retest that covered one environment usually says so in Limitations,
     // but the wording stays the tester's to accept. Client-only: nothing server-side re-derives
     // limitations, so unlike the In Conclusion sentence there is no Python half to keep in step.
@@ -1620,16 +1777,27 @@
     if (accountBody) {
       const renderAccounts = () => {
         accountBody.innerHTML = "";
+        accountMessageControllers.clear();
         report.engagement.test_accounts.forEach((account, index) => {
           const row = document.createElement("tr");
           row.innerHTML = `<td><input aria-label="User role ${index + 1}" value="${escape(account.user_role)}"></td><td><input aria-label="Username ${index + 1}" value="${escape(account.username)}"></td><td><button class="remove-test-account" type="button" aria-label="Remove test account ${index + 1}" title="Remove account">x</button></td>`;
           const [roleInput, usernameInput] = row.querySelectorAll("input");
           roleInput.oninput = () => { account.user_role = roleInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
           usernameInput.oninput = () => { account.username = usernameInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
-          wireSetupRule(roleInput, setupRules.userRole, `User role ${index + 1}`);
-          wireSetupRule(usernameInput, setupRules.username, `Username ${index + 1}`);
           row.querySelector("button").onclick = () => { report.engagement.test_accounts.splice(index, 1); renderAccounts(); scheduleSave(); };
           accountBody.append(row);
+          const controller = attachSetupMessage([roleInput, usernameInput], message => {
+            const messageRow = document.createElement("tr");
+            messageRow.hidden = true;
+            const cell = document.createElement("td");
+            cell.colSpan = 3;
+            cell.append(message);
+            messageRow.append(cell);
+            row.after(messageRow);
+          });
+          accountMessageControllers.set(index, controller);
+          wireSetupRule(roleInput, setupRules.userRole, `User role ${index + 1}`, "refusal:user_role");
+          wireSetupRule(usernameInput, setupRules.username, `Username ${index + 1}`, "refusal:username");
         });
         const add = document.querySelector("#add-test-account");
         add.disabled = report.engagement.test_accounts.length >= vocabulary.max_test_accounts;
@@ -1867,7 +2035,12 @@
       });
     };
     const renderCoverage = () => {
+      [configuration, windows].forEach(container => {
+        container.querySelectorAll("[data-setup-message-control]").forEach(control => setupMessageControllers.delete(control));
+      });
       configuration.innerHTML = "";
+      windows.innerHTML = "";
+      scopeMessageControllers.clear();
       const typeGroup = document.createElement("div");
       typeGroup.className = "test-type-select";
       const typeHeading = document.createElement("span");
@@ -1915,7 +2088,10 @@
       });
       typeGroup.append(typeHeading, typeOptions);
       configuration.append(typeGroup);
-      windows.innerHTML = "";
+      appTypeMessageController = attachSetupMessage(
+        [...typeOptions.querySelectorAll('input[type="checkbox"]')],
+        message => typeGroup.after(message),
+      );
       Object.entries(environmentLabels).forEach(([environment, label]) => {
         const testWindow = report.engagement.test_windows[environment];
         const panel = document.createElement("div");
@@ -1952,6 +2128,7 @@
         }
         const customName = panel.querySelector(".coverage-name-custom");
         if (customName) {
+          attachSimpleSetupMessage(customName);
           wireSetupRule(customName, setupRules.non_production_label);
           // No renderCoverage here: it rebuilds this input and would take the caret mid-word.
           customName.oninput = () => {
@@ -1989,11 +2166,16 @@
         startDate.value = testWindow.start_date || "";
         endDate.value = testWindow.end_date || "";
         timeInput.value = testWindow.test_time;
+        const datePair = panel.querySelector(".date-pair");
+        const dateMessageController = attachSetupMessage([startDate, endDate], message => datePair.after(message));
+        dateMessageControllers.set(environment, dateMessageController);
+        attachSimpleSetupMessage(timeInput);
         startDate.oninput = () => { testWindow.start_date = startDate.value || null; if (startDate.value) startDate.classList.remove("validation-error"); scheduleSave(); };
         endDate.oninput = () => { testWindow.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
         timeInput.oninput = () => { testWindow.test_time = timeInput.value; scheduleSave(); };
-        wireSetupRule(timeInput, setupRules.time, `${label} time`);
+        wireSetupRule(timeInput, setupRules.time(environment), `${label} time`);
         [startDate, endDate].forEach(input => { input.dataset.setupValidated = "true"; });
+        let revealDateMessage = Boolean(startDate.value && endDate.value && startDate.value > endDate.value);
         const validateDateOrder = () => {
           startDate.max = endDate.value;
           endDate.min = startDate.value;
@@ -2003,12 +2185,21 @@
           endDate.setCustomValidity(message);
           showRuleState(startDate, invalid, "dateOrderInvalid");
           showRuleState(endDate, invalid, "dateOrderInvalid");
+          dateMessageController.set("refusal", revealDateMessage && invalid ? message : "");
         };
         startDate.addEventListener("input", validateDateOrder);
         endDate.addEventListener("input", validateDateOrder);
+        [startDate, endDate].forEach(input => input.addEventListener("blur", () => {
+          revealDateMessage = true;
+          validateDateOrder();
+        }));
         validateDateOrder();
         windows.append(panel);
       });
+      environmentMessageController = attachSetupMessage(
+        [...windows.querySelectorAll(':scope > .environment-window > .coverage-option > input[type="checkbox"]')],
+        message => windows.append(message),
+      );
       // Any named component anywhere satisfies "define a scope target", so the marking clears across
       // the whole grid rather than just the box being typed into.
       const clearScopeErrors = () => {
@@ -2031,20 +2222,27 @@
         const body = table.querySelector("tbody");
         const fields = ["component", "description"];
         const commit = () => {
-          const rows = [...body.querySelectorAll("tr")];
+          const rows = [...body.querySelectorAll(".scope-component-row")];
           fields.forEach(field => setScopeTextField(environment, channel, field,
             rows.map(row => row.querySelector(`[data-scope-field="${field}"]`).value).join("\n")));
         };
         const renderRows = () => {
           const stored = fields.map(field => scopeTextField(environment, channel, field).split(/\r?\n/));
+          componentMessageControllers.forEach((binding, key) => {
+            if (binding.environment === environment && binding.channel === channel) componentMessageControllers.delete(key);
+          });
           body.innerHTML = "";
           for (let index = 0; index < Math.max(stored[0].length, stored[1].length, 1); index += 1) {
             const row = document.createElement("tr");
+            row.className = "scope-component-row";
+            const rowInputs = [];
+            const rowRules = [];
             fields.forEach((field, column) => {
               const cell = document.createElement("td");
               const input = document.createElement("input");
               input.dataset.scopeField = field;
               input.value = stored[column][index] || "";
+              rowInputs.push(input);
               // Named by app type rather than by row, so the name stays the box's purpose and the
               // column header supplies the rest.
               input.setAttribute("aria-label", `${channelLabels[channel]} ${field === "description" ? "Description" : "Component"}`);
@@ -2087,14 +2285,24 @@
               const ownRefusals = () => refusals().filter(result => result.box === field && result.line === index);
               const invalidCharacters = () => ownRefusals().find(result => result.code === "invalid_characters")?.characters || [];
               const overLimit = () => ownRefusals().find(result => result.code === "too_long");
-              const repeated = () => field === "component" && refusals()
-                .some(result => result.code === "duplicate_component" && result.component === window.vrRules.strip(input.value));
+              const repeated = () => {
+                const component = window.vrRules.strip(input.value);
+                return field === "component" && refusals()
+                  .some(result => result.code === "duplicate_component" && result.component === component)
+                  && scopeTextField(environment, channel, "component").split(/\r?\n/).slice(0, index)
+                    .some(value => window.vrRules.strip(value) === component);
+              };
               const rule = {
                 invalidCharacters,
                 valid:() => !invalidCharacters().length && !overLimit() && !repeated(),
                 result:() => ownRefusals()[0] || refusals().find(result => result.code === "duplicate_component" && result.component === window.vrRules.strip(input.value)),
               };
-              wireSetupRule(input, rule, `${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`);
+              rowRules.push({
+                input,
+                rule,
+                label:`${environmentLabels[environment]} ${channelLabels[channel]} scope${field === "description" ? " description" : ""}`,
+                messageKind:`refusal:${field}`,
+              });
               cell.append(input);
               row.append(cell);
             });
@@ -2125,7 +2333,16 @@
             };
             actions.append(remove);
             row.append(actions);
-            body.append(row);
+            const messageRow = document.createElement("tr");
+            messageRow.className = "setup-message-row";
+            messageRow.hidden = true;
+            const messageCell = document.createElement("td");
+            messageCell.colSpan = 3;
+            messageRow.append(messageCell);
+            const controller = attachSetupMessage(rowInputs, message => messageCell.append(message));
+            componentMessageControllers.set(`${environment}:${channel}:${index}`, {controller, environment, channel, index, input:rowInputs[0]});
+            body.append(row, messageRow);
+            rowRules.forEach(({input, rule, label, messageKind}) => wireSetupRule(input, rule, label, messageKind));
           }
         };
         const add = document.createElement("button");
@@ -2135,7 +2352,8 @@
         add.onclick = () => {
           fields.forEach(field => setScopeTextField(environment, channel, field, `${scopeTextField(environment, channel, field)}\n`));
           renderRows();
-          body.lastElementChild?.querySelector("input")?.focus();
+          const rows = body.querySelectorAll(".scope-component-row");
+          rows[rows.length - 1]?.querySelector("input")?.focus();
           scheduleSave();
         };
         renderRows();
@@ -2174,11 +2392,6 @@
           textarea.oninput = () => { setScopeTextField(environment, channel, "component", textarea.value); grow(); clearScopeErrors(); scheduleSave(); };
           const lineRefusals = () => window.vrRules.scopeRefusals(report, vocabulary)
             .filter(result => result.environment === environment && result.app_type === channel);
-          wireSetupRule(textarea, {
-            invalidCharacters:() => [...new Set(lineRefusals().filter(result => result.code === "invalid_characters").flatMap(result => result.characters))],
-            valid:() => !lineRefusals().length,
-            result:() => lineRefusals()[0],
-          }, `${environmentLabels[environment]} ${channelLabels[channel]} scope`);
           textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
           // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
           textarea.onchange = async () => {
@@ -2195,6 +2408,15 @@
           };
           label.append(textarea);
           group.append(label);
+          const scopeMessageController = attachSetupMessage([textarea], message => group.append(message), "ul");
+          scopeMessageControllers.set(`${environment}:${channel}`, {controller:scopeMessageController, environment, channel});
+          wireSetupRule(textarea, {
+            invalidCharacters:() => [...new Set(lineRefusals().filter(result => result.code === "invalid_characters").flatMap(result => result.characters))],
+            valid:() => !lineRefusals().length,
+            results:lineRefusals,
+            result:(_label, _value, results) => results[0],
+            messages:scopeLineMessages,
+          }, `${environmentLabels[environment]} ${channelLabels[channel]} scope`);
           grow();
           document.fonts?.ready.then(grow);
           observeWidth(textarea, grow);
@@ -2202,6 +2424,7 @@
         });
         scopeGrid.append(panel);
       });
+      if (setupNotice?.dataset.validationAttempted === "true") updateSetupFieldIssues(true);
     };
     renderCoverage();
     }
@@ -2705,12 +2928,7 @@
     const validateSetupPage = reveal => {
       const results = window.vrRules.setupResults(report, vocabulary);
       const refused = results.some(result => result.kind === "refusal");
-      if (!validateSetupInputs(reveal) || refused) {
-        if (reveal) {
-          setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
-        }
-        return false;
-      }
+      const inputsValid = validateSetupInputs(reveal);
       const flagged = code => results.some(result => result.code === code);
       // In page order, so focus lands on the first highlighted field.
       const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_type", "report_type"], ["missing_network", "network"], ["missing_tester", "tester"], ["missing_report_date", "report_date"]]
@@ -2733,10 +2951,12 @@
         .filter(Boolean);
       const blankDescriptions = results.filter(result => result.code === "missing_component_description");
       const exclusion = flagged("mobile_and_thick_client");
-      if (results.length) {
+      if (reveal) {
+        if (setupNotice) setupNotice.dataset.validationAttempted = "true";
+        updateSetupValidationNotice();
+      }
+      if (results.length || !inputsValid) {
         if (reveal) {
-          const setupNotice = document.querySelector("#setup-validation-note");
-          if (setupNotice) setupNotice.dataset.validationAttempted = "true";
           incompleteSetup.forEach(input => input.classList.add("validation-error"));
           // Mark the box the tester has to type into: the component when none is named, the
           // description when one is named without it.
@@ -2749,10 +2969,11 @@
           blankDescriptionBoxes.forEach(input => input.classList.add("validation-error"));
           accountInputs.forEach(input => input.classList.add("validation-error"));
           const firstIncomplete = incompleteSetup[0] || accountInputs[0] || missingScopePanels[0]?.querySelector('[data-scope-field="component"]') || blankDescriptionBoxes[0];
-          firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
-          firstIncomplete?.focus({preventScroll:true});
-          setSaveState(SAVE_STATES.UNSAVED, missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : accountInputs.length ? "Complete or remove the highlighted test accounts" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
-          updateSetupValidationNotice();
+          if (!focusFirstSetupMessage()) {
+            firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
+            firstIncomplete?.focus({preventScroll:true});
+          }
+          setSaveState(SAVE_STATES.UNSAVED, refused || !inputsValid ? "Correct invalid Setup fields" : missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : accountInputs.length ? "Complete or remove the highlighted test accounts" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
         }
         return false;
       }

@@ -619,19 +619,15 @@
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
     if (!notice?.dataset.validationAttempted) return;
-    const missing = [];
-    if (!root.querySelector('[data-path="engagement.app_name"]')?.value.trim()) missing.push("application name");
-    if (!root.querySelector('[data-path="engagement.segment"]')?.value) missing.push("segment");
-    if (!root.querySelector('[data-path="engagement.report_type"]')?.value) missing.push("report type");
-    if (!root.querySelector('[data-path="engagement.tester"]')?.value.trim()) missing.push("tester");
-    if (!root.querySelector('#test-windows input[type="checkbox"]:checked')) missing.push("selected environment");
-    if ([...root.querySelectorAll('#test-windows input[type="date"]')].some(input => !input.value)) missing.push("testing dates");
+    const results = window.vrRules.setupResults(report, vocabulary);
+    const missing = results.filter(result => result.code in SETUP_DETAIL_TEXT).map(result => SETUP_DETAIL_TEXT[result.code]);
+    if (results.some(result => result.code === "missing_test_dates")) missing.push("testing dates");
     ["production", "non_production"].forEach(environment => {
       const panel = root.querySelector(`#scope-grid .scope-panel.${environment}`);
       if (panel && ![...panel.querySelectorAll('[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) missing.push(`${environment.replace("_", "-")} scope target`);
     });
-    const exclusion = componentExclusionIssue();
-    if (exclusion) missing.push(exclusion);
+    const exclusion = results.find(result => result.code === "mobile_and_thick_client");
+    if (exclusion) missing.push(componentExclusionIssue(exclusion));
     missing.push(...missingDescriptionIssues());
     const invalidMessages = [...new Set(
       [...root.querySelectorAll("[data-setup-validated]")]
@@ -1223,12 +1219,10 @@
       ? {component:componentText(current), description:value}
       : {component:value, description:descriptionText(current)};
   };
-  // Twin of the mutual-exclusion line in report_service.setup_issues. Same string, or the Setup
-  // notice and the server's refusal describe the same report differently.
-  const componentExclusionIssue = () => {
-    const covered = COMPONENT_CHANNELS.filter(channel => report.engagement.tested_channels.includes(channel));
-    return covered.length > 1 ? `only one of ${covered.map(channel => channelLabels[channel]).join(" and ")} -- deselect the other` : null;
-  };
+  // Words rules.js's Setup results as report_service.setup_issues does, or the Setup notice and the
+  // server's page gate describe the same report differently.
+  const SETUP_DETAIL_TEXT = {missing_app_name:"application name", missing_segment:"segment", missing_report_type:"report type", missing_tester:"tester", no_tested_environment:"selected environment"};
+  const componentExclusionIssue = result => `only one of ${result.app_types.map(channel => channelLabels[channel]).join(" and ")} -- deselect the other`;
   // Twin of the required-description line in report_service.setup_issues, pairing by raw index with
   // the same clean rules as reconcile_targets so a commented component line cannot shift the rest.
   const missingDescriptionIssues = () => {
@@ -2753,15 +2747,23 @@
         }
         return false;
       }
-      const requiredMetadata = [root.querySelector('[data-path="engagement.segment"]'), root.querySelector('[data-path="engagement.app_name"]'), root.querySelector('[data-path="engagement.report_type"]'), root.querySelector('[data-path="engagement.tester"]')];
-      const requiredDates = [...root.querySelectorAll('#test-windows input[type="date"]')];
-      const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => !input?.value.trim());
-      const missingEnvironment = !root.querySelector('#test-windows input[type="checkbox"]:checked');
+      const results = window.vrRules.setupResults(report, vocabulary);
+      const flagged = code => results.some(result => result.code === code);
+      // In page order, so focus lands on the first highlighted field.
+      const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_type", "report_type"], ["missing_tester", "tester"]]
+        .filter(([code]) => flagged(code))
+        .map(([, field]) => root.querySelector(`[data-path="engagement.${field}"]`));
+      const undated = results.filter(result => result.code === "missing_test_dates").map(result => result.environment);
+      const requiredDates = [...root.querySelectorAll("#test-windows .environment-window")]
+        .filter(panel => undated.includes(panel.querySelector('input[type="checkbox"]')?.value))
+        .flatMap(panel => [...panel.querySelectorAll('input[type="date"]')]);
+      const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => input && !input.value.trim());
+      const missingEnvironment = flagged("no_tested_environment");
       const missingScopePanels = [...root.querySelectorAll("#scope-grid .scope-panel")].filter(panel => ![...panel.querySelectorAll('[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#"))));
       // A description-only entry would pass an unnarrowed count here and 422 on the server instead.
       const blankDescriptions = missingDescriptionIssues();
-      const exclusion = componentExclusionIssue();
-      if (incompleteSetup.length || missingEnvironment || missingScopePanels.length || blankDescriptions.length || exclusion) {
+      const exclusion = flagged("mobile_and_thick_client");
+      if (results.length || missingScopePanels.length || blankDescriptions.length) {
         if (reveal) {
           const setupNotice = document.querySelector("#setup-validation-note");
           if (setupNotice) setupNotice.dataset.validationAttempted = "true";

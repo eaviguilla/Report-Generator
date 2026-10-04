@@ -8,7 +8,7 @@ paths:
 # Browser client
 
 - No framework and no build step: edit `app/web/static/*.js` directly. `app.js` is over 4,000 lines, so find a function with a code search or outline and read it by name or line range, never the whole file.
-- A rule that exists in Python and JS changes in pairs (`docs/DATA_MAP.md` §12). The only drift guard is `test_browser_readiness_verdict_matches_server_generation_issues`, and it covers generation readiness alone. Do not add a third copy of a twinned rule; call the existing function.
+- A rule that exists in Python and JS changes in pairs (`docs/DATA_MAP.md` §12). Setup rules live in `app/web/static/rules.js` (`vrRules`, page-free, takes the report and the vocabulary) and are guarded by `tests/test_rule_cases.py`, one case table run against both sides; a moved rule gets a case there. The other twins have only the contract tests in `test_browser.py`, or nothing. Do not add a third copy of a twinned rule; call the existing function.
 - Fixed lists are not twins. Statuses, severities, segments, report types, network access, app types and their labels, the non-production presets, every field's character rule, the placeholder pattern and the resolved remediation sentence reach every page in the `#vocabulary` JSON that `_vocabulary.html` writes. Read them from `vocabulary`; never type one into a script or template. A new list goes into `client_vocabulary()` in `app/vocabulary.py`.
 - `scope_text` is request-only: it is in PUT bodies and never in responses.
 - Every undo and redo ends in a full page reload (`restoreHistory`).

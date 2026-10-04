@@ -743,30 +743,63 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     return removed_references
 
 
-def setup_issues(report: Report) -> list[str]:
-    """Return the missing engagement details that block Findings entry."""
-    engagement = report.engagement
-    issues = []
-    if not engagement.app_name.strip():
-        issues.append("application name")
-    if not engagement.segment:
-        issues.append("segment")
-    if not engagement.report_type:
-        issues.append("report type")
-    if not engagement.tester.strip():
-        issues.append("tester")
-    if not engagement.tested_environments:
-        issues.append("selected environment")
+def setup_results(report: dict) -> list[dict]:
+    """Ordered Setup results for a report in the browser's shape. Twin: setupResults in rules.js."""
+    engagement = report.get("engagement") or {}
+    results: list[dict] = []
+
+    def issue(code: str, **context) -> None:
+        results.append({"kind": "issue", "code": code, **context})
+
+    if not (engagement.get("app_name") or "").strip():
+        issue("missing_app_name")
+    if not engagement.get("segment"):
+        issue("missing_segment")
+    if not engagement.get("report_type"):
+        issue("missing_report_type")
+    if not (engagement.get("tester") or "").strip():
+        issue("missing_tester")
+    environments = engagement.get("tested_environments") or []
+    if not environments:
+        issue("no_tested_environment")
     # The only home for the mutual-exclusion rule. Raising in validate_coverage or
     # resolve_tested_channels would demote the draft on load, where nothing can repair it; an issue
     # line bounces the tester to Setup, the one page holding both checkboxes.
-    covered_components = [channel for channel in COMPONENT_CHANNELS if channel in engagement.tested_channels]
+    covered_components = [channel for channel in COMPONENT_CHANNELS if channel in (engagement.get("tested_channels") or [])]
     if len(covered_components) > 1:
-        issues.append(f"only one of {' and '.join(CHANNEL_LABELS[channel] for channel in covered_components)} -- deselect the other")
+        issue("mobile_and_thick_client", app_types=covered_components)
+    windows = engagement.get("test_windows") or {}
+    for environment in environments:
+        test_window = windows.get(environment) or {}
+        if not test_window.get("start_date") or not test_window.get("end_date"):
+            issue("missing_test_dates", environment=environment)
+    return results
+
+
+SETUP_ISSUE_TEXT = {
+    "missing_app_name": "application name",
+    "missing_segment": "segment",
+    "missing_report_type": "report type",
+    "missing_tester": "tester",
+    "no_tested_environment": "selected environment",
+}
+
+
+def _setup_issue_text(result: dict) -> str:
+    if result["code"] == "mobile_and_thick_client":
+        return f"only one of {' and '.join(CHANNEL_LABELS[channel] for channel in result['app_types'])} -- deselect the other"
+    if result["code"] == "missing_test_dates":
+        return f"{result['environment'].replace('_', '-')} testing dates"
+    return SETUP_ISSUE_TEXT[result["code"]]
+
+
+def setup_issues(report: Report) -> list[str]:
+    """Return the missing engagement details that block Findings entry."""
+    engagement = report.engagement
+    results = setup_results({"engagement": engagement.model_dump(mode="json")})
+    issues = [_setup_issue_text(result) for result in results if "environment" not in result]
     for environment in engagement.tested_environments:
-        test_window = engagement.test_windows.get(environment)
-        if not test_window or not test_window.start_date or not test_window.end_date:
-            issues.append(f"{environment.replace('_', '-')} testing dates")
+        issues += [_setup_issue_text(result) for result in results if result.get("environment") == environment]
         if not any(target.environment == environment and target.value.strip() for target in report.scope_targets):
             issues.append(f"{environment.replace('_', '-')} scope target")
         # Named per component rather than counted: among ten rows a tally cannot say which one.

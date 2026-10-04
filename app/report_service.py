@@ -743,6 +743,31 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     return removed_references
 
 
+def scope_text_targets(report: dict) -> list[dict]:
+    """The targets scope_text names in tested environments and covered app types. Twin: scopeTargets in rules.js."""
+    engagement = report.get("engagement") or {}
+    scope_text = report.get("scope_text") or {}
+    covered = engagement.get("tested_channels") or []
+    targets = []
+    for environment in engagement.get("tested_environments") or []:
+        by_channel = scope_text.get(environment) or {}
+        for channel in (channel for channel in CHANNELS if channel in covered):
+            raw = by_channel.get(channel) if isinstance(by_channel, dict) else None
+            component_text = raw if isinstance(raw, str) else raw.get("component") if isinstance(raw, dict) else ""
+            description_text = raw.get("description") if isinstance(raw, dict) else ""
+            component_text = component_text if isinstance(component_text, str) else ""
+            description_text = description_text if isinstance(description_text, str) else ""
+            seen: set[str] = set()
+            # Paired by raw index before cleaning, as reconcile_targets does.
+            for value, description in zip_longest(component_text.split("\n"), description_text.split("\n"), fillvalue=""):
+                value, description = value.strip(), description.strip()
+                if not value or value.startswith("#") or value in seen:
+                    continue
+                seen.add(value)
+                targets.append({"environment": environment, "app_type": channel, "component": value, "description": description})
+    return targets
+
+
 def setup_results(report: dict) -> list[dict]:
     """Ordered Setup results for a report in the browser's shape. Twin: setupResults in rules.js."""
     engagement = report.get("engagement") or {}
@@ -769,10 +794,18 @@ def setup_results(report: dict) -> list[dict]:
     if len(covered_components) > 1:
         issue("mobile_and_thick_client", app_types=covered_components)
     windows = engagement.get("test_windows") or {}
+    targets = scope_text_targets(report)
     for environment in environments:
         test_window = windows.get(environment) or {}
         if not test_window.get("start_date") or not test_window.get("end_date"):
             issue("missing_test_dates", environment=environment)
+        named = [target for target in targets if target["environment"] == environment]
+        if not named:
+            issue("missing_scope_target", environment=environment)
+        # Named per component rather than counted: among ten rows a tally cannot say which one.
+        for target in named:
+            if target["app_type"] in COMPONENT_CHANNELS and not target["description"]:
+                issue("missing_component_description", environment=environment, app_type=target["app_type"], component=target["component"])
     return results
 
 
@@ -786,27 +819,23 @@ SETUP_ISSUE_TEXT = {
 
 
 def _setup_issue_text(result: dict) -> str:
+    environment = result.get("environment", "").replace("_", "-")
     if result["code"] == "mobile_and_thick_client":
         return f"only one of {' and '.join(CHANNEL_LABELS[channel] for channel in result['app_types'])} -- deselect the other"
     if result["code"] == "missing_test_dates":
-        return f"{result['environment'].replace('_', '-')} testing dates"
+        return f"{environment} testing dates"
+    if result["code"] == "missing_scope_target":
+        return f"{environment} scope target"
+    if result["code"] == "missing_component_description":
+        return f"{environment} {CHANNEL_LABELS[result['app_type']]} description for \"{result['component']}\""
     return SETUP_ISSUE_TEXT[result["code"]]
 
 
 def setup_issues(report: Report) -> list[str]:
     """Return the missing engagement details that block Findings entry."""
     engagement = report.engagement
-    results = setup_results({"engagement": engagement.model_dump(mode="json")})
-    issues = [_setup_issue_text(result) for result in results if "environment" not in result]
-    for environment in engagement.tested_environments:
-        issues += [_setup_issue_text(result) for result in results if result.get("environment") == environment]
-        if not any(target.environment == environment and target.value.strip() for target in report.scope_targets):
-            issues.append(f"{environment.replace('_', '-')} scope target")
-        # Named per component rather than counted: among ten rows a tally cannot say which one.
-        for target in report.scope_targets:
-            if target.environment == environment and target.channel in COMPONENT_CHANNELS and target.value.strip() and not target.description.strip():
-                issues.append(f"{environment.replace('_', '-')} {CHANNEL_LABELS[target.channel]} description for \"{target.value.strip()}\"")
-    return [*issues, *setup_input_issues(engagement)]
+    results = setup_results({"engagement": engagement.model_dump(mode="json"), "scope_text": scope_text_from_targets(report.scope_targets)})
+    return [*(_setup_issue_text(result) for result in results), *setup_input_issues(engagement)]
 
 
 def setup_is_complete(report: Report) -> bool:

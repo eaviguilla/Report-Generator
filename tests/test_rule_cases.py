@@ -51,6 +51,22 @@ def undated(environment: str, **window) -> dict:
     return windows
 
 
+def scoped(boxes: dict[tuple[str, str], object], **engagement) -> dict:
+    """A report whose scope boxes, keyed by (environment, app type), hold the given text."""
+    report = setup_report(**engagement)
+    for (environment, channel), value in boxes.items():
+        report["scope_text"][environment][channel] = value
+    return report
+
+
+def components(component: str, description: str) -> dict:
+    return {"component": component, "description": description}
+
+
+def undescribed(environment: str, channel: str, component: str) -> dict:
+    return issue("missing_component_description", environment=environment, app_type=channel, component=component)
+
+
 SETUP_CASES = [
     ("complete", setup_report(), []),
     ("missing app name", setup_report(app_name=""), [issue("missing_app_name")]),
@@ -73,13 +89,74 @@ SETUP_CASES = [
         [
             issue("missing_app_name"), issue("missing_segment"), issue("missing_report_type"), issue("missing_tester"),
             issue("mobile_and_thick_client", app_types=["mobile", "thick_client"]),
-            issue("missing_test_dates", environment="production"), issue("missing_test_dates", environment="non_production"),
+            issue("missing_test_dates", environment="production"), issue("missing_scope_target", environment="production"),
+            issue("missing_test_dates", environment="non_production"), issue("missing_scope_target", environment="non_production"),
         ],
     ),
     (
         "no environment comes before the app types",
         setup_report(tester="", tested_environments=[], tested_channels=["mobile", "thick_client"]),
         [issue("missing_tester"), issue("no_tested_environment"), issue("mobile_and_thick_client", app_types=["mobile", "thick_client"])],
+    ),
+    ("no scope target", scoped({("production", "web"): ""}), [issue("missing_scope_target", environment="production")]),
+    ("whitespace-only scope target", scoped({("non_production", "web"): " \t "}), [issue("missing_scope_target", environment="non_production")]),
+    ("only blank and # scope lines", scoped({("production", "web"): "\n# staging later\n   \n"}), [issue("missing_scope_target", environment="production")]),
+    ("a # line among targets", scoped({("production", "web"): "# old\nhttps://app.example.test"}), []),
+    (
+        "scope text under an app type not covered",
+        scoped({("production", "web"): "", ("production", "api"): "https://api.example.test"}),
+        [issue("missing_scope_target", environment="production")],
+    ),
+    (
+        "an untested environment's scope text is ignored",
+        scoped({("non_production", "web"): "", ("non_production", "thick_client"): components("Acme.exe", "")}, tested_environments=["production"], tested_channels=["web", "thick_client"]),
+        [],
+    ),
+    (
+        "a component with no description",
+        scoped({("production", "thick_client"): components("Acme.exe", "")}, tested_channels=["web", "thick_client"]),
+        [undescribed("production", "thick_client", "Acme.exe")],
+    ),
+    (
+        "a whitespace-only description",
+        scoped({("production", "mobile"): components(" Acme.apk ", " \t ")}, tested_channels=["web", "mobile"]),
+        [undescribed("production", "mobile", "Acme.apk")],
+    ),
+    (
+        "several components, one without a description",
+        scoped({("production", "thick_client"): components("Acme.exe\nUpdater.exe\nAgent.exe", "Main client\n\nBackground agent")}, tested_channels=["web", "thick_client"]),
+        [undescribed("production", "thick_client", "Updater.exe")],
+    ),
+    (
+        "a # component line keeps the description below it in place",
+        scoped({("production", "thick_client"): components("# retired\nAcme.exe", "\nMain client")}, tested_environments=["production"], tested_channels=["thick_client"]),
+        [],
+    ),
+    (
+        "a blank component line mid-box does not pass its description on",
+        scoped({("production", "thick_client"): components("Acme.exe\n\n# retired\nUpdater.exe", "Main client\nstray\nold")}, tested_environments=["production"], tested_channels=["thick_client"]),
+        [undescribed("production", "thick_client", "Updater.exe")],
+    ),
+    (
+        "a description against a blank component names no target",
+        scoped({("production", "thick_client"): components("", "Main client")}, tested_environments=["production"], tested_channels=["thick_client"]),
+        [issue("missing_scope_target", environment="production")],
+    ),
+    (
+        "descriptions follow the app type order",
+        scoped({("production", "thick_client"): components("Acme.exe", ""), ("production", "mobile"): components("Acme.apk", "")}, tested_environments=["production"], tested_channels=["thick_client", "mobile"]),
+        [issue("mobile_and_thick_client", app_types=["mobile", "thick_client"]), undescribed("production", "mobile", "Acme.apk"), undescribed("production", "thick_client", "Acme.exe")],
+    ),
+    (
+        "each environment's dates, scope target and descriptions together",
+        scoped(
+            {("production", "thick_client"): components("Acme.exe", ""), ("non_production", "web"): ""},
+            tested_channels=["web", "thick_client"], test_windows={},
+        ),
+        [
+            issue("missing_test_dates", environment="production"), undescribed("production", "thick_client", "Acme.exe"),
+            issue("missing_test_dates", environment="non_production"), issue("missing_scope_target", environment="non_production"),
+        ],
     ),
 ]
 

@@ -1545,7 +1545,9 @@
       if (!Number.isInteger(maximum)) return;
       const messageController = setupMessageControllers.get(control);
       if (!messageController) return;
+      const existingValue = control.value;
       control.maxLength = maximum;
+      if (existingValue.length > maximum) control.value = existingValue;
       messageController.element.setAttribute("role", "status");
       messageController.element.setAttribute("aria-live", "polite");
       let skipPasteInput = false;

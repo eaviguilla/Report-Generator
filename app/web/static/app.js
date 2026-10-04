@@ -622,13 +622,12 @@
     const results = window.vrRules.setupResults(report, vocabulary);
     const missing = results.filter(result => result.code in SETUP_DETAIL_TEXT).map(result => SETUP_DETAIL_TEXT[result.code]);
     if (results.some(result => result.code === "missing_test_dates")) missing.push("testing dates");
-    ["production", "non_production"].forEach(environment => {
-      const panel = root.querySelector(`#scope-grid .scope-panel.${environment}`);
-      if (panel && ![...panel.querySelectorAll('[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) missing.push(`${environment.replace("_", "-")} scope target`);
-    });
+    const scopeless = results.filter(result => result.code === "missing_scope_target").map(result => result.environment);
+    ["production", "non_production"].filter(environment => scopeless.includes(environment))
+      .forEach(environment => missing.push(`${environment.replace("_", "-")} scope target`));
     const exclusion = results.find(result => result.code === "mobile_and_thick_client");
     if (exclusion) missing.push(componentExclusionIssue(exclusion));
-    missing.push(...missingDescriptionIssues());
+    missing.push(...results.filter(result => result.code === "missing_component_description").map(componentDescriptionIssue));
     const invalidMessages = [...new Set(
       [...root.querySelectorAll("[data-setup-validated]")]
         .filter(input => !input.validity.valid)
@@ -656,9 +655,7 @@
       return section.querySelector("textarea")?.value.trim() ? "set" : "empty";
     }
     if (section.querySelector("#scope-grid")) {
-      const targets = [...section.querySelectorAll('#scope-grid [data-scope-field="component"]')]
-        .flatMap(input => input.value.split("\n"))
-        .filter(line => line.trim() && !line.trimStart().startsWith("#")).length;
+      const targets = window.vrRules.scopeTargets(report, vocabulary).length;
       return `${targets} target${targets === 1 ? "" : "s"}`;
     }
     const fields = [...section.querySelectorAll(".fields input, .fields select")];
@@ -1223,25 +1220,7 @@
   // server's page gate describe the same report differently.
   const SETUP_DETAIL_TEXT = {missing_app_name:"application name", missing_segment:"segment", missing_report_type:"report type", missing_tester:"tester", no_tested_environment:"selected environment"};
   const componentExclusionIssue = result => `only one of ${result.app_types.map(channel => channelLabels[channel]).join(" and ")} -- deselect the other`;
-  // Twin of the required-description line in report_service.setup_issues, pairing by raw index with
-  // the same clean rules as reconcile_targets so a commented component line cannot shift the rest.
-  const missingDescriptionIssues = () => {
-    const issues = [];
-    (report.engagement.tested_environments || []).forEach(environment => {
-      COMPONENT_CHANNELS.filter(channel => report.engagement.tested_channels.includes(channel)).forEach(channel => {
-        const descriptions = scopeTextField(environment, channel, "description").split(/\r?\n/);
-        const seen = new Set();
-        scopeTextField(environment, channel, "component").split(/\r?\n/).forEach((raw, index) => {
-          const value = raw.trim();
-          // A repeat is refused by the server with its own message, so it is not reported twice here.
-          if (!value || value.startsWith("#") || seen.has(value)) return;
-          seen.add(value);
-          if (!(descriptions[index] || "").trim()) issues.push(`${environment.replace("_", "-")} ${channelLabels[channel]} description for "${value}"`);
-        });
-      });
-    });
-    return issues;
-  };
+  const componentDescriptionIssue = result => `${result.environment.replace("_", "-")} ${channelLabels[result.app_type]} description for "${result.component}"`;
   // Twin of report_service.affected_channels; keep both in step.
   const affectedChannels = finding => {
     const scope = finding.scope;
@@ -2052,7 +2031,7 @@
       // Any named component anywhere satisfies "define a scope target", so the marking clears across
       // the whole grid rather than just the box being typed into.
       const clearScopeErrors = () => {
-        if ([...root.querySelectorAll('#scope-grid [data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#")))) {
+        if (window.vrRules.scopeTargets(report, vocabulary).length) {
           root.querySelectorAll("#scope-grid .validation-error").forEach(input => input.classList.remove("validation-error"));
         }
       };
@@ -2197,7 +2176,7 @@
           group.className = "scope-channel";
           // The two boxes of a component channel are read as a pair, by index, so the grouping
           // element is what lets a validator find a component's own description.
-          if (isComponentChannel(channel)) group.dataset.componentChannel = "true";
+          if (isComponentChannel(channel)) group.dataset.componentChannel = channel;
           if (isComponentChannel(channel)) {
             const heading = document.createElement("h3");
             heading.textContent = channelLabels[channel];
@@ -2759,11 +2738,12 @@
         .flatMap(panel => [...panel.querySelectorAll('input[type="date"]')]);
       const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => input && !input.value.trim());
       const missingEnvironment = flagged("no_tested_environment");
-      const missingScopePanels = [...root.querySelectorAll("#scope-grid .scope-panel")].filter(panel => ![...panel.querySelectorAll('[data-scope-field="component"]')].some(input => input.value.split("\n").some(value => value.trim() && !value.trimStart().startsWith("#"))));
-      // A description-only entry would pass an unnarrowed count here and 422 on the server instead.
-      const blankDescriptions = missingDescriptionIssues();
+      const missingScopePanels = results.filter(result => result.code === "missing_scope_target")
+        .map(result => root.querySelector(`#scope-grid .scope-panel.${result.environment}`))
+        .filter(Boolean);
+      const blankDescriptions = results.filter(result => result.code === "missing_component_description");
       const exclusion = flagged("mobile_and_thick_client");
-      if (results.length || missingScopePanels.length || blankDescriptions.length) {
+      if (results.length) {
         if (reveal) {
           const setupNotice = document.querySelector("#setup-validation-note");
           if (setupNotice) setupNotice.dataset.validationAttempted = "true";
@@ -2771,15 +2751,11 @@
           // Mark the box the tester has to type into: the component when none is named, the
           // description when one is named without it.
           missingScopePanels.forEach(panel => panel.querySelectorAll('[data-scope-field="component"]').forEach(input => input.classList.add("validation-error")));
-          const blankDescriptionBoxes = blankDescriptions.length
-            ? [...root.querySelectorAll('#scope-grid .scope-channel[data-component-channel] [data-scope-field="description"]')].filter(input => {
-                // Row-aware, like missingDescriptionIssues: only a row that names a component owes one.
-                const named = input.closest("tr")?.querySelector('[data-scope-field="component"]')?.value.trim();
-                return named === undefined
-                  ? input.value.split("\n").some(line => !line.trim()) || !input.value.trim()
-                  : Boolean(named) && !named.startsWith("#") && !input.value.trim();
-              })
-            : [];
+          const blankDescriptionBoxes = blankDescriptions.map(({environment, app_type, component}) =>
+            [...root.querySelectorAll(`#scope-grid .scope-panel.${environment} .scope-channel[data-component-channel="${app_type}"] tbody tr`)]
+              .find(row => row.querySelector('[data-scope-field="component"]')?.value.trim() === component)
+              ?.querySelector('[data-scope-field="description"]')
+          ).filter(Boolean);
           blankDescriptionBoxes.forEach(input => input.classList.add("validation-error"));
           const firstIncomplete = incompleteSetup[0] || missingScopePanels[0]?.querySelector('[data-scope-field="component"]') || blankDescriptionBoxes[0];
           firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});

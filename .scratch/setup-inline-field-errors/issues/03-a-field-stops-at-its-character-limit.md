@@ -20,7 +20,7 @@ The note:
 - [ ] A value already over its limit, from an old draft or an import, keeps its message, can still be shortened, and gets no note.
 - [ ] The server keeps its length refusal for changed values, because Undo, local draft recovery and other pages can still send one.
 - [ ] Check how Chromium counts a line break against a textarea's `maxlength`. The server counts one. If Chromium counts two, Limitations stops early, which is safe; record which in `docs/DATA_MAP.md`.
-- [ ] Check that a paste cut by `maxlength` never leaves half an emoji, which the server would refuse as a hidden character. If Chromium can leave one, cut the paste in a `paste` handler instead.
+- [x] Check that a paste cut by `maxlength` never leaves half an emoji, which the server would refuse as a hidden character. If Chromium can leave one, cut the paste in a `paste` handler instead.
 - [ ] Browser tests: typing stops at the limit and the note shows; a paste longer than the room left is cut and the note says so; a Web/API line and a component name go past their limits and show the message; a stored value over its limit shows the message and can be shortened. In headless Chromium, a synthetic `ClipboardEvent("paste")` followed by `document.execCommand("insertText")` drives a paste; the prototype was checked that way.
 - [ ] `docs/DATA_MAP.md` §12, the "a Setup field is at most its length" row: replace "No input carries `maxlength`" with the new behaviour.
 - [ ] `docs/plans/setup-field-validation.md`, "What deviated": add a dated line under the "No HTML `maxlength`" bullet that points here.
@@ -28,3 +28,7 @@ The note:
 ## Next steps
 
 1. `/implement`: Small and decided. Build it once ticket 02 is done.
+
+## Comments
+
+2026-10-05: In headless Chromium, synthetic paste plus `document.execCommand("insertText")` never left an unpaired surrogate. With one UTF-16 unit available, `😀` was rejected; mixed pastes cut at code-point boundaries (`A😀` at max 2 became `A`, `A😀B` at max 3 became `A😀`). No custom paste handler is needed.

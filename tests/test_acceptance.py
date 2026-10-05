@@ -69,6 +69,13 @@ class CheckTests(unittest.TestCase):
         self.assertIsInstance(raised.exception, ValueError)
         self.assertEqual([target.value for target in acceptance.check(stored, readable).scope_targets], [PRODUCTION_SITE])
 
+    def test_an_overlength_scope_line_is_refused_at_acceptance(self) -> None:
+        submitted = submission(stored_report())
+        submitted["scope_text"] = {"production": {"web": "x" * 501}}
+
+        with self.assertRaisesRegex(acceptance.InvalidScope, "500"):
+            acceptance.check(stored_report(), submitted)
+
     def test_a_scope_change_that_leaves_a_finding_without_a_location_names_the_finding(self) -> None:
         finding = Vulnerability(uid="v_scoped", title="Scoped finding", scope=Scope(target_ids=["tgt_prod"]))
         stored = stored_report([production_target()], [finding])

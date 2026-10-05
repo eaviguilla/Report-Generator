@@ -81,6 +81,7 @@ The research already settled the field policies and numeric limits. Do not reope
 Step 8 stays unticked only for its Windows check: the Word output code and its tests landed, but a report with every field at its limit has not been generated with Word yet. The rest went as agreed, with these differences.
 
 - **No HTML `maxlength`.** It cuts a pasted value short without saying so, which breaks "never truncate". Each field shows its length message and holds the save instead, and Add is disabled at 50 test accounts.
+  - 2026-10-05: Ticket [03](../../.scratch/setup-inline-field-errors/issues/03-a-field-stops-at-its-character-limit.md) reverses this for eligible Setup inputs: `maxlength` stops typing, cuts pastes with a note, and leaves Web/API lines and component names uncapped.
 - **The browser's Setup save still holds any field showing an error, an imported one included.** Only the server refuses changed values alone. On Setup the tester is already on the page that fixes the value.
 - **Step 6 needed no new browser code.** Because the server refuses only changed values, an untouched Setup value can no longer fail a save from Findings or Content. Undo and local draft recovery are the remaining ways, as before. Step 6 added only the test that a stale save is a 409 even when it also breaks a Setup rule.
 - **An editable DOCX import with a bad Setup value now imports.** It used to be refused; under answer Q4 the value becomes a Setup issue. A bad finding field still refuses the import.

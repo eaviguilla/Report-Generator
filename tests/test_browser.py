@@ -3388,6 +3388,12 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         page.wait_for_url(f"**/reports/{report_id}/edit", timeout=10_000)
         expect(page.locator("#editor-notifications")).to_contain_text(message)
+        tickets = page.get_by_label("Severity Review Tickets")
+        expect(tickets).to_have_value("TKT 1")
+        self.assertEqual(tickets.evaluate("input => input.validationMessage"), message)
+        expect(page.locator(f'[data-fragment-id="{finding.uid}:severity_review_tickets"]')).to_have_class(MARKED)
+        expect(tickets).to_be_in_viewport()
+        expect(tickets).not_to_be_focused()
         self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].severity_review_tickets, "12345")
 
     def test_restore_on_findings_of_a_copy_written_on_setup_opens_setup_with_it(self) -> None:
@@ -3456,6 +3462,65 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         expect(rows).to_have_count(added - 1)
         expect(accounts).to_be_in_viewport()
+
+    def test_undo_on_content_shows_the_steps_finding_and_marks_its_fragment(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        later = Vulnerability(
+            uid="v_later", title="Zebra finding", likelihood="low", impact="low", severity="low",
+            status="open_new", scope={"mode": "custom", "target_ids": ["tgt_browser"]},
+        )
+        main.provision(later)
+        report.vulnerabilities.append(later)
+        main.sync_evidence_image_slots(later, report)
+        main.workspace.save(report)
+        description = next(content for content in later.contents if content.type == "description").fragments[0]
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        # Content opens on the first finding by severity and title, which is not this one.
+        expect(page.locator(".finding-nav.active")).to_contain_text("Browser finding")
+        page.locator(".finding-nav", has_text="Zebra finding").click()
+        card = page.locator(f'[data-fragment-id="{description.frag_id}"]')
+        text = card.get_by_role("textbox")
+        text.fill("Undo this description")
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+
+        expect(page.locator(".finding-nav.active")).to_contain_text("Zebra finding")
+        expect(text).to_have_text("")
+        expect(card).to_have_class(MARKED)
+        expect(card).to_be_in_viewport()
+        expect(text).not_to_be_focused()
+        page.locator(".finding-header").click()
+        expect(card).not_to_have_class(MARKED)
+
+    def test_redo_of_a_deleted_fragment_lands_on_its_section(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        # Short enough that Proof of Concept starts below the fold.
+        page.set_viewport_size({"width": 1280, "height": 400})
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        proof = page.locator('.content-block[data-content-type="proof_of_concept"]')
+        proof.get_by_label("Add fragment to Proof of Concept").select_option("note")
+        note = proof.locator("[data-fragment-id]", has=page.locator(".tag", has_text=re.compile(r"^note$")))
+        note_id = note.get_attribute("data-fragment-id")
+        note.get_by_role("button", name="Delete fragment").click()
+        expect(note).to_have_count(0)
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+
+        restored = page.locator(f'[data-fragment-id="{note_id}"]')
+        expect(restored).to_have_class(MARKED)
+        page.evaluate("() => { window.scrollTo(0, 0); document.querySelector('#finding-editor').scrollTop = 0; }")
+        expect(proof).not_to_be_in_viewport()
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Redo last change").click()
+
+        expect(restored).to_have_count(0)
+        expect(proof).to_be_in_viewport()
 
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()

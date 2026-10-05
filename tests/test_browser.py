@@ -654,6 +654,36 @@ class BrowserWorkflowTests(unittest.TestCase):
         tester.evaluate("element => element.blur()")
         expect(note).to_be_hidden()
 
+    def test_generated_setup_fields_use_vocabulary_character_limits(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+
+        page.get_by_label("Test Mobile").check()
+        page.get_by_label("Non-Production", exact=True).check()
+        page.get_by_label("Non-Production name", exact=True).select_option("OTHERS")
+
+        fields = [
+            (page.get_by_label("User role 1", exact=True), vocabulary["character_rules"]["user_role"]["max_length"]),
+            (page.get_by_label("Username 1", exact=True), vocabulary["character_rules"]["username"]["max_length"]),
+            (page.get_by_label("Production time", exact=True), vocabulary["character_rules"]["test_time"]["max_length"]),
+            (page.get_by_label("Mobile Description", exact=True).first, vocabulary["scope_limits"]["description"]),
+        ]
+        for field, maximum in fields:
+            with self.subTest(label=field.get_attribute("aria-label")):
+                self.assertEqual(field.get_attribute("maxlength"), str(maximum))
+
+        component = page.get_by_label("Mobile Component", exact=True).first
+        self.assertIsNone(component.get_attribute("maxlength"))
+
+        custom_name = page.get_by_label("Non-Production name, typed", exact=True)
+        self.assertEqual(custom_name.get_attribute("maxlength"), "40")
+        custom_name.fill("N" * 40)
+        custom_name.press("x")
+        note_id = custom_name.get_attribute("aria-describedby")
+        self.assertTrue(note_id)
+        expect(page.locator(f"#{note_id}")).to_have_text("Non-Production name, typed holds up to 40 characters.")
+
     def test_setup_character_limit_cuts_a_paste_and_announces_the_cut(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
@@ -1091,6 +1121,46 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(page.locator("#setup-validation-note")).to_have_text(
             "1 thing to fix before Findings. It is marked above, and the cursor is on it."
         )
+
+    def test_web_lines_and_component_names_keep_their_scope_length_refusals(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        limits = vocabulary["scope_limits"]
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["web", "mobile"]
+        report.scope_targets = []
+        main.workspace.save(report)
+        report_data = report.model_dump(mode="json", by_alias=True)
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+
+        web_line = "x" * (limits["line"] + 1)
+        web_data = {**report_data, "scope_text": {"production": {"web": web_line}}}
+        [web_refusal] = scope_text_refusals(web_data)
+        web_message = format_rule_message(web_refusal, web_data)
+        web_box = page.get_by_role("textbox", name="Web", exact=True).first
+        self.assertIsNone(web_box.get_attribute("maxlength"))
+        web_box.fill(web_line)
+        web_box.evaluate("element => element.blur()")
+        web_message_id = web_box.get_attribute("aria-describedby")
+        self.assertTrue(web_message_id)
+        expect(page.locator(f"#{web_message_id}")).to_have_text(web_message)
+
+        component_name = "C" * (limits["component"] + 1)
+        component_data = {
+            **report_data,
+            "scope_text": {"production": {"mobile": {"component": component_name, "description": ""}}},
+        }
+        [component_refusal] = [result for result in scope_text_refusals(component_data) if result.get("box") == "component"]
+        component_message = format_rule_message(component_refusal, component_data).removeprefix("In the Production Mobile scope, ")
+        component_box = page.get_by_role("textbox", name="Mobile Component", exact=True).first
+        self.assertIsNone(component_box.get_attribute("maxlength"))
+        component_box.fill(component_name)
+        component_box.evaluate("element => element.blur()")
+        component_message_id = component_box.get_attribute("aria-describedby")
+        self.assertTrue(component_message_id)
+        expect(page.locator(f"#{component_message_id}")).to_have_text(component_message)
 
     def test_setup_next_does_not_open_the_native_validity_bubble(self) -> None:
         page = self.page

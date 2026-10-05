@@ -1851,6 +1851,8 @@
           accountMessageControllers.set(index, controller);
           wireSetupRule(roleInput, setupRules.userRole, `User role ${index + 1}`, "refusal:user_role");
           wireSetupRule(usernameInput, setupRules.username, `Username ${index + 1}`, "refusal:username");
+          attachSetupCharacterLimit(roleInput, vocabulary.character_rules.user_role.max_length, `User role ${index + 1}`);
+          attachSetupCharacterLimit(usernameInput, vocabulary.character_rules.username.max_length, `Username ${index + 1}`);
         });
         const add = document.querySelector("#add-test-account");
         add.disabled = report.engagement.test_accounts.length >= vocabulary.max_test_accounts;
@@ -2183,6 +2185,7 @@
         if (customName) {
           attachSimpleSetupMessage(customName);
           wireSetupRule(customName, setupRules.non_production_label);
+          attachSetupCharacterLimit(customName, customName.maxLength, customName.getAttribute("aria-label"));
           // No renderCoverage here: it rebuilds this input and would take the caret mid-word.
           customName.oninput = () => {
             report.engagement.non_production_label = customName.value.trim();
@@ -2227,6 +2230,7 @@
         endDate.oninput = () => { testWindow.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
         timeInput.oninput = () => { testWindow.test_time = timeInput.value; scheduleSave(); };
         wireSetupRule(timeInput, setupRules.time(environment), `${label} time`);
+          attachSetupCharacterLimit(timeInput, vocabulary.character_rules.test_time.max_length, `${label} time`);
         [startDate, endDate].forEach(input => { input.dataset.setupValidated = "true"; });
         let revealDateMessage = Boolean(startDate.value && endDate.value && startDate.value > endDate.value);
         const validateDateOrder = () => {
@@ -2396,6 +2400,8 @@
             componentMessageControllers.set(`${environment}:${channel}:${index}`, {controller, environment, channel, index, input:rowInputs[0]});
             body.append(row, messageRow);
             rowRules.forEach(({input, rule, label, messageKind}) => wireSetupRule(input, rule, label, messageKind));
+                      const descriptionInput = rowInputs[1];
+                      attachSetupCharacterLimit(descriptionInput, vocabulary.scope_limits.description, descriptionInput.getAttribute("aria-label"));
           }
         };
         const add = document.createElement("button");

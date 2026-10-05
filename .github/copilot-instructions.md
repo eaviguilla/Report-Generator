@@ -58,14 +58,10 @@ Specialist agents live in `.github/agents/`: `loremaster` (data layer questions)
 pipeline questions), `tactician` (plans a change before code), `invader` (stress-tests new work).
 `.github/prompts/plan-change.prompt.md` runs them together over a handoff file in `docs/plans/`.
 
-Claude Code follows these same files. `CLAUDE.md` (committed) is the short Claude-only layer and points
-here. `.claude/rules/*.md` are generated copies of `.github/instructions/*.instructions.md`, with each
-`applyTo` glob turned into a `paths` entry: edit the instruction file, then run
-`py -3 scripts/sync_ai_rules.py` (`python3` on macOS). `tests/test_ai_rules_sync.py` fails when the two
-drift. Edit rules here only. Claude wrappers for `loremaster`, `scribe`, `tactician` and `invader` live in
-`.claude/agents/` (hand-maintained copies, not generated; edit both sides when one changes). Only
-`.github/prompts/plan-change.prompt.md`'s orchestration is not set up for Claude Code in this
-checkout.
+To change a rule, edit `.github/instructions/*.instructions.md`, then run `py -3 scripts/sync_ai_rules.py`
+(`python3` on macOS): `.claude/rules/*.md` are generated copies, and `tests/test_ai_rules_sync.py` fails
+when they drift. `.claude/agents/` holds hand-maintained copies of `.github/agents/`: a change to one side
+needs the same change on the other.
 
 # Talking to me
 
@@ -132,26 +128,7 @@ Leave out `--run` to see the selection without running it. Browser tests run in 
 So a new function needs its own tests, written with it and picked up automatically while you build,
 and then one `--affected` run. Do not run the full suite "to be safe": `--affected` is the safe run.
 A change to docs, comments or instructions alone needs nothing, and the script says so.
-
-## How --affected picks browser tests
-
-| Changed | Browser tests |
-|---|---|
-| `app.js` inside `setup()` | Setup and Findings page tests |
-| `app.js` inside `continuousEditor()` | Content page tests |
-| any other `app.js` code (twin rules, renderers) | every report-page test |
-| `save.js` (autosave, save conflicts, recovery copies, undo) | every report-page test |
-| `manager.js`, `home.html` | home page tests |
-| one page template | that page's tests |
-| CSS, `dialog.js`, `theme.js`, `diagnostics.js`, shared partials, server code in `app/*.py`, `tests/support.py` | every browser test |
-| `app/docx_*.py`, `resources/*.docx` | the import and generate browser tests |
-| `app/init.py`, `report_generator_burp.py`, `run.py` | none; every Python test module runs, and `tests.test_launcher` is the one that matters |
-| `.github/instructions/`, `.claude/rules/` | `tests.test_ai_rules_sync` only (the Claude rules are generated copies of the instructions) |
-| `docs/`, other `.github/` and `.claude/` files, `*.md` | none |
-
-Each browser test's pages are read from the URLs and buttons in its own code, so there are no tags to
-maintain; a test whose pages cannot be read runs for every page. If the script lists a path under
-"No rule for these", decide that one by hand.
+If the script lists a path under "No rule for these", decide that one by hand.
 
 ## Narrower by hand, while iterating
 
@@ -169,10 +146,8 @@ Tests patch out Word's own pass (`main.update_docx_bytes_with_word`), so every t
 macOS. The one check that needs real Word, `test_word_rebuilds_the_table_of_contents_on_generate`,
 skips itself off Windows.
 
-## Guardrails, and how tests are written
+## Writing tests
 
-Full-suite commands ask for approval before they run: in Claude Code through a local hook, and in
-VS Code through `.vscode/settings.json`, which auto-approves `relevant_tests.py` only without `--full`.
 How to write a test is in `.github/instructions/tests.instructions.md`.
 
 # Pushing changes

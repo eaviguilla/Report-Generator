@@ -40,7 +40,7 @@ output/
 /*.docx
 
 # python / macOS
-.venv/
+.venv
 __pycache__/
 *.pyc
 .DS_Store

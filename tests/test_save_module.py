@@ -400,6 +400,17 @@ class SaveModuleTests(unittest.TestCase):
         self.assertEqual(step["page"], "findings")
         self.assertNotIn("field", step)
 
+    def test_a_save_scheduled_with_nothing_changed_records_no_step(self) -> None:
+        report = report_json()
+        self.assertTrue(any(isinstance(value, list) for value in report["engagement"].values()), "the report holds no list to compare")
+        self.start(report)
+        self.edit("One change")
+
+        # As a Findings name box does when it loses focus after its edit was recorded.
+        self.page.evaluate("saveCode.scheduleSave()")
+
+        self.assertEqual(len(self.history()["undoHistory"]), 1)
+
     def test_undo_and_redo_hand_the_steps_field_to_the_page_they_open(self) -> None:
         saved = self.step_made_on("setup", "Typed on Setup", in_field=True)
         self.page.goto(page_url("findings"))

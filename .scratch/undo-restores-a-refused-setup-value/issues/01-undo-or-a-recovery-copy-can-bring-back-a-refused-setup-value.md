@@ -49,4 +49,4 @@ Left out:
 
 ## Next steps
 
-1. `/implement`: Build [ticket 04](../../undo-and-restore-go-to-the-change/issues/04-findings-scrolls-to-the-changed-field-and-marks-it.md). Tickets 01 to 03 are done: Undo, Redo and Restore open the page where the change was made, and Setup and Content point at the field. The four tickets in `.scratch/undo-and-restore-go-to-the-change/issues/` carry the work.
+1. `/code-review`: All four tickets in `.scratch/undo-and-restore-go-to-the-change/issues/` are done. Undo, Redo and Restore open the page where the change was made, and Setup, Findings and Content point at the field. Check the four commits against the Answers above, then set this issue done.

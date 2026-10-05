@@ -3463,8 +3463,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(rows).to_have_count(added - 1)
         expect(accounts).to_be_in_viewport()
 
-    def test_undo_on_content_shows_the_steps_finding_and_marks_its_fragment(self) -> None:
-        report_id = self.ready_report(include_finding=True)
+    def _add_zebra_finding(self, report_id: str) -> Vulnerability:
+        """A second complete finding, after the seeded one on Findings and on Content."""
         report = main.workspace.load(report_id)
         later = Vulnerability(
             uid="v_later", title="Zebra finding", likelihood="low", impact="low", severity="low",
@@ -3474,6 +3474,11 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.vulnerabilities.append(later)
         main.sync_evidence_image_slots(later, report)
         main.workspace.save(report)
+        return later
+
+    def test_undo_on_content_shows_the_steps_finding_and_marks_its_fragment(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        later = self._add_zebra_finding(report_id)
         description = next(content for content in later.contents if content.type == "description").fragments[0]
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -3521,6 +3526,82 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         expect(restored).to_have_count(0)
         expect(proof).to_be_in_viewport()
+
+    def test_undo_on_content_of_a_findings_step_unfolds_and_marks_its_field(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        self._add_zebra_finding(report_id)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        locations = page.locator("#findings > tr.finding-location-row")
+        # Only the first finding's locations start unfolded.
+        expect(locations.nth(1)).to_be_hidden()
+        rows.nth(1).locator(".finding-fold-toggle").click()
+        value = locations.nth(1).get_by_label("Location value for https://prod.example.test")
+        value.fill("https://prod.example.test/zebra")
+        page.get_by_role("button", name="Next: Content").click()
+        page.wait_for_url("**/edit", timeout=10_000)
+
+        page.get_by_role("button", name="Undo last change").click()
+
+        page.wait_for_url(f"**/reports/{report_id}/findings", timeout=10_000)
+        expect(value).to_have_value("https://prod.example.test")
+        expect(value).to_have_class(MARKED)
+        expect(value).to_be_in_viewport()
+        expect(value).not_to_be_focused()
+        page.locator(".section-title h1").click()
+        expect(value).not_to_have_class(MARKED)
+
+    def test_undo_on_findings_reloads_and_marks_the_field(self) -> None:
+        cases = [
+            # A select the row keeps, and a location box whose change rebuilds the table before its step is recorded.
+            ("Likelihood", lambda row: row.get_by_label("Likelihood"), lambda field: field.select_option("high"), lambda field: expect(field).to_have_value("low")),
+            ("location", lambda row: row.locator("xpath=following-sibling::tr[1]").get_by_label("Select https://prod.example.test"), lambda field: field.uncheck(), lambda field: expect(field).to_be_checked()),
+            # A Vuln ID shows as a button once typed, so the button carries the mark.
+            ("Vuln ID", lambda row: row.get_by_role("button", name="Edit vulnerability ID"), lambda field: (field.click(), field.page.keyboard.type("123")), lambda field: expect(field).to_have_text("\u2014")),
+            ("Select all", lambda row: row.locator("xpath=following-sibling::tr[1]").get_by_role("button", name="Select all"), lambda field: field.click(), lambda field: expect(field).to_have_text("Select all")),
+        ]
+        for name, find, change, undone in cases:
+            with self.subTest(name):
+                report_id = self.ready_report(include_finding=True)
+                report = main.workspace.load(report_id)
+                # A second production target, so the locations offer Select all.
+                report.scope_targets.append(ScopeTarget(target_id="tgt_second", environment="production", channel="web", value="https://prod2.example.test"))
+                main.workspace.save(report)
+                page = self.context.new_page()
+                page.goto(f"{self.base_url}/reports/{report_id}/findings")
+                field = find(page.locator("#findings > tr:not(.finding-location-row)").first)
+                # A tester's click focuses the box; select_option alone does not.
+                field.focus()
+                change(field)
+
+                with page.expect_navigation():
+                    page.get_by_role("button", name="Undo last change").click()
+
+                undone(field)
+                expect(field).to_have_class(MARKED)
+                expect(field).not_to_be_focused()
+
+    def test_undo_of_an_added_finding_lands_on_the_list(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        self._add_zebra_finding(report_id)
+        page = self.page
+        # Short enough that the page scrolls past the list's heading.
+        page.set_viewport_size({"width": 1280, "height": 400})
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        heading = page.locator(".section-title h1")
+        page.get_by_role("button", name="Add finding").click()
+        expect(rows).to_have_count(3)
+        expect(rows.nth(2).locator(".finding-title-cell input")).to_be_focused()
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        expect(heading).not_to_be_in_viewport()
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+
+        expect(rows).to_have_count(2)
+        expect(heading).to_be_in_viewport()
 
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()

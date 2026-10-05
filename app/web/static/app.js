@@ -193,13 +193,8 @@
       row: componentRow ? [...componentRow.parentElement.querySelectorAll(".scope-component-row")].indexOf(componentRow) : null,
     };
   };
-  // Marked as Go to marks, and scrolled to; the cursor stays out, so Ctrl+Z still reaches the app.
-  const pointAtSetupField = name => {
-    const section = [...root.querySelectorAll(":scope > section")].find(candidate => headingText(candidate) === name.section);
-    const wanted = JSON.stringify(name);
-    const field = section && [...section.querySelectorAll("input, select, textarea")].find(control => JSON.stringify(setupFieldName(control)) === wanted);
-    (field || section)?.scrollIntoView({block: field ? "center" : "start"});
-    if (!field) return;
+  // Marked as Go to marks; the cursor stays out, so Ctrl+Z still reaches the app.
+  const markUntilClickElsewhere = field => {
     field.classList.add("is-review-target");
     const letGo = event => {
       if (event.target.closest(".is-review-target")) return;
@@ -207,6 +202,27 @@
       document.removeEventListener("click", letGo);
     };
     document.addEventListener("click", letGo);
+  };
+  const pointAtSetupField = name => {
+    const section = [...root.querySelectorAll(":scope > section")].find(candidate => headingText(candidate) === name.section);
+    const wanted = JSON.stringify(name);
+    const field = section && [...section.querySelectorAll("input, select, textarea")].find(control => JSON.stringify(setupFieldName(control)) === wanted);
+    (field || section)?.scrollIntoView({block: field ? "center" : "start"});
+    if (field) markUntilClickElsewhere(field);
+  };
+  const findingsFieldName = element => {
+    const row = element?.closest?.("#findings > tr");
+    if (!row?.dataset.finding) return null;
+    const finding = row.dataset.finding;
+    const control = element.matches("input, select, textarea");
+    if (row.classList.contains("finding-location-row")) {
+      if (control) return {finding, label: element.getAttribute("aria-label")};
+      // Select all reads Deselect all once pressed, so it is named by its environment.
+      const group = element.closest("[data-location-group]")?.dataset.locationGroup;
+      if (group) return {finding, group};
+    }
+    // Delete and the other row buttons name the finding by its name's column.
+    return {finding, column: control ? element.closest("td").cellIndex : 0};
   };
   const contentFieldName = element => {
     const block = element?.closest?.("#finding-editor .finding-card [data-content-type]");
@@ -217,11 +233,14 @@
       fragment: element.closest("[data-fragment-id]")?.dataset.fragmentId || null,
     };
   };
-  // A pane rebuild drops the focused control before its step is recorded, so the step names what render() saw.
-  let contentFieldBeforeRender = null;
-  const nameField = page === "setup" ? setupFieldName
-    : page === "edit" ? element => contentFieldName(element) || contentFieldBeforeRender
-    : null;
+  const pageFieldName = {setup:setupFieldName, findings:findingsFieldName, edit:contentFieldName}[page];
+  // A rebuild drops the focused control before its step is recorded, so the step names what the rebuild saw.
+  let fieldBeforeRebuild = null;
+  const rememberFocusedField = () => {
+    fieldBeforeRebuild = pageFieldName(document.activeElement);
+    queueMicrotask(() => { fieldBeforeRebuild = null; });
+  };
+  const nameField = element => pageFieldName(element) || fieldBeforeRebuild;
   const {isRecord, activeTextEntry} = window.vrSave;
   const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, saveCheck, onSaved, nameField});
   const updateSetupValidationNotice = () => {
@@ -2246,7 +2265,7 @@
         });
       });
     };
-    const renderFindings = () => { findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.target_ids || []; const locationValues = finding.scope.location_values || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
+    const renderFindings = () => { rememberFocusedField(); findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.target_ids || []; const locationValues = finding.scope.location_values || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
       let titleBeforeEdit = finding.title || "";
       let conclusionBeforeEdit = conclusionParagraphText(finding);
       const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = async () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (!entry || finding.library_ref?.library_id === entry.library_id) { clearResults(); return; } if (await replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); } }); };
@@ -2327,6 +2346,7 @@
         renderFindings();
         scheduleSave();
       };
+      row.dataset.finding = locationRow.dataset.finding = finding.uid;
       findingBody.append(row, locationRow);
     });
   };
@@ -2335,7 +2355,14 @@
     labelAssessmentPlaceholders();
     updateFindingSummary();
     new MutationObserver(() => { enhanceFindingRows(); labelAssessmentPlaceholders(); showFindingValidationErrors(); updateFindingSummary(); }).observe(findingBody, {childList:true});
-    const addFinding = () => { report.vulnerabilities.push({uid:id("v"),title:"",severity:null,status:"open_new",scope:{mode:"custom",target_ids:[],location_values:{},custom_locations:{}},contents:[]}); renderFindings(); scheduleSave(); };
+    const addFinding = () => {
+      const finding = {uid:id("v"),title:"",severity:null,status:"open_new",scope:{mode:"custom",target_ids:[],location_values:{},custom_locations:{}},contents:[]};
+      report.vulnerabilities.push(finding);
+      renderFindings();
+      // Before the step is recorded, so the step names the new finding.
+      findingBody.querySelector(`:scope > tr[data-finding="${CSS.escape(finding.uid)}"] .finding-title-cell input`)?.focus();
+      scheduleSave();
+    };
     document.querySelector("#add-finding").onclick = addFinding;
     if (foldAllFindings) foldAllFindings.onclick = () => {
       const collapsing = anyFindingExpanded();
@@ -2347,6 +2374,19 @@
       updateFoldAllFindings();
     };
     updateFoldAllFindings();
+    if (changedField && page === "findings") {
+      const row = [...findingBody.querySelectorAll(":scope > tr:not(.finding-location-row)")].find(candidate => candidate.dataset.finding === changedField.finding);
+      const locationRow = row?.nextElementSibling;
+      const field = !row ? null
+        : changedField.label ? [...locationRow.querySelectorAll("input, textarea")].find(control => control.getAttribute("aria-label") === changedField.label)
+        : changedField.group ? locationRow.querySelector(`[data-location-group="${CSS.escape(changedField.group)}"] .select-all`)
+        // A name with text and a Vuln ID show as a button placed before their hidden box.
+        : row.cells[changedField.column]?.querySelector("input, select, .finding-title-display, .finding-id-display");
+      if (field && locationRow.contains(field) && locationRow.hidden) row.querySelector(".finding-fold-toggle")?.click();
+      // A finding Undo removed lands on the list.
+      (field || row || findingBody.closest("section"))?.scrollIntoView({block: field || row ? "center" : "start"});
+      if (field) markUntilClickElsewhere(field);
+    }
     const emptyAdd = document.querySelector("#empty-add-finding");
     if (emptyAdd) emptyAdd.onclick = addFinding;
     const results = document.querySelector("#library-results");
@@ -3459,8 +3499,7 @@
     };
     document.addEventListener("reportchange", refreshContentOffers);
     const render = (focusedFindingUid) => {
-      contentFieldBeforeRender = contentFieldName(document.activeElement);
-      queueMicrotask(() => { contentFieldBeforeRender = null; });
+      rememberFocusedField();
       // Rebuilding the pane resets its scroll, which would throw the tester back to the top after an upload.
       const restoreScroll = pane.scrollTop;
       const findings = ordered();

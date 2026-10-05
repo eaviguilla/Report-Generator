@@ -2230,7 +2230,7 @@
         endDate.oninput = () => { testWindow.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
         timeInput.oninput = () => { testWindow.test_time = timeInput.value; scheduleSave(); };
         wireSetupRule(timeInput, setupRules.time(environment), `${label} time`);
-          attachSetupCharacterLimit(timeInput, vocabulary.character_rules.test_time.max_length, `${label} time`);
+        attachSetupCharacterLimit(timeInput, vocabulary.character_rules.test_time.max_length, `${label} time`);
         [startDate, endDate].forEach(input => { input.dataset.setupValidated = "true"; });
         let revealDateMessage = Boolean(startDate.value && endDate.value && startDate.value > endDate.value);
         const validateDateOrder = () => {
@@ -2400,8 +2400,8 @@
             componentMessageControllers.set(`${environment}:${channel}:${index}`, {controller, environment, channel, index, input:rowInputs[0]});
             body.append(row, messageRow);
             rowRules.forEach(({input, rule, label, messageKind}) => wireSetupRule(input, rule, label, messageKind));
-                      const descriptionInput = rowInputs[1];
-                      attachSetupCharacterLimit(descriptionInput, vocabulary.scope_limits.description, descriptionInput.getAttribute("aria-label"));
+            const descriptionInput = rowInputs[1];
+            attachSetupCharacterLimit(descriptionInput, vocabulary.scope_limits.description, descriptionInput.getAttribute("aria-label"));
           }
         };
         const add = document.createElement("button");

@@ -29,6 +29,7 @@ PAGE = """<!doctype html>
   <button id="save-button" type="button"></button>
   <button id="undo-button" type="button"></button>
   <button id="redo-button" type="button"></button>
+  <input id="owner-field" data-field="owner">
 </main>
 <script>
   // Counted as each save is sent, so a test reads it in step with the clock, before any answer arrives.
@@ -48,6 +49,8 @@ REPORT_ID = "r_save_module"
 FAILED = "Save failed - Retry"
 SAVED = r"^Saved \d\d:\d\d$"
 SCOPE_HOLD = "Confirm the scope target change"
+# What the test page's nameField calls its one named field.
+OWNER_FIELD = {"name": "owner"}
 
 
 def report_json(**fields) -> dict:
@@ -265,17 +268,33 @@ class SaveModuleTests(unittest.TestCase):
     def history(self) -> dict:
         return self.page.evaluate("key => JSON.parse(sessionStorage.getItem(key) || '{}')", f"vulnreport-history:{REPORT_ID}")
 
-    def step_made_on(self, page_name: str, owner: str) -> dict:
+    def step_made_on(self, page_name: str, owner: str, in_field: bool = False) -> dict:
         """An edit made and saved on `page_name`; returns the report the server then holds."""
         self.page.goto(page_url(page_name))
         self.start(report_json(), page_name)
-        self.edit(owner)
+        if in_field:
+            self.edit_in_field(owner)
+        else:
+            self.edit(owner)
         self.page.locator("#save-button").click()
         expect(self.page.locator("#save-button")).to_have_attribute("data-save-state", "saved")
         return self.page.evaluate("saveCode.report")
 
     def edit(self, owner: str) -> None:
         self.page.evaluate("owner => { saveCode.report.engagement.app_owner = owner; saveCode.scheduleSave(); }", owner)
+
+    def edit_in_field(self, owner: str) -> None:
+        """The same edit, typed into the page's one named field, which then loses focus."""
+        self.page.evaluate(
+            """owner => {
+              const field = document.querySelector('#owner-field');
+              field.focus();
+              saveCode.report.engagement.app_owner = owner;
+              saveCode.scheduleSave();
+              field.blur();
+            }""",
+            owner,
+        )
 
     def stored_keys(self) -> dict:
         return self.page.evaluate("() => ({local: Object.keys(localStorage), session: Object.keys(sessionStorage)})")
@@ -329,7 +348,7 @@ class SaveModuleTests(unittest.TestCase):
         tab.goto(f"{ORIGIN}/")
         return tab
 
-    def plant_copy(self, owner: str, based_on: str, page_name: str | None = None) -> str:
+    def plant_copy(self, owner: str, based_on: str, page_name: str | None = None, field: dict | None = None) -> str:
         """A recovery copy left by a tab that closed before its edit was saved; returns its key.
         Without `page_name` it is a copy written before copies recorded their page."""
         report = report_json()
@@ -341,6 +360,8 @@ class SaveModuleTests(unittest.TestCase):
         }
         if page_name:
             envelope["page"] = page_name
+        if field:
+            envelope["field"] = field
         self.page.evaluate("([key, envelope]) => localStorage.setItem(key, JSON.stringify(envelope))", [key, envelope])
         return key
 
@@ -350,10 +371,91 @@ class SaveModuleTests(unittest.TestCase):
               window.VULNREPORT_AUTOSAVE_IDLE_MS = idle;
               window.saveCode = window.vrSave.start({
                 root: document.querySelector("main"), serverReport: report, page, saveCheck: () => window.heldBy, onSaved: () => {},
+                nameField: element => element?.dataset?.field ? {name: element.dataset.field} : null,
               });
             }""",
             [report, IDLE_MS, page_name],
         )
+
+    def changed_field(self):
+        return self.page.evaluate("saveCode.changedField")
+
+    def test_a_step_and_a_recovery_copy_record_the_field_they_were_made_in(self) -> None:
+        self.start(report_json())
+
+        self.edit_in_field("Typed in the field")
+        self.page.clock.run_for(150)
+
+        [step] = self.history()["undoHistory"]
+        self.assertEqual(step["field"], OWNER_FIELD)
+        [copy] = self.recovery_copies()
+        self.assertEqual(copy["field"], OWNER_FIELD)
+
+    def test_a_step_made_with_no_field_focused_records_its_page_alone(self) -> None:
+        self.start(report_json())
+
+        self.edit("Changed with nothing focused")
+
+        [step] = self.history()["undoHistory"]
+        self.assertEqual(step["page"], "findings")
+        self.assertNotIn("field", step)
+
+    def test_undo_and_redo_hand_the_steps_field_to_the_page_they_open(self) -> None:
+        saved = self.step_made_on("setup", "Typed on Setup", in_field=True)
+        self.page.goto(page_url("findings"))
+        self.start(saved, "findings")
+        self.assertIsNone(self.changed_field())
+
+        with self.page.expect_navigation(url=page_url("setup")):
+            self.page.locator("#undo-button").click()
+        self.start(report_json(**self.saves[-1]), "setup")
+        self.assertEqual(self.changed_field(), OWNER_FIELD)
+        # Redo on the step's own page reloads it, and the field comes back again.
+        with self.page.expect_navigation(url=page_url("setup")):
+            self.page.locator("#redo-button").click()
+        self.start(report_json(**self.saves[-1]), "setup")
+
+        self.assertEqual(self.changed_field(), OWNER_FIELD)
+
+    def test_a_page_the_tester_is_redirected_to_gets_no_field(self) -> None:
+        saved = self.step_made_on("setup", "Typed on Setup", in_field=True)
+        self.page.goto(page_url("findings"))
+        self.start(saved, "findings")
+        with self.page.expect_navigation(url=page_url("setup")):
+            self.page.locator("#undo-button").click()
+
+        # As if a page gate had sent the tester on to Findings.
+        self.start(report_json(**self.saves[-1]), "findings")
+        self.assertIsNone(self.changed_field())
+        self.page.goto(page_url("setup"))
+        self.start(report_json(**self.saves[-1]), "setup")
+
+        self.assertIsNone(self.changed_field())
+
+    def test_a_restored_copy_keeps_its_field_when_written_again(self) -> None:
+        self.plant_copy("Recovered owner", report_json()["saved_at"], "findings", OWNER_FIELD)
+        self.start(report_json(), "findings")
+        with self.page.expect_navigation(url=page_url("findings")):
+            self.page.locator("#app-diagnostics").get_by_role("button", name="Restore", exact=True).click()
+        self.answers.append(self.refuse)
+        self.start(report_json(), "findings")
+
+        # The restored copy's save is refused, so the page writes a copy of its own.
+        self.page.clock.run_for(IDLE_MS)
+        self.expect_attempts(1)
+
+        [rewritten] = [copy for copy in self.recovery_copies() if copy["tabId"] != "closed-tab"]
+        self.assertEqual(rewritten["field"], OWNER_FIELD)
+
+    def test_restore_hands_the_copys_field_to_the_page_it_opens(self) -> None:
+        self.plant_copy("Recovered owner", report_json()["saved_at"], "setup", OWNER_FIELD)
+        self.start(report_json(), "findings")
+
+        with self.page.expect_navigation(url=page_url("setup")):
+            self.page.locator("#app-diagnostics").get_by_role("button", name="Restore on Setup", exact=True).click()
+        self.start(report_json(), "setup")
+
+        self.assertEqual(self.changed_field(), OWNER_FIELD)
 
     def test_an_undo_step_and_a_recovery_copy_record_the_page_they_were_made_on(self) -> None:
         self.page.goto(page_url("setup"))
@@ -404,7 +506,7 @@ class SaveModuleTests(unittest.TestCase):
                 self.assertEqual(self.saves[-1]["engagement"]["app_owner"], "Before" if planted else report_json()["engagement"]["app_owner"])
 
     def test_a_refused_undo_still_opens_the_steps_page_with_its_recovery_copy(self) -> None:
-        saved = self.step_made_on("setup", "Typed on Setup")
+        saved = self.step_made_on("setup", "Typed on Setup", in_field=True)
         self.page.goto(page_url("findings"))
         self.start(saved, "findings")
         self.answers.append(self.refuse)
@@ -414,6 +516,7 @@ class SaveModuleTests(unittest.TestCase):
 
         [copy] = self.recovery_copies()
         self.assertEqual(copy["page"], "setup")
+        self.assertEqual(copy["field"], OWNER_FIELD)
         self.start(saved, "setup")
         self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), report_json()["engagement"]["app_owner"])
         self.assertEqual(self.page.locator("#save-button").get_attribute("data-save-state"), "recovered")

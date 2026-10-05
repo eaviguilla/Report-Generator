@@ -67,11 +67,13 @@
   const PAGE_NAMES = Object.freeze({setup:"Setup", findings:"Findings", edit:"Content"});
   const knownPage = name => Object.hasOwn(PAGE_NAMES, name) ? name : null;
   // app.js calls this once per report page; it returns the report the page edits, the server's or a recovery copy.
-  function start({root, serverReport, page, saveCheck, onSaved}) {
+  function start({root, serverReport, page, saveCheck, onSaved, nameField}) {
     const diagnostics = window.VulnReportDiagnostics;
     const reportId = serverReport.report_id;
     // A copy written during an Undo or Redo belongs to the step's page, not this one.
     let draftPage = page;
+    // The page's name for the last field changed here; the save code never looks inside it.
+    let draftField = null;
     const openPage = target => {
       if (knownPage(target) && target !== page) window.location.assign(`/reports/${reportId}/${target}`);
       else window.location.reload();
@@ -79,6 +81,7 @@
     let report = serverReport;
     const localDraftPrefix = `vulnreport-pending:${reportId}`;
     const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
+    const changedFieldKey = `vulnreport-changed-field:${reportId}`;
     const tabRevisionKey = `vulnreport-saved-at:${reportId}`;
     const timestampMicros = value => {
       const milliseconds = Date.parse(value);
@@ -135,6 +138,8 @@
         report = selectedDraft.envelope.report;
         recoveredDraft = true;
         restoredDraftKey = selectedDraft.key;
+        // Kept only on the copy's own page, where the field is one this page can name.
+        if (knownPage(selectedDraft.envelope.page) === page) draftField = selectedDraft.envelope.field || null;
       } else {
         recoveryCandidate = drafts[0] || null;
       }
@@ -143,6 +148,21 @@
     }
     if (!Array.isArray(report.scope_targets)) report.scope_targets = clone(serverReport.scope_targets || []);
     if (!Array.isArray(report.vulnerabilities)) report.vulnerabilities = clone(serverReport.vulnerabilities || []);
+    // Left by the Undo, Redo or Restore that opened this page; a page gate's other page gets nothing.
+    let changedField = null;
+    try {
+      const pointer = JSON.parse(sessionStorage.getItem(changedFieldKey) || "null");
+      sessionStorage.removeItem(changedFieldKey);
+      if (pointer?.page === page && pointer.field) changedField = pointer.field;
+    } catch (error) {
+      recoveryStorageError ||= error;
+    }
+    function pointNextPageAt(target, field) {
+      try {
+        if (field) sessionStorage.setItem(changedFieldKey, JSON.stringify({page:target, field}));
+        else sessionStorage.removeItem(changedFieldKey);
+      } catch (error) { showRecoveryStorageWarning(error); }
+    }
     const maxHistoryEntries = 20;
     let undoHistory = [];
     let redoHistory = [];
@@ -220,6 +240,7 @@
           capturedAt: new Date().toISOString(),
           editRevision: saveRevision,
           page: draftPage,
+          field: draftField,
           report,
         }));
         return true;
@@ -282,6 +303,7 @@
                 showRecoveryStorageWarning(error);
                 return;
               }
+              pointNextPageAt(copyPage || page, candidate.envelope.field);
               openPage(copyPage);
             },
           },
@@ -438,6 +460,7 @@
     }
     function restoreHistory(action, direction) {
       const priorPendingSave = pendingSave;
+      const priorDraftField = draftField;
       const stepPage = knownPage(action.page);
       applyChanges(report, action.changes, direction);
       previousReport = clone(report);
@@ -445,11 +468,13 @@
       pendingSave = true;
       saveRevision += 1;
       draftPage = stepPage || page;
+      draftField = action.field || null;
       const rollback = () => {
         applyChanges(report, action.changes, direction === "undo" ? "redo" : "undo");
         previousReport = clone(report);
         pendingSave = priorPendingSave;
         draftPage = page;
+        draftField = priorDraftField;
         if (priorPendingSave) persistLocalDraft(); else clearLocalDraft();
         return false;
       };
@@ -461,6 +486,7 @@
         return rollback();
       }
       allowUnsavedUnload = true;
+      pointNextPageAt(draftPage, draftField);
       // Leave only once the server has the undone state, so its page gate judges that; a refused save still leaves.
       return save().then(() => {
         openPage(stepPage);
@@ -505,6 +531,11 @@
       const changes = diff(previousReport, report);
       if (changes.length) {
         const action = {changes, page};
+        const field = nameField?.(document.activeElement);
+        if (field) {
+          action.field = field;
+          draftField = field;
+        }
         undoHistory.push(action);
         if (undoHistory.length > maxHistoryEntries) undoHistory.shift();
         redoHistory.length = 0;
@@ -696,7 +727,7 @@
     } else if (recoveryCandidate) {
       showLocalRecovery(recoveryCandidate);
     }
-    return {report, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
+    return {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
   }
   window.vrSave = {start, reconcileCanonicalObject, isRecord, activeTextEntry};
 })();

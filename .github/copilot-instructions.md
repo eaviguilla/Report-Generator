@@ -177,5 +177,4 @@ How to write a test is in `.github/instructions/tests.instructions.md`.
 
 # Pushing changes
 
-When the user says `push`, stage every working-tree change, create a concise commit for any
-uncommitted work, then push the current branch. Do not leave uncommitted changes behind.
+When the user says `push`, follow `.github/prompts/push.prompt.md`.

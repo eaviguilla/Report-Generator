@@ -3289,6 +3289,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Undo last change").click()
         page.wait_for_function(f"{owner_value} === ''", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "")
+        self.assertEqual(page.url, f"{self.base_url}/reports/{report_id}/setup")
         page.get_by_role("button", name="Redo last change").click()
         page.wait_for_function(f"{owner_value} === 'Undo this value'", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Undo this value")
@@ -3324,6 +3325,91 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Recovered value")
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "recovered")
         page.unroute(f"**/reports/{report_id}", interrupt_put)
+
+    def test_undo_or_redo_on_findings_of_a_refused_setup_value_opens_setup_and_holds_the_save(self) -> None:
+        name_value = '() => document.querySelector(\'[data-path="engagement.app_name"]\')?.value'
+        for history_button in ("Undo last change", "Redo last change"):
+            with self.subTest(history_button):
+                report_id = self.ready_report()
+                # A tab of its own, so the last subtest's held edit cannot stop this one loading.
+                page = self.context.new_page()
+                page.goto(f"{self.base_url}/reports/{report_id}/setup")
+                application_name = page.get_by_label("Application Name")
+                application_name.fill("Bad/App")
+                application_name.blur()
+                if history_button == "Undo last change":
+                    # A second step fixes the name, so undoing it brings the refused value back.
+                    application_name.fill("Fixed App")
+                    application_name.blur()
+                else:
+                    # Undone on Setup, so a Redo brings the refused value back.
+                    page.get_by_role("button", name="Undo last change").click()
+                    page.wait_for_function(f"{name_value} === 'Browser QA'", timeout=10_000)
+                page.get_by_role("button", name="Next: Findings").click()
+                page.wait_for_url("**/findings", timeout=10_000)
+                saved_name = main.workspace.load(report_id).engagement.app_name
+
+                page.get_by_role("button", name=history_button).click()
+
+                page.wait_for_url(f"**/reports/{report_id}/setup", timeout=10_000)
+                application_name = page.get_by_label("Application Name")
+                expect(application_name).to_have_value("Bad/App")
+                self.assertEqual(application_name.evaluate("input => input.validationMessage"), setup_issue("app_name", "Bad/App"))
+                expect(page.locator("#save-button")).to_have_text("Correct invalid Setup fields")
+                self.assertEqual(main.workspace.load(report_id).engagement.app_name, saved_name)
+
+    def test_undo_on_findings_of_a_refused_additional_information_value_opens_content(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        # Severity Review Tickets shows for every status but Open (New).
+        finding.status = "open_previously_discovered"
+        main.provision(finding)
+        # A refused value already stored, as an import can leave one, so one fix on Content is the step to undo.
+        finding.severity_review_tickets = "TKT 1"
+        main.workspace.save(report)
+        [message] = finding_input_issues(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        tickets = page.get_by_label("Severity Review Tickets")
+        tickets.fill("12345")
+        tickets.blur()
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url("**/findings", timeout=10_000)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].severity_review_tickets, "12345")
+
+        page.get_by_role("button", name="Undo last change").click()
+
+        page.wait_for_url(f"**/reports/{report_id}/edit", timeout=10_000)
+        expect(page.locator("#editor-notifications")).to_contain_text(message)
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].severity_review_tickets, "12345")
+
+    def test_restore_on_findings_of_a_copy_written_on_setup_opens_setup_with_it(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+
+        def drop_put(route) -> None:
+            if route.request.method == "PUT":
+                route.abort()
+            else:
+                route.continue_()
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.route(f"**/reports/{report_id}", drop_put)
+        page.get_by_label("Application Owner").fill("Unsaved setup owner")
+        page.wait_for_function(
+            "prefix => Object.keys(localStorage).some(key => key.startsWith(prefix))",
+            arg=f"vulnreport-pending:{report_id}:",
+        )
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.unroute(f"**/reports/{report_id}", drop_put)
+
+        with page.expect_navigation(url=f"{self.base_url}/reports/{report_id}/setup"):
+            page.get_by_role("button", name="Restore on Setup", exact=True).click()
+
+        self.assertEqual(page.get_by_label("Application Owner").input_value(), "Unsaved setup owner")
+        self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "recovered")
 
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()

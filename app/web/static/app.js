@@ -178,8 +178,9 @@
   let setupSaveCheck = () => {};
   const saveCheck = root.dataset.step === "setup" ? () => setupSaveCheck() : null;
   const onSaved = () => updateEngagementName();
+  const page = root.id === "setup" ? root.dataset.step : "edit";
   const {isRecord, activeTextEntry} = window.vrSave;
-  const {report, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, saveCheck, onSaved});
+  const {report, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, saveCheck, onSaved});
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");

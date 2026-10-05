@@ -49,4 +49,4 @@ Left out:
 
 ## Next steps
 
-1. `/to-tickets`: The Answers hold the decisions. The work splits into recording the page on undo steps and recovery copies, pointing at the field on Setup, Findings and Content, and the Restore button.
+1. `/implement`: Build [ticket 02](../../undo-and-restore-go-to-the-change/issues/02-setup-scrolls-to-the-changed-field-and-marks-it.md). Ticket 01 is done: Undo, Redo and Restore now open the page where the change was made. The four tickets in `.scratch/undo-and-restore-go-to-the-change/issues/` carry the work.

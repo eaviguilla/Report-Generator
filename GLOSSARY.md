@@ -17,8 +17,12 @@ The refusal a save gets when the report was saved somewhere else after this page
 _Avoid_: stale save, 409
 
 **Recovery copy**:
-The copy of a report the browser keeps of edits the server has not saved yet, so a closed tab or a failed save does not lose them.
+The copy of a report the browser keeps of edits the tester made on one page and the server has not saved yet, so a closed tab or a failed save does not lose them.
 _Avoid_: local draft, recovery draft, snapshot
+
+**Undo step**:
+One change the tester made on one page, which Undo takes back and Redo brings back whole. Typing in one field until the tester leaves it is one undo step.
+_Avoid_: history entry, undo action, undo entry
 
 **Issue**:
 Something in a report that the tester must fix before they can go past Setup or Findings, or build the Word report. A library offer is not an issue, and the server's answer to a save it will not take is a refusal, not an issue.

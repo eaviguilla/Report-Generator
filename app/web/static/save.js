@@ -357,6 +357,8 @@
               clearLocalDraft();
               try { sessionStorage.removeItem(historyKey); } catch (error) { showRecoveryStorageWarning(error); }
               clearSaveConflict();
+              // The tester's version is discarded, so pagehide must not write it back as the page reloads.
+              pendingSave = false;
               allowUnsavedUnload = true;
               window.location.reload();
             },

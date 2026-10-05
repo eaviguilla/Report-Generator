@@ -1,6 +1,8 @@
 # Keyboard save and undo
 
-> **Status:** done · 2026-09-15 · `f49d503`
+> **Status:** ready-for-agent · 2026-10-05 · Reopened. It read `done · 2026-09-15 · f49d503`, but none of its code was built. That commit added this file, and its `app.js` changes were about statuses and evidence. `git log -S` finds no `requestManualSave`, `nativeUndoOwner` or `event.repeat` in `app.js`. Build it on `app/web/static/save.js` once review item 06 moves the save code there. The line numbers below predate that move.
+>
+> **Blocked by:** [Give the save machine its own module and a seam](../../.scratch/architecture-review/issues/06-give-the-save-machine-its-own-module-and-a-seam.md)
 
 ## Request
 ctrl + s and ctrl + z functions for this app
@@ -797,3 +799,7 @@ When `nativeUndoOwner()` matches, return early **without** `preventDefault()`, s
 - **No bespoke "is it safe to save?" test in the key handler.** Those rules already exist twice, in Python and JavaScript; a third copy is drift waiting to happen.
 
 Tests use Playwright's `ControlOrMeta` modifier so macOS and Linux CI agree. No test in the suite presses a modifier key today, so every case above is new and collides with nothing.
+
+## Next steps
+
+1. `/implement`: The agreed plan still holds. Build it on the new save module once review item 06 lands.

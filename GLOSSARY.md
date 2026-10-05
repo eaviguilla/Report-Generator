@@ -9,8 +9,16 @@ The server's decision to take a submitted report, after checking it and completi
 _Avoid_: save rules, intake, accepting a draft
 
 **Refusal**:
-The answer acceptance gives a report it will not take, naming the rule the report broke, such as a stale save, a removed scope target or an invalid Setup field.
+The answer acceptance gives a report it will not take, naming the rule the report broke, such as a save conflict, a removed scope target or an invalid Setup field.
 _Avoid_: rejection
+
+**Save conflict**:
+The refusal a save gets when the report was saved somewhere else after this page last saved it. The tester then keeps their version or loads the latest one.
+_Avoid_: stale save, 409
+
+**Recovery copy**:
+The copy of a report the browser keeps of edits the server has not saved yet, so a closed tab or a failed save does not lose them.
+_Avoid_: local draft, recovery draft, snapshot
 
 **Issue**:
 Something in a report that the tester must fix before they can go past Setup or Findings, or build the Word report. A library offer is not an issue, and the server's answer to a save it will not take is a refusal, not an issue.

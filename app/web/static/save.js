@@ -423,7 +423,11 @@
     function diff(before, after, path = []) {
       if (before === after) return [];
       const bothObjects = before && after && typeof before === "object" && typeof after === "object" && !Array.isArray(before) && !Array.isArray(after);
-      if (!bothObjects) return [{path, beforePresent:true, before:clone(before), afterPresent:true, after:clone(after)}];
+      if (!bothObjects) {
+        // A clone holds new arrays, so an unchanged one must not count as a change.
+        if (JSON.stringify(before) === JSON.stringify(after)) return [];
+        return [{path, beforePresent:true, before:clone(before), afterPresent:true, after:clone(after)}];
+      }
       const changes = [];
       new Set([...Object.keys(before), ...Object.keys(after)]).forEach(key => {
         if (!(key in before)) changes.push({path:[...path, key], beforePresent:false, afterPresent:true, after:clone(after[key])});

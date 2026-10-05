@@ -611,33 +611,165 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_an_over_length_setup_field_shows_the_server_message_and_holds_the_save(self) -> None:
         report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["web", "mobile"]
+        report.scope_targets = []
+        main.workspace.save(report)
+        report_data = report.model_dump(mode="json", by_alias=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        name = page.get_by_label("Application Name")
-
-        name.fill("a" * 101)
-
-        self.assertEqual(name.evaluate("input => input.validationMessage"), setup_issue("app_name", "a" * 101))
-        self.assertEqual(name.input_value(), "a" * 101, "the value must not be cut short")
+        limits = json.loads(page.locator("#vocabulary").text_content())["scope_limits"]
+        web_line = "x" * (limits["line"] + 1)
+        draft = {**report_data, "scope_text": {"production": {"web": web_line}}}
+        [refusal] = scope_text_refusals(draft)
+        expected_message = format_rule_message(refusal, draft)
+        web = page.get_by_role("textbox", name="Web", exact=True).first
+        self.assertIsNone(web.get_attribute("maxlength"))
+        web.fill(web_line)
+        web.evaluate("element => element.blur()")
+        described_by = web.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        expect(page.locator(f"#{described_by}")).to_have_text(expected_message)
+        self.assertEqual(web.input_value(), web_line)
         page.get_by_role("button", name="Save").click()
         expect(page.locator("#save-button")).to_have_attribute("data-save-state", "unsaved")
-        self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Browser QA")
+        self.assertEqual(main.workspace.load(report_id).saved_at, report.saved_at)
+
+    def test_setup_character_limit_stops_typing_and_announces_the_limit(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        maximum = vocabulary["character_rules"]["tester"]["max_length"]
+        tester = page.get_by_label("Tester", exact=True)
+        self.assertEqual(tester.get_attribute("maxlength"), str(maximum))
+
+        tester.fill("T" * maximum)
+        tester.press("x")
+
+        self.assertEqual(tester.input_value(), "T" * maximum)
+        described_by = tester.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        note = page.locator(f"#{described_by}")
+        expect(note).to_have_text(f"Tester holds up to {maximum} characters.")
+        self.assertEqual(note.get_attribute("role"), "status")
+        self.assertEqual(note.get_attribute("aria-live"), "polite")
+        self.assertIn("setup-character-limit-note", note.get_attribute("class"))
+        self.assertEqual(note.evaluate("element => getComputedStyle(element).color"), page.evaluate("() => { const probe = document.createElement('span'); probe.style.color = 'var(--muted)'; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; }"))
+        self.assertIsNone(tester.get_attribute("aria-invalid"))
+
+        tester.press("Backspace")
+        expect(note).to_be_hidden()
+        self.assertIsNone(tester.get_attribute("aria-describedby"))
+        tester.press("x")
+        tester.press("x")
+        expect(note).to_be_visible()
+        tester.evaluate("element => element.blur()")
+        expect(note).to_be_hidden()
+
+    def test_generated_setup_fields_use_vocabulary_character_limits(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+
+        page.get_by_label("Test Mobile").check()
+        page.get_by_label("Non-Production", exact=True).check()
+        page.get_by_label("Non-Production name", exact=True).select_option("OTHERS")
+
+        fields = [
+            (page.get_by_label("User role 1", exact=True), vocabulary["character_rules"]["user_role"]["max_length"]),
+            (page.get_by_label("Username 1", exact=True), vocabulary["character_rules"]["username"]["max_length"]),
+            (page.get_by_label("Production time", exact=True), vocabulary["character_rules"]["test_time"]["max_length"]),
+            (page.get_by_label("Mobile Description", exact=True).first, vocabulary["scope_limits"]["description"]),
+        ]
+        for field, maximum in fields:
+            with self.subTest(label=field.get_attribute("aria-label")):
+                self.assertEqual(field.get_attribute("maxlength"), str(maximum))
+
+        component = page.get_by_label("Mobile Component", exact=True).first
+        self.assertIsNone(component.get_attribute("maxlength"))
+
+        custom_name = page.get_by_label("Non-Production name, typed", exact=True)
+        self.assertEqual(custom_name.get_attribute("maxlength"), "40")
+        custom_name.fill("N" * 40)
+        custom_name.press("x")
+        note_id = custom_name.get_attribute("aria-describedby")
+        self.assertTrue(note_id)
+        expect(page.locator(f"#{note_id}")).to_have_text("Non-Production name, typed holds up to 40 characters.")
+
+    def test_setup_character_limit_cuts_a_paste_and_announces_the_cut(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        maximum = vocabulary["character_rules"]["tester"]["max_length"]
+        tester = page.get_by_label("Tester", exact=True)
+        tester.fill("T" * (maximum - 2))
+
+        tester.evaluate("""(element, pasted) => {
+            const clipboard = new DataTransfer();
+            clipboard.setData("text/plain", pasted);
+            element.focus();
+            element.setSelectionRange(element.value.length, element.value.length);
+            element.dispatchEvent(new ClipboardEvent("paste", {bubbles:true, cancelable:true, clipboardData:clipboard}));
+            document.execCommand("insertText", false, pasted);
+        }""", "XYZ")
+
+        self.assertEqual(tester.input_value(), "T" * (maximum - 2) + "XY")
+        described_by = tester.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        note = page.locator(f"#{described_by}")
+        expect(note).to_have_text(f"Tester holds up to {maximum} characters, so the paste was cut to fit.")
+        self.assertIsNone(tester.get_attribute("aria-invalid"))
+
+    def test_over_limit_draft_stays_invalid_while_shortening_without_limit_note(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        maximum = vocabulary["character_rules"]["app_name"]["max_length"]
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        over_limit = "A" * (maximum + 2)
+        report.engagement.app_name = over_limit
+        main.workspace.save(report)
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, over_limit)
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        embedded_name = page.locator("main[data-report]").evaluate("element => JSON.parse(element.dataset.report).engagement.app_name")
+        self.assertEqual(embedded_name, over_limit)
+
+        name = page.get_by_label("Application Name", exact=True)
+        expect(name).to_have_value(over_limit)
+        described_by = name.get_attribute("aria-describedby")
+        self.assertTrue(described_by)
+        message = page.locator(f"#{described_by}")
+        expect(message).to_have_text(setup_issue("app_name", over_limit))
+        self.assertEqual(name.get_attribute("aria-invalid"), "true")
+        self.assertNotIn("setup-character-limit-note", message.get_attribute("class"))
+
+        name.fill("A" * maximum)
+        expect(name).to_have_value("A" * maximum)
+        expect(message).to_be_hidden()
+        self.assertIsNone(name.get_attribute("aria-invalid"))
+        self.assertNotIn("setup-character-limit-note", message.get_attribute("class"))
 
     def test_held_autosave_shows_every_refusal_on_setup(self) -> None:
         report_id = self.ready_report()
+        limitations_value = "x" * 5000
+        report = main.workspace.load(report_id)
+        report.engagement.limitations = limitations_value
+        main.workspace.save(report)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
         name = page.get_by_label("Application Name", exact=True)
         limitations = page.get_by_label("Limitations", exact=True)
         name.fill("Bad/App")
-        limitations.fill("x" * 5000)
+        name.evaluate("element => element.blur()")
 
-        page.wait_for_function("document.querySelector('[data-path=\"engagement.limitations\"]').hasAttribute('aria-describedby')")
+        page.wait_for_function("() => ['engagement.app_name', 'engagement.limitations'].every(path => document.querySelector(`[data-path=\"${path}\"]`)?.hasAttribute('aria-describedby'))")
+        page.wait_for_function("document.querySelector('#save-button').textContent === 'Correct invalid Setup fields'")
 
         self.assertEqual(page.locator(f"#{name.get_attribute('aria-describedby')}").inner_text(), setup_issue("app_name", "Bad/App"))
-        self.assertEqual(page.locator(f"#{limitations.get_attribute('aria-describedby')}").inner_text(), setup_issue("limitations", "x" * 5000))
+        self.assertEqual(page.locator(f"#{limitations.get_attribute('aria-describedby')}").inner_text(), setup_issue("limitations", limitations_value))
         self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Browser QA")
-        self.assertEqual(main.workspace.load(report_id).engagement.limitations, "N/A")
+        self.assertEqual(main.workspace.load(report_id).engagement.limitations, limitations_value)
         self.assertEqual(page.evaluate("document.activeElement.dataset.path"), "engagement.app_name")
 
     def test_setup_refusal_is_described_below_its_field_and_clears_when_fixed(self) -> None:
@@ -666,6 +798,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         report_id = self.ready_report()
         report = main.workspace.load(report_id)
         report.engagement.tested_environments = ["production", "non_production"]
+        time_value = "x" * 1000
+        for environment in ("production", "non_production"):
+            report.engagement.test_windows.setdefault(environment, TestWindow()).test_time = time_value
         main.workspace.save(report)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
@@ -697,10 +832,6 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         for environment, label in (("production", "Production"), ("non_production", "Non-Production")):
             time_input = page.get_by_label(f"{label} time", exact=True)
-            time_value = "x" * 1000
-            time_input.fill(time_value)
-            self.assertIsNone(time_input.get_attribute("aria-describedby"))
-            time_input.evaluate("input => input.blur()")
             time_described_by = time_input.get_attribute("aria-describedby")
             self.assertTrue(time_described_by)
             time_line = page.locator(f"#{time_described_by}")
@@ -1006,6 +1137,46 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(page.locator("#setup-validation-note")).to_have_text(
             "1 thing to fix before Findings. It is marked above, and the cursor is on it."
         )
+
+    def test_web_lines_and_component_names_keep_their_scope_length_refusals(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        limits = vocabulary["scope_limits"]
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["web", "mobile"]
+        report.scope_targets = []
+        main.workspace.save(report)
+        report_data = report.model_dump(mode="json", by_alias=True)
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+
+        web_line = "x" * (limits["line"] + 1)
+        web_data = {**report_data, "scope_text": {"production": {"web": web_line}}}
+        [web_refusal] = scope_text_refusals(web_data)
+        web_message = format_rule_message(web_refusal, web_data)
+        web_box = page.get_by_role("textbox", name="Web", exact=True).first
+        self.assertIsNone(web_box.get_attribute("maxlength"))
+        web_box.fill(web_line)
+        web_box.evaluate("element => element.blur()")
+        web_message_id = web_box.get_attribute("aria-describedby")
+        self.assertTrue(web_message_id)
+        expect(page.locator(f"#{web_message_id}")).to_have_text(web_message)
+
+        component_name = "C" * (limits["component"] + 1)
+        component_data = {
+            **report_data,
+            "scope_text": {"production": {"mobile": {"component": component_name, "description": ""}}},
+        }
+        [component_refusal] = [result for result in scope_text_refusals(component_data) if result.get("box") == "component"]
+        component_message = format_rule_message(component_refusal, component_data).removeprefix("In the Production Mobile scope, ")
+        component_box = page.get_by_role("textbox", name="Mobile Component", exact=True).first
+        self.assertIsNone(component_box.get_attribute("maxlength"))
+        component_box.fill(component_name)
+        component_box.evaluate("element => element.blur()")
+        component_message_id = component_box.get_attribute("aria-describedby")
+        self.assertTrue(component_message_id)
+        expect(page.locator(f"#{component_message_id}")).to_have_text(component_message)
 
     def test_setup_next_does_not_open_the_native_validity_bubble(self) -> None:
         page = self.page

@@ -8,8 +8,7 @@
   const unicodeCharacterRanges = serverReport._unicode_character_ranges || {};
   delete serverReport._unicode_character_ranges;
   vocabulary.unicode_character_ranges = unicodeCharacterRanges;
-  let report = serverReport;
-  const reportId = report.report_id;
+  const reportId = serverReport.report_id;
   const reportTypeLabels = Object.fromEntries(vocabulary.report_types);
   // The header names the engagement only once both halves are saved; a missing half falls back.
   // Each fact gets its own chip: the old hyphen-joined string was unreadable against an application
@@ -34,82 +33,6 @@
         heading.append(chip);
       });
   };
-  const localDraftPrefix = `vulnreport-pending:${reportId}`;
-  const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
-  const tabRevisionKey = `vulnreport-saved-at:${reportId}`;
-  const timestampMicros = value => {
-    const milliseconds = Date.parse(value);
-    if (!Number.isFinite(milliseconds)) return 0;
-    const submillisecond = String(value).match(/\.\d{3}(\d{1,3})/)?.[1] || "";
-    return milliseconds * 1000 + Number(submillisecond.padEnd(3, "0"));
-  };
-  let recoveryStorageError = null;
-  let tabId;
-  try {
-    tabId = sessionStorage.getItem("vulnreport-tab-id");
-    if (!tabId) {
-      tabId = crypto.randomUUID();
-      sessionStorage.setItem("vulnreport-tab-id", tabId);
-    }
-  } catch (error) {
-    recoveryStorageError = error;
-    tabId = crypto.randomUUID();
-  }
-  const legacyLocalDraftKey = `${localDraftPrefix}:${tabId}`;
-  const localDraftKey = `${legacyLocalDraftKey}:${crypto.randomUUID()}`;
-  const historyKey = `vulnreport-history:${reportId}`;
-  let recoveredDraft = false;
-  let recoveryCandidate = null;
-  let restoredDraftKey = null;
-  try {
-    const draftKeys = Array.from({length:localStorage.length}, (_, index) => localStorage.key(index))
-      .filter(key => key === localDraftPrefix || key?.startsWith(`${localDraftPrefix}:`));
-    const drafts = draftKeys.flatMap(key => {
-      try {
-        const cached = JSON.parse(localStorage.getItem(key));
-        const envelope = cached?.report ? cached : {
-          schemaVersion: 1,
-          reportId,
-          tabId: "legacy",
-          baseSavedAt: cached?.saved_at,
-          capturedAt: cached?.saved_at,
-          editRevision: 0,
-          report: cached,
-        };
-        if (envelope.reportId !== reportId || envelope.report?.report_id !== reportId) throw new Error("Draft does not match this report");
-        return [{key, envelope}];
-      } catch {
-        localStorage.removeItem(key);
-        return [];
-      }
-    }).sort((left, right) => timestampMicros(right.envelope.capturedAt) - timestampMicros(left.envelope.capturedAt));
-    const selectedKey = sessionStorage.getItem(recoverySelectionKey);
-    sessionStorage.removeItem(recoverySelectionKey);
-    const selectedDraft = drafts.find(draft => draft.key === selectedKey);
-    if (selectedDraft) {
-      report = selectedDraft.envelope.report;
-      recoveredDraft = true;
-      restoredDraftKey = selectedDraft.key;
-    } else {
-      recoveryCandidate = drafts[0] || null;
-    }
-  } catch (error) {
-    recoveryStorageError ||= error;
-  }
-  const clone = value => JSON.parse(JSON.stringify(value));
-  if (!Array.isArray(report.scope_targets)) report.scope_targets = clone(serverReport.scope_targets || []);
-  if (!Array.isArray(report.vulnerabilities)) report.vulnerabilities = clone(serverReport.vulnerabilities || []);
-  const maxHistoryEntries = 20;
-  let undoHistory = [];
-  let redoHistory = [];
-  try {
-    ({undoHistory = [], redoHistory = []} = JSON.parse(sessionStorage.getItem(historyKey) || "{}"));
-  } catch (error) {
-    recoveryStorageError ||= error;
-    try { sessionStorage.removeItem(historyKey); } catch (removeError) { recoveryStorageError ||= removeError; }
-  }
-  let previousReport = clone(report);
-  let activeTextTransaction = null;
   const library = JSON.parse(root.dataset.library || "[]");
   const severity = vocabulary.severities;
   const statuses = vocabulary.statuses;
@@ -170,32 +93,7 @@
   // required, which is what keeps "1.2.3.4 is the host" intact; roman and lettered markers are too
   // close to prose to strip, and a wrong strip deletes text silently.
   const LIST_MARKER_PREFIX = /^\s*(\d{1,3}[.)]|\(\d{1,3}\)|[-*+•–—])\s+/;
-  let autoSaveTimer;
-  const autoSaveDelay = Math.max(100, Number(window.VULNREPORT_AUTOSAVE_IDLE_MS ?? window.VULNREPORT_AUTOSAVE_INTERVAL_MS) || 5000);
-  let localDraftTimer;
-  let reportChangeTimer;
-  let pendingSave = false;
-  let saveRevision = 0;
-  let savedRevision = 0;
-  let saveRetryCount = 0;
-  const maxSaveRetries = 3;
-  let saveInFlight = null;
-  let saveConflict = null;
-  let pendingScopeDecision = false;
-  let allowUnsavedUnload = false;
-  let recoveryStorageWarningShown = false;
-  const SAVE_STATES = Object.freeze({
-    UNSAVED: "unsaved",
-    SAVING: "saving",
-    SAVED: "saved",
-    FAILED: "failed",
-    CONFLICT: "conflict",
-    RECOVERED: "recovered",
-  });
-  let validateSetupInputs = () => true;
   let updateSetupFieldIssues = () => {};
-  // Assigned by setup(); the server rejects a scope edit that strands a finding, so the save waits for a fix.
-  let strandedByScopeEdit = () => [];
   let updateFindingSummary = () => {};
   const expandedFindingIds = new Set();
   // Tells "nothing opened yet" apart from "the tester closed them all"; an empty set alone would
@@ -276,6 +174,109 @@
   const optionLabel = (value) => statuses.find(status => status[0] === value)?.[1] || value.replaceAll("_", " ").replace(/\b\w/g, letter => letter.toUpperCase());
   // Renders a select element, including a disabled placeholder when required.
   const select = (values, current, nullable = false) => `<select>${nullable || (!current && values === severity) ? `<option value="" disabled ${!current ? "selected" : ""}>-</option>` : ""}${values.map(value => `<option value="${value}" ${value === current ? "selected" : ""}>${optionLabel(value)}</option>`).join("")}</select>`;
+  // setup() builds the Setup check after the save code has started, so the save code calls through this.
+  let setupSaveCheck = () => {};
+  const saveCheck = root.dataset.step === "setup" ? () => setupSaveCheck() : null;
+  const onSaved = () => updateEngagementName();
+  let report = serverReport;
+  const localDraftPrefix = `vulnreport-pending:${reportId}`;
+  const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
+  const tabRevisionKey = `vulnreport-saved-at:${reportId}`;
+  const timestampMicros = value => {
+    const milliseconds = Date.parse(value);
+    if (!Number.isFinite(milliseconds)) return 0;
+    const submillisecond = String(value).match(/\.\d{3}(\d{1,3})/)?.[1] || "";
+    return milliseconds * 1000 + Number(submillisecond.padEnd(3, "0"));
+  };
+  let recoveryStorageError = null;
+  let tabId;
+  try {
+    tabId = sessionStorage.getItem("vulnreport-tab-id");
+    if (!tabId) {
+      tabId = crypto.randomUUID();
+      sessionStorage.setItem("vulnreport-tab-id", tabId);
+    }
+  } catch (error) {
+    recoveryStorageError = error;
+    tabId = crypto.randomUUID();
+  }
+  const legacyLocalDraftKey = `${localDraftPrefix}:${tabId}`;
+  const localDraftKey = `${legacyLocalDraftKey}:${crypto.randomUUID()}`;
+  const historyKey = `vulnreport-history:${reportId}`;
+  let recoveredDraft = false;
+  let recoveryCandidate = null;
+  let restoredDraftKey = null;
+  try {
+    const draftKeys = Array.from({length:localStorage.length}, (_, index) => localStorage.key(index))
+      .filter(key => key === localDraftPrefix || key?.startsWith(`${localDraftPrefix}:`));
+    const drafts = draftKeys.flatMap(key => {
+      try {
+        const cached = JSON.parse(localStorage.getItem(key));
+        const envelope = cached?.report ? cached : {
+          schemaVersion: 1,
+          reportId,
+          tabId: "legacy",
+          baseSavedAt: cached?.saved_at,
+          capturedAt: cached?.saved_at,
+          editRevision: 0,
+          report: cached,
+        };
+        if (envelope.reportId !== reportId || envelope.report?.report_id !== reportId) throw new Error("Draft does not match this report");
+        return [{key, envelope}];
+      } catch {
+        localStorage.removeItem(key);
+        return [];
+      }
+    }).sort((left, right) => timestampMicros(right.envelope.capturedAt) - timestampMicros(left.envelope.capturedAt));
+    const selectedKey = sessionStorage.getItem(recoverySelectionKey);
+    sessionStorage.removeItem(recoverySelectionKey);
+    const selectedDraft = drafts.find(draft => draft.key === selectedKey);
+    if (selectedDraft) {
+      report = selectedDraft.envelope.report;
+      recoveredDraft = true;
+      restoredDraftKey = selectedDraft.key;
+    } else {
+      recoveryCandidate = drafts[0] || null;
+    }
+  } catch (error) {
+    recoveryStorageError ||= error;
+  }
+  const clone = value => JSON.parse(JSON.stringify(value));
+  if (!Array.isArray(report.scope_targets)) report.scope_targets = clone(serverReport.scope_targets || []);
+  if (!Array.isArray(report.vulnerabilities)) report.vulnerabilities = clone(serverReport.vulnerabilities || []);
+  const maxHistoryEntries = 20;
+  let undoHistory = [];
+  let redoHistory = [];
+  try {
+    ({undoHistory = [], redoHistory = []} = JSON.parse(sessionStorage.getItem(historyKey) || "{}"));
+  } catch (error) {
+    recoveryStorageError ||= error;
+    try { sessionStorage.removeItem(historyKey); } catch (removeError) { recoveryStorageError ||= removeError; }
+  }
+  let previousReport = clone(report);
+  let activeTextTransaction = null;
+  let autoSaveTimer;
+  const autoSaveDelay = Math.max(100, Number(window.VULNREPORT_AUTOSAVE_IDLE_MS ?? window.VULNREPORT_AUTOSAVE_INTERVAL_MS) || 5000);
+  let localDraftTimer;
+  let reportChangeTimer;
+  let pendingSave = false;
+  let saveRevision = 0;
+  let savedRevision = 0;
+  let saveRetryCount = 0;
+  const maxSaveRetries = 3;
+  let saveInFlight = null;
+  let saveConflict = null;
+  let pendingScopeDecision = false;
+  let allowUnsavedUnload = false;
+  let recoveryStorageWarningShown = false;
+  const SAVE_STATES = Object.freeze({
+    UNSAVED: "unsaved",
+    SAVING: "saving",
+    SAVED: "saved",
+    FAILED: "failed",
+    CONFLICT: "conflict",
+    RECOVERED: "recovered",
+  });
   // Updates the visible autosave state in the page header.
   function setSaveState(state, label) {
     const saveButton = document.querySelector("#save-button");
@@ -617,6 +618,219 @@
     previousReport = clone(report);
     storeHistory();
   }
+  const activeTextEntry = () => {
+    const activeElement = document.activeElement;
+    return activeElement?.matches('input:not([type="checkbox"],[type="radio"],[type="file"]), textarea, [contenteditable="true"]') ? activeElement : null;
+  };
+  root.addEventListener("focusout", () => {
+    queueMicrotask(() => {
+      if (!activeTextEntry()) {
+        finalizeTextTransaction();
+        // The offer refresh sits out every tick while a field has focus, so leaving one is the
+        // moment a banner earned by typing can finally appear. queueReportChange writes nothing.
+        queueReportChange();
+      }
+    });
+  });
+  // Records edits locally; persistence happens on a 30-second cadence, manual save, or navigation.
+  function scheduleSave() {
+    saveRetryCount = 0;
+    const textEntry = activeTextEntry();
+    if (textEntry && activeTextTransaction?.input === textEntry) {
+      saveRevision += 1;
+      pendingSave = true;
+      queueLocalDraft();
+      queueBackendSave();
+      setSaveState(SAVE_STATES.UNSAVED);
+      queueReportChange();
+      return;
+    }
+    if (!textEntry) finalizeTextTransaction();
+    const changes = diff(previousReport, report);
+    if (changes.length) {
+      const action = {changes};
+      undoHistory.push(action);
+      if (undoHistory.length > maxHistoryEntries) undoHistory.shift();
+      redoHistory.length = 0;
+      activeTextTransaction = textEntry ? {input:textEntry, before:clone(previousReport), action} : null;
+      storeHistory();
+      previousReport = clone(report);
+    }
+    saveRevision += 1;
+    pendingSave = true;
+    queueLocalDraft();
+    queueBackendSave();
+    setSaveState(SAVE_STATES.UNSAVED);
+    queueReportChange();
+  }
+  function holdSaves(held) {
+    pendingScopeDecision = held;
+  }
+  function hasUnsavedEdits() {
+    return pendingSave || savedRevision < saveRevision;
+  }
+  // Sends the current report object to the server for validation and atomic saving.
+  async function save(successStatus) {
+    if (saveConflict) {
+      setSaveState(SAVE_STATES.CONFLICT);
+      return false;
+    }
+    if (pendingScopeDecision) {
+      setSaveState(SAVE_STATES.UNSAVED, "Confirm the scope target change");
+      return false;
+    }
+    if (saveInFlight) return saveInFlight;
+    if (!pendingSave || savedRevision >= saveRevision) return true;
+    const held = saveCheck?.();
+    if (held) {
+      setSaveState(SAVE_STATES.UNSAVED, held);
+      return false;
+    }
+    clearTimeout(autoSaveTimer);
+    saveInFlight = (async () => {
+      try {
+        setSaveState(SAVE_STATES.SAVING);
+        while (savedRevision < saveRevision) {
+          if (pendingScopeDecision) {
+            setSaveState(SAVE_STATES.UNSAVED, "Confirm the scope target change");
+            return false;
+          }
+          const revision = saveRevision;
+          const sentReport = clone(report);
+          const response = await fetch(`/reports/${reportId}`, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(sentReport)});
+          if (!response.ok) throw await diagnostics.fromResponse(response, "save_report", "Save failed");
+          const saved = await response.json();
+          applyCanonicalReport(sentReport, saved.report);
+          if (!activeTextTransaction) previousReport = clone(report);
+          savedRevision = revision;
+          if (savedRevision === saveRevision) {
+            pendingSave = false;
+            clearLocalDraft();
+            const visibleDiagnostic = document.querySelector("#app-diagnostics");
+            if (saveRetryCount && visibleDiagnostic?.dataset.operation === "save_report") diagnostics.clear();
+            if (recoveryStorageError) showRecoveryStorageWarning(recoveryStorageError);
+            saveRetryCount = 0;
+            setSaveState(successStatus ? SAVE_STATES.SAVING : SAVE_STATES.SAVED, successStatus);
+            onSaved();
+          } else {
+            pendingSave = true;
+            queueLocalDraft();
+            setSaveState(SAVE_STATES.SAVING);
+          }
+        }
+        return true;
+      } catch (error) {
+        if (error.status === 409) {
+          markSaveConflict(error, "save_report");
+          return false;
+        }
+        pendingSave = true;
+        persistLocalDraft();
+        showOperationError(error, "save_report", "Save failed");
+        if ((!error.status || error.status >= 500) && saveRetryCount < maxSaveRetries) {
+          saveRetryCount += 1;
+          queueBackendSave(autoSaveDelay * (2 ** (saveRetryCount - 1)));
+        }
+        return false;
+      } finally {
+        saveInFlight = null;
+      }
+    })();
+    return saveInFlight;
+  }
+  // Uploads and library inserts reach the server outside the ordinary save, so `save()` reports
+  // nothing pending while one is in flight. Navigation waits on this instead of stranding it.
+  let pendingMutation = null;
+  function trackMutation(start) {
+    const task = pendingMutation ? pendingMutation.then(start) : start();
+    const settled = task.catch(() => {});
+    pendingMutation = settled;
+    settled.then(() => { if (pendingMutation === settled) pendingMutation = null; });
+    return task;
+  }
+  async function waitForMutations() {
+    while (pendingMutation) await pendingMutation;
+  }
+  document.querySelector("#save-button")?.addEventListener("click", () => {
+    if (document.querySelector("#save-button")?.dataset.action === "resolve") {
+      document.querySelector("#app-diagnostics")?.focus({preventScroll:true});
+      return;
+    }
+    const held = saveCheck?.();
+    if (held) {
+      setSaveState(SAVE_STATES.UNSAVED, held);
+      return;
+    }
+    saveRetryCount = 0;
+    save();
+  });
+  document.querySelectorAll(".back-link").forEach(link => link.addEventListener("click", async event => {
+    event.preventDefault();
+    // Back is never gated on any page: completeness is a forward requirement, and the flush below is
+    // what protects the edits. Refusing here would skip that flush entirely.
+    await waitForMutations();
+    if (await save()) window.location.assign(link.dataset.href);
+  }));
+  const undo = async () => {
+    finalizeTextTransaction();
+    const action = undoHistory.pop();
+    if (!action) return;
+    redoHistory.push(action);
+    if (!await restoreHistory(action, "undo")) {
+      redoHistory.pop();
+      undoHistory.push(action);
+      storeHistory();
+    }
+  };
+  const redo = async () => {
+    const action = redoHistory.pop();
+    if (!action) return;
+    undoHistory.push(action);
+    if (!await restoreHistory(action, "redo")) {
+      undoHistory.pop();
+      redoHistory.push(action);
+      storeHistory();
+    }
+  };
+  document.querySelector("#undo-button")?.addEventListener("click", undo);
+  document.querySelector("#redo-button")?.addEventListener("click", redo);
+  document.addEventListener("keydown", event => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
+    event.preventDefault();
+    if (event.shiftKey) redo(); else undo();
+  });
+  updateHistoryControls();
+  window.addEventListener("pageshow", event => {
+    const historyRestore = event.persisted || performance.getEntriesByType("navigation")[0]?.type === "back_forward";
+    if (!historyRestore || pendingSave) return;
+    try {
+      const latest = sessionStorage.getItem(tabRevisionKey);
+      if (latest && timestampMicros(latest) > timestampMicros(report.saved_at)) window.location.reload();
+    } catch (error) { showRecoveryStorageWarning(error); }
+  });
+  window.addEventListener("pagehide", () => {
+    if (!pendingSave) return;
+    clearTimeout(autoSaveTimer);
+    finalizeTextTransaction();
+    persistLocalDraft();
+  });
+  window.addEventListener("beforeunload", event => {
+    if (allowUnsavedUnload || saveRevision <= savedRevision) return;
+    persistLocalDraft();
+    event.preventDefault();
+    event.returnValue = "";
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && pendingSave) void save();
+  });
+  if (recoveredDraft) {
+    saveRevision += 1;
+    pendingSave = true;
+    setSaveState(SAVE_STATES.RECOVERED);
+    queueBackendSave();
+  } else if (recoveryCandidate) {
+    showLocalRecovery(recoveryCandidate);
+  }
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
@@ -698,149 +912,6 @@
     const findings = document.querySelector("#findings");
     if (findings) findings.dataset.validationAttempted = "true";
   }
-  const activeTextEntry = () => {
-    const activeElement = document.activeElement;
-    return activeElement?.matches('input:not([type="checkbox"],[type="radio"],[type="file"]), textarea, [contenteditable="true"]') ? activeElement : null;
-  };
-  root.addEventListener("focusout", () => {
-    queueMicrotask(() => {
-      if (!activeTextEntry()) {
-        finalizeTextTransaction();
-        // The offer refresh sits out every tick while a field has focus, so leaving one is the
-        // moment a banner earned by typing can finally appear. queueReportChange writes nothing.
-        queueReportChange();
-      }
-    });
-  });
-  // Records edits locally; persistence happens on a 30-second cadence, manual save, or navigation.
-  function scheduleSave() {
-    saveRetryCount = 0;
-    const textEntry = activeTextEntry();
-    if (textEntry && activeTextTransaction?.input === textEntry) {
-      saveRevision += 1;
-      pendingSave = true;
-      queueLocalDraft();
-      queueBackendSave();
-      setSaveState(SAVE_STATES.UNSAVED);
-      queueReportChange();
-      return;
-    }
-    if (!textEntry) finalizeTextTransaction();
-    const changes = diff(previousReport, report);
-    if (changes.length) {
-      const action = {changes};
-      undoHistory.push(action);
-      if (undoHistory.length > maxHistoryEntries) undoHistory.shift();
-      redoHistory.length = 0;
-      activeTextTransaction = textEntry ? {input:textEntry, before:clone(previousReport), action} : null;
-      storeHistory();
-      previousReport = clone(report);
-    }
-    saveRevision += 1;
-    pendingSave = true;
-    queueLocalDraft();
-    queueBackendSave();
-    setSaveState(SAVE_STATES.UNSAVED);
-    queueReportChange();
-  }
-  // Sends the current report object to the server for validation and atomic saving.
-  async function save(successStatus) {
-    if (saveConflict) {
-      setSaveState(SAVE_STATES.CONFLICT);
-      return false;
-    }
-    if (pendingScopeDecision) {
-      setSaveState(SAVE_STATES.UNSAVED, "Confirm the scope target change");
-      return false;
-    }
-    if (saveInFlight) return saveInFlight;
-    if (!pendingSave || savedRevision >= saveRevision) return true;
-    if (root.dataset.step === "setup" && !validateSetupInputs(true)) {
-      setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
-      return false;
-    }
-    const stranded = root.dataset.step === "setup" ? strandedByScopeEdit() : [];
-    if (stranded.length) {
-      setSaveState(SAVE_STATES.UNSAVED, `Give ${stranded.join(", ")} another affected location`);
-      return false;
-    }
-    clearTimeout(autoSaveTimer);
-    saveInFlight = (async () => {
-      try {
-        setSaveState(SAVE_STATES.SAVING);
-        while (savedRevision < saveRevision) {
-          if (pendingScopeDecision) {
-            setSaveState(SAVE_STATES.UNSAVED, "Confirm the scope target change");
-            return false;
-          }
-          const revision = saveRevision;
-          const sentReport = clone(report);
-          const response = await fetch(`/reports/${reportId}`, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(sentReport)});
-          if (!response.ok) throw await diagnostics.fromResponse(response, "save_report", "Save failed");
-          const saved = await response.json();
-          applyCanonicalReport(sentReport, saved.report);
-          if (!activeTextTransaction) previousReport = clone(report);
-          savedRevision = revision;
-          if (savedRevision === saveRevision) {
-            pendingSave = false;
-            clearLocalDraft();
-            const visibleDiagnostic = document.querySelector("#app-diagnostics");
-            if (saveRetryCount && visibleDiagnostic?.dataset.operation === "save_report") diagnostics.clear();
-            if (recoveryStorageError) showRecoveryStorageWarning(recoveryStorageError);
-            saveRetryCount = 0;
-            setSaveState(successStatus ? SAVE_STATES.SAVING : SAVE_STATES.SAVED, successStatus);
-            updateEngagementName();
-          } else {
-            pendingSave = true;
-            queueLocalDraft();
-            setSaveState(SAVE_STATES.SAVING);
-          }
-        }
-        return true;
-      } catch (error) {
-        if (error.status === 409) {
-          markSaveConflict(error, "save_report");
-          return false;
-        }
-        pendingSave = true;
-        persistLocalDraft();
-        showOperationError(error, "save_report", "Save failed");
-        if ((!error.status || error.status >= 500) && saveRetryCount < maxSaveRetries) {
-          saveRetryCount += 1;
-          queueBackendSave(autoSaveDelay * (2 ** (saveRetryCount - 1)));
-        }
-        return false;
-      } finally {
-        saveInFlight = null;
-      }
-    })();
-    return saveInFlight;
-  }
-  // Uploads and library inserts reach the server outside the ordinary save, so `save()` reports
-  // nothing pending while one is in flight. Navigation waits on this instead of stranding it.
-  let pendingMutation = null;
-  function trackMutation(start) {
-    const task = pendingMutation ? pendingMutation.then(start) : start();
-    const settled = task.catch(() => {});
-    pendingMutation = settled;
-    settled.then(() => { if (pendingMutation === settled) pendingMutation = null; });
-    return task;
-  }
-  async function waitForMutations() {
-    while (pendingMutation) await pendingMutation;
-  }
-  document.querySelector("#save-button")?.addEventListener("click", () => {
-    if (document.querySelector("#save-button")?.dataset.action === "resolve") {
-      document.querySelector("#app-diagnostics")?.focus({preventScroll:true});
-      return;
-    }
-    if (root.dataset.step === "setup" && !validateSetupInputs(true)) {
-      setSaveState(SAVE_STATES.UNSAVED, "Correct invalid Setup fields");
-      return;
-    }
-    saveRetryCount = 0;
-    save();
-  });
   document.querySelector("#generate-report")?.addEventListener("click", async event => {
     const button = event.currentTarget;
     if (button.dataset.busy === "true") return;
@@ -852,8 +923,8 @@
     button.style.minWidth = `${button.getBoundingClientRect().width}px`;
     button.dataset.busy = "true";
     button.disabled = true;
-    button.textContent = pendingSave || savedRevision < saveRevision ? "Saving..." : "Generating...";
-    if (!(await save()) || pendingSave || savedRevision < saveRevision) {
+    button.textContent = hasUnsavedEdits() ? "Saving..." : "Generating...";
+    if (!(await save()) || hasUnsavedEdits()) {
       delete button.dataset.busy;
       button.textContent = label;
       button.disabled = false;
@@ -884,73 +955,6 @@
       button.style.minWidth = "";
     }
   });
-  document.querySelectorAll(".back-link").forEach(link => link.addEventListener("click", async event => {
-    event.preventDefault();
-    // Back is never gated on any page: completeness is a forward requirement, and the flush below is
-    // what protects the edits. Refusing here would skip that flush entirely.
-    await waitForMutations();
-    if (await save()) window.location.assign(link.dataset.href);
-  }));
-  const undo = async () => {
-    finalizeTextTransaction();
-    const action = undoHistory.pop();
-    if (!action) return;
-    redoHistory.push(action);
-    if (!await restoreHistory(action, "undo")) {
-      redoHistory.pop();
-      undoHistory.push(action);
-      storeHistory();
-    }
-  };
-  const redo = async () => {
-    const action = redoHistory.pop();
-    if (!action) return;
-    undoHistory.push(action);
-    if (!await restoreHistory(action, "redo")) {
-      undoHistory.pop();
-      redoHistory.push(action);
-      storeHistory();
-    }
-  };
-  document.querySelector("#undo-button")?.addEventListener("click", undo);
-  document.querySelector("#redo-button")?.addEventListener("click", redo);
-  document.addEventListener("keydown", event => {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
-    event.preventDefault();
-    if (event.shiftKey) redo(); else undo();
-  });
-  updateHistoryControls();
-  window.addEventListener("pageshow", event => {
-    const historyRestore = event.persisted || performance.getEntriesByType("navigation")[0]?.type === "back_forward";
-    if (!historyRestore || pendingSave) return;
-    try {
-      const latest = sessionStorage.getItem(tabRevisionKey);
-      if (latest && timestampMicros(latest) > timestampMicros(report.saved_at)) window.location.reload();
-    } catch (error) { showRecoveryStorageWarning(error); }
-  });
-  window.addEventListener("pagehide", () => {
-    if (!pendingSave) return;
-    clearTimeout(autoSaveTimer);
-    finalizeTextTransaction();
-    persistLocalDraft();
-  });
-  window.addEventListener("beforeunload", event => {
-    if (allowUnsavedUnload || saveRevision <= savedRevision) return;
-    persistLocalDraft();
-    event.preventDefault();
-    event.returnValue = "";
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && pendingSave) void save();
-  });
-  if (recoveredDraft) {
-    saveRevision += 1;
-    pendingSave = true;
-    setSaveState(SAVE_STATES.RECOVERED);
-    queueBackendSave();
-  } else if (recoveryCandidate) {
-    showLocalRecovery(recoveryCandidate);
-  }
   // Converts editor DOM content into normalized, storage-safe rich-text runs.
   function runsFrom(element) {
     const output = [];
@@ -1681,7 +1685,7 @@
       input.addEventListener("change", validate);
       validate();
     };
-    validateSetupInputs = reveal => {
+    const validateSetupInputs = reveal => {
       const invalidInputs = [...root.querySelectorAll("[data-setup-validated]")].filter(input => !input.validity.valid);
       if (reveal && invalidInputs.length) {
         if (setupNotice) setupNotice.dataset.validationAttempted = "true";
@@ -2069,7 +2073,11 @@
         .filter(finding => scopeReaches(finding.scope, report.scope_targets) && !scopeReaches(finding.scope, surviving, coverage))
         .map(finding => finding.title || "Untitled finding");
     };
-    strandedByScopeEdit = scopeTextStrandedFindings;
+    setupSaveCheck = () => {
+      if (!validateSetupInputs(true)) return "Correct invalid Setup fields";
+      const stranded = scopeTextStrandedFindings();
+      if (stranded.length) return `Give ${stranded.join(", ")} another affected location`;
+    };
     const confirmScopeTextLoss = async () => {
       const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
       const doomed = new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id));
@@ -2307,7 +2315,7 @@
                 commit();
                 if (field === "component") body.querySelectorAll("[data-scope-field]").forEach(control => control.validateSetupRule?.());
                 if (field === "component" && input.dataset.scopeConfirmationRequired === "true") {
-                  pendingScopeDecision = input.value !== input.dataset.scopeTextBefore;
+                  holdSaves(input.value !== input.dataset.scopeTextBefore);
                 }
                 clearScopeErrors();
                 scheduleSave();
@@ -2322,7 +2330,7 @@
                 // Confirmed on commit rather than per keystroke, so a half-typed name never counts as removed.
                 input.onchange = async () => {
                   if (input.dataset.scopeTextBefore === undefined || input.dataset.scopeTextBefore === input.value) {
-                    pendingScopeDecision = false;
+                    holdSaves(false);
                     return;
                   }
                   if (await confirmScopeTextLoss()) {
@@ -2332,7 +2340,7 @@
                     input.value = input.dataset.scopeTextBefore;
                     commit();
                   }
-                  pendingScopeDecision = false;
+                  holdSaves(false);
                   scheduleSave();
                 };
               }
@@ -2790,7 +2798,7 @@
             else delete byChannel[channel];
             if (!Object.keys(byChannel).length) delete finding.scope.custom_locations[environment];
             const snapshot = customInput.dataset.scopeBeforeEdit;
-            pendingScopeDecision = Boolean(snapshot && evidenceEnvironmentsLostBy(finding, JSON.parse(snapshot)).length);
+            holdSaves(Boolean(snapshot && evidenceEnvironmentsLostBy(finding, JSON.parse(snapshot)).length));
             resizeCustomLocations();
             scheduleSave();
           };
@@ -2803,7 +2811,7 @@
             try {
               accepted = await settleScopeChange(finding, JSON.parse(snapshot));
             } finally {
-              pendingScopeDecision = false;
+              holdSaves(false);
             }
             if (!accepted) renderFindings();
             scheduleSave();
@@ -2893,12 +2901,12 @@
         locationRow.querySelectorAll("[data-custom-location]").forEach(input => { const environment = input.dataset.customLocation; const channel = input.dataset.customChannel; const values = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); if (values.length) ((custom[environment] ||= {})[channel] ||= []).push(...values); });
         locationRow.querySelectorAll("[data-select-all]").forEach(control => { const options = locationRow.querySelectorAll(`[data-location="${control.dataset.selectAll}"]`); control.checked = [...options].every(option => option.checked); });
         const previousScope = finding.scope;
-        pendingScopeDecision = true;
+        holdSaves(true);
         finding.scope = {mode:"custom", target_ids:targetIds, location_values:values, custom_locations:custom};
         try {
           await settleScopeChange(finding, previousScope);
         } finally {
-          pendingScopeDecision = false;
+          holdSaves(false);
         }
         renderFindings();
         scheduleSave();

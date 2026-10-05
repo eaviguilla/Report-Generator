@@ -150,6 +150,14 @@ class StarMapTests(unittest.TestCase):
         self.assertEqual(item["warnings"], ["From: names docs/plans/gone.md, which does not exist."])
         self.assertEqual(item["context"], [])
 
+    def test_a_finished_item_that_still_lists_next_steps_is_a_warning(self) -> None:
+        steps = "\n## Next steps\n\n1. `/tdd` — build the rest.\n"
+        self.write(".scratch/f/issues/01-done.md", "# Done\n\nStatus: done\n" + steps)
+        self.write(".scratch/f/issues/02-open.md", "# Open\n\nStatus: ready-for-agent\n" + steps)
+        items = self.items()
+        self.assertEqual(items[".scratch/f/issues/01-done.md"]["warnings"], ["Finished, but still lists next steps."])
+        self.assertEqual(items[".scratch/f/issues/02-open.md"]["warnings"], [])
+
     def test_a_merged_ticket_is_wontfix_and_names_the_one_that_took_it_over(self) -> None:
         self.write(".scratch/e/map.md", "# E\n\nStatus: in-progress\n")
         self.write(".scratch/e/issues/01-keeper.md", "# Keeper\n\nType: grilling\nStatus: resolved\n")

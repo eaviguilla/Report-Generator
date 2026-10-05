@@ -74,6 +74,10 @@ def conflict_reply() -> dict:
     }
 
 
+def page_url(page_name: str) -> str:
+    return f"{ORIGIN}/reports/{REPORT_ID}/{page_name}"
+
+
 def item(uid: str, **fields) -> dict:
     return {"uid": uid, **fields}
 
@@ -230,15 +234,16 @@ class SaveModuleTests(unittest.TestCase):
         # Before the save code loads, so every timer it sets is on the test's clock.
         self.page.clock.install(time=START)
         self.page.clock.pause_at(START)
-        self.page.goto(f"{ORIGIN}/")
+        self.page.goto(page_url("findings"))
 
     def serve(self, route) -> None:
         request = route.request
         url_path = request.url.removeprefix(ORIGIN).split("?")[0]
-        if url_path == "/":
-            route.fulfill(content_type="text/html", body=PAGE)
-        elif url_path.startswith("/static/"):
+        if url_path.startswith("/static/"):
             route.fulfill(content_type="text/javascript", body=(STATIC / url_path.removeprefix("/static/")).read_text(encoding="utf-8"))
+        elif request.method == "GET":
+            # Every report page is the same blank page; a test reads which one from the address.
+            route.fulfill(content_type="text/html", body=PAGE)
         elif request.method == "PUT" and url_path.startswith("/reports/"):
             sent = json.loads(request.post_data)
             self.saves.append(sent)
@@ -252,6 +257,22 @@ class SaveModuleTests(unittest.TestCase):
 
     def answer_conflict(self, route) -> None:
         route.fulfill(**self.conflict)
+
+    @staticmethod
+    def refuse(route) -> None:
+        route.fulfill(status=422, content_type="application/json", body=json.dumps({"detail": "Refused"}))
+
+    def history(self) -> dict:
+        return self.page.evaluate("key => JSON.parse(sessionStorage.getItem(key) || '{}')", f"vulnreport-history:{REPORT_ID}")
+
+    def step_made_on(self, page_name: str, owner: str) -> dict:
+        """An edit made and saved on `page_name`; returns the report the server then holds."""
+        self.page.goto(page_url(page_name))
+        self.start(report_json(), page_name)
+        self.edit(owner)
+        self.page.locator("#save-button").click()
+        expect(self.page.locator("#save-button")).to_have_attribute("data-save-state", "saved")
+        return self.page.evaluate("saveCode.report")
 
     def edit(self, owner: str) -> None:
         self.page.evaluate("owner => { saveCode.report.engagement.app_owner = owner; saveCode.scheduleSave(); }", owner)
@@ -308,8 +329,9 @@ class SaveModuleTests(unittest.TestCase):
         tab.goto(f"{ORIGIN}/")
         return tab
 
-    def plant_copy(self, owner: str, based_on: str) -> str:
-        """A recovery copy left by a tab that closed before its edit was saved; returns its key."""
+    def plant_copy(self, owner: str, based_on: str, page_name: str | None = None) -> str:
+        """A recovery copy left by a tab that closed before its edit was saved; returns its key.
+        Without `page_name` it is a copy written before copies recorded their page."""
         report = report_json()
         report["engagement"]["app_owner"] = owner
         key = f"vulnreport-pending:{REPORT_ID}:closed-tab:copy"
@@ -317,19 +339,105 @@ class SaveModuleTests(unittest.TestCase):
             "schemaVersion": 1, "reportId": REPORT_ID, "tabId": "closed-tab", "baseSavedAt": based_on,
             "capturedAt": based_on, "editRevision": 1, "report": report,
         }
+        if page_name:
+            envelope["page"] = page_name
         self.page.evaluate("([key, envelope]) => localStorage.setItem(key, JSON.stringify(envelope))", [key, envelope])
         return key
 
-    def start(self, report: dict) -> None:
+    def start(self, report: dict, page_name: str = "findings") -> None:
         self.page.evaluate(
-            """([report, idle]) => {
+            """([report, idle, page]) => {
               window.VULNREPORT_AUTOSAVE_IDLE_MS = idle;
               window.saveCode = window.vrSave.start({
-                root: document.querySelector("main"), serverReport: report, saveCheck: () => window.heldBy, onSaved: () => {},
+                root: document.querySelector("main"), serverReport: report, page, saveCheck: () => window.heldBy, onSaved: () => {},
               });
             }""",
-            [report, IDLE_MS],
+            [report, IDLE_MS, page_name],
         )
+
+    def test_an_undo_step_and_a_recovery_copy_record_the_page_they_were_made_on(self) -> None:
+        self.page.goto(page_url("setup"))
+        self.start(report_json(), "setup")
+
+        self.edit("Typed on Setup")
+        self.page.clock.run_for(150)
+
+        [step] = self.history()["undoHistory"]
+        self.assertEqual(step["page"], "setup")
+        [copy] = self.recovery_copies()
+        self.assertEqual(copy["page"], "setup")
+
+    def test_undo_opens_the_page_of_its_step_and_redo_there_brings_the_change_back(self) -> None:
+        saved = self.step_made_on("setup", "Typed on Setup")
+        self.page.goto(page_url("findings"))
+        self.start(saved, "findings")
+
+        with self.page.expect_navigation(url=page_url("setup")):
+            self.page.locator("#undo-button").click()
+        self.assertEqual(self.saves[-1]["engagement"]["app_owner"], report_json()["engagement"]["app_owner"])
+        self.start(report_json(**self.saves[-1]), "setup")
+        with self.page.expect_navigation(url=page_url("setup")):
+            self.page.locator("#redo-button").click()
+
+        self.assertEqual(self.saves[-1]["engagement"]["app_owner"], "Typed on Setup")
+
+    def test_an_undo_reloads_the_page_when_its_step_was_made_there_or_records_no_page(self) -> None:
+        older_step = {"changes": [{"path": ["engagement", "app_owner"], "beforePresent": True, "before": "Before", "afterPresent": True, "after": ""}]}
+        cases = [("a step made on this page", None), ("a step written before steps recorded a page", older_step)]
+        for name, planted in cases:
+            with self.subTest(name):
+                self.open_page()
+                if planted:
+                    self.page.evaluate(
+                        "([key, step]) => sessionStorage.setItem(key, JSON.stringify({undoHistory: [step], redoHistory: []}))",
+                        [f"vulnreport-history:{REPORT_ID}", planted],
+                    )
+                    self.start(report_json(), "findings")
+                else:
+                    self.step_made_on("findings", "Typed on Findings")
+                sent = len(self.saves)
+
+                with self.page.expect_navigation(url=page_url("findings")):
+                    self.page.locator("#undo-button").click()
+
+                self.assertEqual(len(self.saves), sent + 1)
+                self.assertEqual(self.saves[-1]["engagement"]["app_owner"], "Before" if planted else report_json()["engagement"]["app_owner"])
+
+    def test_a_refused_undo_still_opens_the_steps_page_with_its_recovery_copy(self) -> None:
+        saved = self.step_made_on("setup", "Typed on Setup")
+        self.page.goto(page_url("findings"))
+        self.start(saved, "findings")
+        self.answers.append(self.refuse)
+
+        with self.page.expect_navigation(url=page_url("setup")):
+            self.page.locator("#undo-button").click()
+
+        [copy] = self.recovery_copies()
+        self.assertEqual(copy["page"], "setup")
+        self.start(saved, "setup")
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), report_json()["engagement"]["app_owner"])
+        self.assertEqual(self.page.locator("#save-button").get_attribute("data-save-state"), "recovered")
+
+    def test_restore_opens_the_page_where_the_copy_was_made_and_names_it(self) -> None:
+        cases = [
+            ("setup", "Restore on Setup", "setup"),
+            ("edit", "Restore on Content", "edit"),
+            ("findings", "Restore", "findings"),
+            (None, "Restore", "findings"),
+        ]
+        for copy_page, words, opens in cases:
+            with self.subTest(copy_page=copy_page):
+                self.open_page()
+                self.plant_copy("Recovered owner", report_json()["saved_at"], copy_page)
+                self.start(report_json(), "findings")
+                panel = self.page.locator("#app-diagnostics")
+                expect(panel.get_by_role("heading")).to_have_text("Unsaved changes found")
+
+                with self.page.expect_navigation(url=page_url(opens)):
+                    panel.get_by_role("button", name=words, exact=True).click()
+                self.start(report_json(), opens)
+
+                self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Recovered owner")
 
     def test_reconcile_canonical_object(self) -> None:
         self.assertTrue(RECONCILE_CASES, "an empty case table checks nothing")

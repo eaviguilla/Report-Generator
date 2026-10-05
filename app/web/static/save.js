@@ -63,10 +63,19 @@
     const activeElement = document.activeElement;
     return activeElement?.matches('input:not([type="checkbox"],[type="radio"],[type="file"]), textarea, [contenteditable="true"]') ? activeElement : null;
   };
+  // Each report page by the last part of its address, with the name a tester sees.
+  const PAGE_NAMES = Object.freeze({setup:"Setup", findings:"Findings", edit:"Content"});
+  const knownPage = name => Object.hasOwn(PAGE_NAMES, name) ? name : null;
   // app.js calls this once per report page; it returns the report the page edits, the server's or a recovery copy.
-  function start({root, serverReport, saveCheck, onSaved}) {
+  function start({root, serverReport, page, saveCheck, onSaved}) {
     const diagnostics = window.VulnReportDiagnostics;
     const reportId = serverReport.report_id;
+    // A copy written during an Undo or Redo belongs to the step's page, not this one.
+    let draftPage = page;
+    const openPage = target => {
+      if (knownPage(target) && target !== page) window.location.assign(`/reports/${reportId}/${target}`);
+      else window.location.reload();
+    };
     let report = serverReport;
     const localDraftPrefix = `vulnreport-pending:${reportId}`;
     const recoverySelectionKey = `vulnreport-recovery:${reportId}`;
@@ -210,6 +219,7 @@
           baseSavedAt: report.saved_at,
           capturedAt: new Date().toISOString(),
           editRevision: saveRevision,
+          page: draftPage,
           report,
         }));
         return true;
@@ -243,6 +253,7 @@
       }
     }
     function showLocalRecovery(candidate) {
+      const copyPage = knownPage(candidate.envelope.page);
       const basedOnCurrentRevision = candidate.envelope.baseSavedAt === serverReport.saved_at;
       const error = new Error(basedOnCurrentRevision
         ? "Unsaved changes from an earlier session are available."
@@ -257,7 +268,7 @@
         kind: "warning",
         actions: [
           {
-            label: "Restore",
+            label: copyPage && copyPage !== page ? `Restore on ${PAGE_NAMES[copyPage]}` : "Restore",
             primary: true,
             operation: "restore_local_draft",
             run: () => {
@@ -271,7 +282,7 @@
                 showRecoveryStorageWarning(error);
                 return;
               }
-              window.location.reload();
+              openPage(copyPage);
             },
           },
           {
@@ -427,15 +438,18 @@
     }
     function restoreHistory(action, direction) {
       const priorPendingSave = pendingSave;
+      const stepPage = knownPage(action.page);
       applyChanges(report, action.changes, direction);
       previousReport = clone(report);
       activeTextTransaction = null;
       pendingSave = true;
       saveRevision += 1;
+      draftPage = stepPage || page;
       const rollback = () => {
         applyChanges(report, action.changes, direction === "undo" ? "redo" : "undo");
         previousReport = clone(report);
         pendingSave = priorPendingSave;
+        draftPage = page;
         if (priorPendingSave) persistLocalDraft(); else clearLocalDraft();
         return false;
       };
@@ -447,10 +461,9 @@
         return rollback();
       }
       allowUnsavedUnload = true;
-      // Reload only once the server has the undone state, so its page gate judges what the tester now has
-      // rather than the state from before the undo.
+      // Leave only once the server has the undone state, so its page gate judges that; a refused save still leaves.
       return save().then(() => {
-        window.location.reload();
+        openPage(stepPage);
         return true;
       });
     }
@@ -491,7 +504,7 @@
       if (!textEntry) finalizeTextTransaction();
       const changes = diff(previousReport, report);
       if (changes.length) {
-        const action = {changes};
+        const action = {changes, page};
         undoHistory.push(action);
         if (undoHistory.length > maxHistoryEntries) undoHistory.shift();
         redoHistory.length = 0;

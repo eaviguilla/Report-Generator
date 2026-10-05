@@ -28,4 +28,4 @@ Replacing page tests:
 
 ## Next steps
 
-1. `/implement`: Ticket 03 is done: add the tests to `tests/test_save_module.py`, where each test has its own Web Storage. Ticket 04 can run at the same time.
+1. `/implement`: Tickets 03 and 04 are done: add the tests to `tests/test_save_module.py`, where each test has its own Web Storage, `self.answers` sets how the next saves are answered, and `saveRequests` counts what was sent. `test_unavailable_browser_recovery_storage_is_reported_without_blocking_server_save` was left for this ticket.

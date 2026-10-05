@@ -316,30 +316,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
         self.assertEqual(page.get_by_label("Application Name").input_value(), "Interval QA")
 
-    def test_transient_autosave_failure_retries_without_another_edit(self) -> None:
-        page = self.page
-        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 100")
-        page.goto(f"{self.base_url}/new")
-        report_id = page.url.split("/")[4]
-        put_count = 0
-
-        def fail_first_put(route) -> None:
-            nonlocal put_count
-            if route.request.method == "PUT":
-                put_count += 1
-                if put_count == 1:
-                    route.abort()
-                    return
-            route.continue_()
-
-        page.route(f"**/reports/{report_id}", fail_first_put)
-        page.get_by_label("Application Name").fill("Retry QA")
-        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
-
-        self.assertEqual(put_count, 2)
-        self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Retry QA")
-        self.assertEqual(page.locator("#app-diagnostics").count(), 0)
-
     def test_unavailable_browser_recovery_storage_is_reported_without_blocking_server_save(self) -> None:
         page = self.page
         page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 100")
@@ -3112,40 +3088,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIsNone(production.evidence_id, "the upload attached to the required tile instead")
         evidence = saved.evidence[supporting.evidence_id]
         self.assertTrue((main.workspace.find_path(report_id).parent / evidence.file).is_file())
-
-    def test_stale_save_keeps_local_recovery_until_confirmed(self) -> None:
-        report_id = self.ready_report()
-        first_page = self.page
-        stale_page = self.other_profile_page()
-        first_page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        stale_page.goto(f"{self.base_url}/reports/{report_id}/setup")
-
-        first_page.get_by_label("Application Owner").fill("First tab")
-        first_page.get_by_role("button", name="Save").click()
-        first_page.get_by_role("button", name="Saved").wait_for()
-        stale_page.get_by_label("Application Owner").fill("Unsaved stale tab")
-        stale_page.get_by_role("button", name="Save").click()
-        conflict = stale_page.locator("#app-diagnostics")
-        conflict.get_by_role("heading", name="Save conflict").wait_for()
-        self.assertIn("save_report", conflict.text_content())
-        self.assertIn("409", conflict.text_content())
-        self.assertIn("save_report", conflict.locator(".diagnostic-code").text_content())
-
-        local_draft = stale_page.evaluate(
-            "prefix => { const key = Object.keys(localStorage).find(candidate => candidate.startsWith(prefix)); return key ? localStorage.getItem(key) : null; }",
-            f"vulnreport-pending:{report_id}:",
-        )
-        self.assertIn("Unsaved stale tab", local_draft)
-        conflict.get_by_role("button", name="Save my version").click()
-        stale_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
-        self.assertEqual(stale_page.locator("#app-diagnostics").count(), 0)
-        self.assertEqual(main.workspace.load(report_id).engagement.app_owner, "Unsaved stale tab")
-
-        stale_page.get_by_label("Application Owner").fill("Saved after conflict")
-        stale_page.get_by_role("button", name="Save").click()
-        stale_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
-        self.assertEqual(main.workspace.load(report_id).engagement.app_owner, "Saved after conflict")
-        stale_page.close()
 
     def test_two_tabs_racing_the_first_save_after_editable_import_conflict_correctly(self) -> None:
         """An imported report's saved_at comes from the import route, not an ordinary save. Two

@@ -56,4 +56,4 @@ Decided without asking, then confirmed with the user:
 
 ## Next steps
 
-1. `/implement`: Build [ticket 03](../../save-module/issues/03-the-save-code-runs-in-a-test-with-no-report-page.md) next; tickets 01 and 02 are done. The five tickets in `.scratch/save-module/issues/` carry the work, and the spec was skipped because the Answers above already hold its decisions.
+1. `/implement`: Build [ticket 04](../../save-module/issues/04-direct-tests-for-save-conflicts-and-retries.md) or [ticket 05](../../save-module/issues/05-direct-tests-for-recovery-copies-and-held-saves.md) next, in either order; tickets 01 to 03 are done. The five tickets in `.scratch/save-module/issues/` carry the work, and the spec was skipped because the Answers above already hold its decisions.

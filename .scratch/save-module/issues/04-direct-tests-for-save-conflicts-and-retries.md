@@ -28,4 +28,4 @@ Replacing page tests:
 
 ## Next steps
 
-1. `/implement`: Start once ticket 03 is done. Ticket 05 can run at the same time.
+1. `/implement`: Ticket 03 is done: add the tests to `tests/test_save_module.py`, whose `serve` answers saves. Ticket 05 can run at the same time.

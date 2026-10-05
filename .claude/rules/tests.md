@@ -15,6 +15,9 @@ paths:
   not a runner. Generation readiness and finding completeness use the contract tests in `test_browser.py`
   (for example `test_browser_readiness_verdict_matches_server_generation_issues`). A browser test takes
   its expected message from the Python function, never from a copied string.
+- **The save code (`save.js`) is tested without a report page** in `tests/test_save_module.py`: a blank
+  page, saves answered with `page.route`, time moved with `page.clock` (ADR 0004). A page test of save
+  logic belongs there unless it needs a real report page.
 - **No fixed sleeps.** Wait for the signal: `expect(locator).to_have_text(...)`, the save state, a
   response, a navigation. To check that something did *not* happen, first wait for the event that
   would have caused it (`_next_report_change`). A pause needs a comment saying why no signal exists.

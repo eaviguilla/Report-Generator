@@ -1,6 +1,6 @@
 # Undo or a restored recovery copy can bring back a Setup value the server refuses
 
-Status: ready-for-agent
+Status: done (2026-10-06)
 From: [Give the save machine its own module and a seam](../../architecture-review/issues/06-give-the-save-machine-its-own-module-and-a-seam.md)
 Blocked by: [The save code moves into its own file](../../save-module/issues/02-the-save-code-moves-into-its-own-file.md)
 
@@ -47,6 +47,4 @@ Left out:
 - A general way out of any refused save. Back and Next still save before they leave. After this change a refused value only shows up on the page that holds it, where the tester can fix it.
 - The one refused save the browser sends before it opens the page. The server writes nothing for it.
 
-## Next steps
-
-1. `/code-review`: All four tickets in `.scratch/undo-and-restore-go-to-the-change/issues/` are done. Undo, Redo and Restore open the page where the change was made, and Setup, Findings and Content point at the field. Check the four commits against the Answers above, then set this issue done.
+Built on 5 and 6 October 2026 through the four tickets in `.scratch/undo-and-restore-go-to-the-change/issues/`. The code review's fixes are recorded in tickets 01, 02 and 04.

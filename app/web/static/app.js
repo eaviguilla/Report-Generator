@@ -203,10 +203,13 @@
     };
     document.addEventListener("click", letGo);
   };
+  const findSetupField = (container, name) => {
+    const wanted = JSON.stringify(name);
+    return [...container.querySelectorAll("input, select, textarea")].find(control => JSON.stringify(setupFieldName(control)) === wanted);
+  };
   const pointAtSetupField = name => {
     const section = [...root.querySelectorAll(":scope > section")].find(candidate => headingText(candidate) === name.section);
-    const wanted = JSON.stringify(name);
-    const field = section && [...section.querySelectorAll("input, select, textarea")].find(control => JSON.stringify(setupFieldName(control)) === wanted);
+    const field = section && findSetupField(section, name);
     (field || section)?.scrollIntoView({block: field ? "center" : "start"});
     if (field) markUntilClickElsewhere(field);
   };
@@ -216,8 +219,9 @@
     const finding = row.dataset.finding;
     const control = element.matches("input, select, textarea");
     if (row.classList.contains("finding-location-row")) {
-      if (control) return {finding, label: element.getAttribute("aria-label")};
-      // Select all reads Deselect all once pressed, so it is named by its environment.
+      const label = control && element.getAttribute("aria-label");
+      if (label) return {finding, label};
+      // Select all reads Deselect all once pressed, and its box before the row is enhanced has no label, so both go by environment.
       const group = element.closest("[data-location-group]")?.dataset.locationGroup;
       if (group) return {finding, group};
     }
@@ -234,15 +238,16 @@
     };
   };
   const pageFieldName = {setup:setupFieldName, findings:findingsFieldName, edit:contentFieldName}[page];
-  // A rebuild drops the focused control before its step is recorded, so the step names what the rebuild saw.
+  // A rebuild or a button takes focus off the changed field before its step is recorded, so the step takes the name kept here.
   let fieldBeforeRebuild = null;
-  const rememberFocusedField = () => {
-    fieldBeforeRebuild = pageFieldName(document.activeElement);
+  const keepFieldName = name => {
+    fieldBeforeRebuild = name;
     queueMicrotask(() => { fieldBeforeRebuild = null; });
   };
+  const rememberFocusedField = () => keepFieldName(pageFieldName(document.activeElement));
   const nameField = element => pageFieldName(element) || fieldBeforeRebuild;
   const {isRecord, activeTextEntry} = window.vrSave;
-  const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, saveCheck, onSaved, nameField});
+  const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
@@ -1229,6 +1234,7 @@
         offerButton(blank ? "Use it" : "Update it", "primary", () => {
           const textarea = limitationsField.querySelector("textarea");
           textarea.value = suggestion;
+          keepFieldName(setupFieldName(textarea));
           // Assigning .value fires nothing, so the [data-path] handler would never see it and a
           // setCustomValidity left by earlier typing would go on blocking a value that is now clean.
           textarea.dispatchEvent(new Event("input", {bubbles: true}));
@@ -1253,7 +1259,7 @@
           const [roleInput, usernameInput] = row.querySelectorAll("input");
           roleInput.oninput = () => { account.user_role = roleInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
           usernameInput.oninput = () => { account.username = usernameInput.value; row.querySelectorAll("input").forEach(input => input.classList.remove("validation-error")); scheduleSave(); };
-          row.querySelector("button").onclick = () => { report.engagement.test_accounts.splice(index, 1); renderAccounts(); scheduleSave(); };
+          row.querySelector("button").onclick = () => { keepFieldName(setupFieldName(roleInput)); report.engagement.test_accounts.splice(index, 1); renderAccounts(); scheduleSave(); };
           accountBody.append(row);
           const controller = attachSetupMessage([roleInput, usernameInput], message => {
             const messageRow = document.createElement("tr");
@@ -1512,7 +1518,7 @@
     };
     const renderCoverage = () => {
       // Rebuilt under the tester's cursor, so focus goes back to the same control and the undo step can name it.
-      const focusedName = JSON.stringify(setupFieldName(document.activeElement));
+      const focusedName = setupFieldName(document.activeElement);
       [configuration, windows].forEach(container => {
         container.querySelectorAll("[data-setup-message-control]").forEach(control => setupMessageControllers.delete(control));
       });
@@ -1796,6 +1802,7 @@
             // The row is taken out first because the confirmation reads the draft to work out which
             // findings lose a target, and it has to read the state being proposed.
             remove.onclick = async () => {
+              const removedField = setupFieldName(rowInputs[0]);
               const before = fields.map(field => scopeTextField(environment, channel, field));
               row.remove();
               commit();
@@ -1804,6 +1811,7 @@
               fields.forEach((field, column) => setScopeTextField(environment, channel, field, before[column]));
               renderRows();
               if (await confirmation) {
+                keepFieldName(removedField);
                 fields.forEach((field, column) => setScopeTextField(environment, channel, field, proposed[column]));
                 dropRemovedTargets();
                 renderRows();
@@ -1907,10 +1915,7 @@
         scopeGrid.append(panel);
       });
       if (setupNotice?.dataset.validationAttempted === "true") updateSetupFieldIssues(true);
-      if (focusedName !== "null") {
-        [...root.querySelectorAll("#test-configuration input, #test-windows input, #test-windows select")]
-          .find(control => JSON.stringify(setupFieldName(control)) === focusedName)?.focus({preventScroll:true});
-      }
+      if (focusedName) findSetupField(root, focusedName)?.focus({preventScroll:true});
     };
     renderCoverage();
     }

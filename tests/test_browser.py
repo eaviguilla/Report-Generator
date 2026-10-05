@@ -316,73 +316,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
         self.assertEqual(page.get_by_label("Application Name").input_value(), "Interval QA")
 
-    def test_unavailable_browser_recovery_storage_is_reported_without_blocking_server_save(self) -> None:
-        page = self.page
-        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 100")
-        page.add_init_script(
-            "Object.defineProperty(window, 'localStorage', {configurable:true, get(){throw new DOMException('blocked', 'SecurityError')}})"
-        )
-        page.goto(f"{self.base_url}/new")
-        report_id = page.url.split("/")[4]
-        put_count = 0
-
-        def fail_first_put(route) -> None:
-            nonlocal put_count
-            if route.request.method == "PUT":
-                put_count += 1
-                if put_count == 1:
-                    route.abort()
-                    return
-            route.continue_()
-
-        page.route(f"**/reports/{report_id}", fail_first_put)
-
-        warning = page.locator("#app-diagnostics")
-        warning.get_by_role("heading", name="Browser recovery unavailable").wait_for()
-        self.assertIn("Server saves still work", warning.text_content())
-
-        page.get_by_label("Application Name").fill("Storage Warning QA")
-        page.locator("#save-button").click()
-        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
-        self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Storage Warning QA")
-        self.assertEqual(put_count, 2)
-        warning.get_by_role("heading", name="Browser recovery unavailable").wait_for()
-
-    def test_recovery_actions_report_late_storage_failures_without_losing_the_draft(self) -> None:
-        report_id = self.ready_report()
-        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
-        report["engagement"]["app_owner"] = "Recover me"
-        draft_key = f"vulnreport-pending:{report_id}:orphan"
-        page = self.page
-        self.plant_recovery_draft(report, "setup", "orphan")
-
-        page.evaluate(
-            """() => {
-                const original = Storage.prototype.setItem;
-                Storage.prototype.setItem = function(key, value) {
-                    if (key.startsWith('vulnreport-recovery:')) throw new DOMException('blocked', 'SecurityError');
-                    return original.call(this, key, value);
-                };
-            }"""
-        )
-        page.get_by_role("button", name="Restore", exact=True).click()
-        page.get_by_role("heading", name="Browser recovery unavailable").wait_for()
-        self.assertIsNotNone(page.evaluate("key => localStorage.getItem(key)", draft_key))
-
-        page.reload()
-        page.evaluate(
-            """() => {
-                const original = Storage.prototype.removeItem;
-                Storage.prototype.removeItem = function(key) {
-                    if (key.includes(':orphan')) throw new DOMException('blocked', 'SecurityError');
-                    return original.call(this, key);
-                };
-            }"""
-        )
-        page.get_by_role("button", name="Discard", exact=True).click()
-        page.get_by_role("heading", name="Browser recovery unavailable").wait_for()
-        self.assertIsNotNone(page.evaluate("key => localStorage.getItem(key)", draft_key))
-
     def test_undo_does_not_reload_or_lose_changes_when_recovery_write_fails(self) -> None:
         report_id = self.ready_report()
         page = self.page
@@ -3343,36 +3276,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Newer backend owner")
         recovery.get_by_role("button", name="Discard", exact=True).click()
         self.assertIsNone(page.evaluate("key => localStorage.getItem(key)", local_key))
-
-    def test_saving_one_tab_keeps_the_other_tabs_recovery_snapshot(self) -> None:
-        report_id = self.ready_report()
-        first_page = self.page
-        second_page = self.other_profile_page()
-        first_page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        second_page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        first_tab_id = first_page.evaluate("sessionStorage.getItem('vulnreport-tab-id')")
-        second_tab_id = second_page.evaluate("sessionStorage.getItem('vulnreport-tab-id')")
-        self.assertNotEqual(
-            first_tab_id,
-            second_tab_id,
-        )
-
-        prefix = f"vulnreport-pending:{report_id}:"
-        first_page.evaluate(
-            "([firstKey, secondKey]) => { localStorage.setItem(firstKey, 'First tab pending'); localStorage.setItem(secondKey, 'Second tab pending'); }",
-            [f"{prefix}{first_tab_id}", f"{prefix}{second_tab_id}"],
-        )
-        first_page.get_by_label("Application Owner").fill("First tab pending")
-        first_page.locator("#save-button").click()
-        first_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=5_000)
-
-        remaining = first_page.evaluate(
-            "prefix => Object.keys(localStorage).filter(key => key.startsWith(prefix)).map(key => localStorage.getItem(key))",
-            prefix,
-        )
-        self.assertEqual(len(remaining), 1)
-        self.assertIn("Second tab pending", remaining[0])
-        second_page.close()
 
     def test_text_undo_redo_and_interrupted_save_recovery(self) -> None:
         report_id = self.ready_report()

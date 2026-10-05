@@ -46,6 +46,8 @@ START = datetime(2026, 10, 5, 9, 0, tzinfo=timezone.utc)
 IDLE_MS = 5000
 REPORT_ID = "r_save_module"
 FAILED = "Save failed - Retry"
+SAVED = r"^Saved \d\d:\d\d$"
+SCOPE_HOLD = "Confirm the scope target change"
 
 
 def report_json(**fields) -> dict:
@@ -173,11 +175,13 @@ class SaveModuleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.open_page()
 
-    def open_page(self) -> None:
+    def open_page(self, init_script: str | None = None) -> None:
         # A context per page, so no test sees another's Web Storage.
         context = self.browser.new_context()
         self.addCleanup(context.close)
         self.page = context.new_page()
+        if init_script:
+            self.page.add_init_script(init_script)
         # Every save request, answered or not; each one takes the next answer, and a success once they run out.
         self.saves: list[dict] = []
         self.answers: list = []
@@ -256,11 +260,32 @@ class SaveModuleTests(unittest.TestCase):
         self.wait_without_a_save(IDLE_MS * 100)
         self.assertEqual(len(self.saves), 4)
 
+    def open_tab(self):
+        """A second tab in the same browser, sharing localStorage with self.page but not sessionStorage."""
+        tab = self.page.context.new_page()
+        tab.route(f"{ORIGIN}/**", self.serve)
+        tab.goto(f"{ORIGIN}/")
+        return tab
+
+    def plant_copy(self, owner: str, based_on: str) -> str:
+        """A recovery copy left by a tab that closed before its edit was saved; returns its key."""
+        report = report_json()
+        report["engagement"]["app_owner"] = owner
+        key = f"vulnreport-pending:{REPORT_ID}:closed-tab:copy"
+        envelope = {
+            "schemaVersion": 1, "reportId": REPORT_ID, "tabId": "closed-tab", "baseSavedAt": based_on,
+            "capturedAt": based_on, "editRevision": 1, "report": report,
+        }
+        self.page.evaluate("([key, envelope]) => localStorage.setItem(key, JSON.stringify(envelope))", [key, envelope])
+        return key
+
     def start(self, report: dict) -> None:
         self.page.evaluate(
             """([report, idle]) => {
               window.VULNREPORT_AUTOSAVE_IDLE_MS = idle;
-              window.saveCode = window.vrSave.start({root: document.querySelector("main"), serverReport: report, onSaved: () => {}});
+              window.saveCode = window.vrSave.start({
+                root: document.querySelector("main"), serverReport: report, saveCheck: () => window.heldBy, onSaved: () => {},
+              });
             }""",
             [report, IDLE_MS],
         )
@@ -406,6 +431,204 @@ class SaveModuleTests(unittest.TestCase):
                 self.wait_without_a_save(IDLE_MS - 1)
                 self.page.clock.run_for(1)
                 self.expect_attempts(6, settled=r"^Saved \d\d:\d\d$")
+
+    def test_an_edit_writes_a_recovery_copy_that_its_save_removes(self) -> None:
+        self.start(report_json())
+        self.edit("Not saved yet")
+        self.page.clock.run_for(149)
+        self.assertEqual(self.recovery_copies(), [])
+        self.page.clock.run_for(1)
+
+        [copy] = self.recovery_copies()
+        self.assertEqual(copy["report"]["engagement"]["app_owner"], "Not saved yet")
+        self.assertEqual(copy["baseSavedAt"], report_json()["saved_at"])
+
+        self.page.clock.run_for(IDLE_MS - 150)
+        self.expect_attempts(1, settled=SAVED)
+        self.assertEqual(self.recovery_copies(), [])
+
+    def test_restore_makes_the_copy_left_behind_the_report_and_saves_it_after_the_idle_time(self) -> None:
+        self.plant_copy("Recovered owner", report_json()["saved_at"])
+        self.start(report_json())
+        panel = self.page.locator("#app-diagnostics")
+        expect(panel.get_by_role("heading")).to_have_text("Unsaved changes found")
+        self.assertNotEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Recovered owner")
+
+        with self.page.expect_navigation():
+            panel.get_by_role("button", name="Restore", exact=True).click()
+        self.start(report_json())
+
+        save_button = self.page.locator("#save-button")
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Recovered owner")
+        self.assertEqual(save_button.text_content(), "Recovered changes")
+        self.assertEqual(save_button.get_attribute("data-save-state"), "recovered")
+        self.wait_without_a_save(IDLE_MS - 1)
+        self.page.clock.run_for(1)
+        self.expect_attempts(1, settled=SAVED)
+        self.assertEqual(self.saves[0]["engagement"]["app_owner"], "Recovered owner")
+        self.assertEqual(self.recovery_copies(), [])
+
+    def test_discard_removes_the_copy_left_behind(self) -> None:
+        offers = [
+            ("a copy of the saved revision", report_json()["saved_at"], "Unsaved changes from an earlier session are available."),
+            ("a copy of an older revision", START.replace(hour=8).isoformat(), "A local draft was created from an older saved version of this report."),
+        ]
+        for name, based_on, message in offers:
+            with self.subTest(name):
+                self.open_page()
+                self.plant_copy("Discarded owner", based_on)
+                self.start(report_json())
+                panel = self.page.locator("#app-diagnostics")
+                expect(panel.get_by_role("heading")).to_have_text("Unsaved changes found")
+                self.assertEqual(panel.locator(".diagnostic-message").text_content(), message)
+
+                panel.get_by_role("button", name="Discard", exact=True).click()
+
+                expect(panel).to_have_count(0)
+                self.assertEqual(self.recovery_copies(), [])
+                self.assertEqual(self.page.locator("#save-button").get_attribute("data-save-state"), "saved")
+                self.assertNotEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Discarded owner")
+                self.wait_without_a_save(IDLE_MS * 10)
+
+    def test_a_save_leaves_another_tabs_copy_alone(self) -> None:
+        first = self.page
+        second = self.open_tab()
+        for tab, owner in ((first, "First tab"), (second, "Second tab")):
+            self.page = tab
+            self.start(report_json())
+            self.edit(owner)
+        # One clock serves the whole browser, so both tabs write their copies now.
+        first.clock.run_for(150)
+        tab_ids = {copy["report"]["engagement"]["app_owner"]: copy["tabId"] for copy in self.recovery_copies()}
+        self.assertEqual(sorted(tab_ids), ["First tab", "Second tab"])
+        self.assertNotEqual(tab_ids["First tab"], tab_ids["Second tab"])
+        # The first tab's save also removes its copy under the key used before each page load had its own.
+        older_key = f"vulnreport-pending:{REPORT_ID}:{tab_ids['First tab']}"
+        first.evaluate(
+            "key => localStorage.setItem(key, JSON.stringify({tabId: key.split(':').at(-1), report: {engagement: {app_owner: 'Older key'}}}))",
+            older_key,
+        )
+
+        self.page = first
+        first.locator("#save-button").click()
+        self.expect_attempts(1, settled=SAVED)
+
+        [copy] = self.recovery_copies()
+        self.assertEqual(copy["tabId"], tab_ids["Second tab"])
+        self.assertEqual(copy["report"]["engagement"]["app_owner"], "Second tab")
+
+    def test_web_storage_that_throws_is_reported_and_saves_still_reach_the_server(self) -> None:
+        for storage in ("localStorage", "sessionStorage"):
+            with self.subTest(storage):
+                self.open_page(
+                    f"Object.defineProperty(window, '{storage}', {{configurable: true, get() {{ throw new DOMException('blocked', 'SecurityError'); }}}})"
+                )
+                self.answers.append(lambda route: route.abort())
+                self.start(report_json())
+                heading = self.page.locator("#app-diagnostics").get_by_role("heading")
+                expect(heading).to_have_text("Browser recovery unavailable")
+                self.assertIn("Server saves still work", self.page.locator("#app-diagnostics").text_content())
+
+                self.edit("Saved without storage")
+                self.page.clock.run_for(IDLE_MS)
+                self.expect_attempts(1)
+                self.page.clock.run_for(IDLE_MS)
+                self.expect_attempts(2, settled=SAVED)
+
+                self.assertEqual(self.saves[1]["engagement"]["app_owner"], "Saved without storage")
+                # The failure notice replaced the warning; the save that cleared it brings the warning back.
+                expect(heading).to_have_text("Browser recovery unavailable")
+
+    def test_restore_or_discard_that_storage_refuses_keeps_the_copy_and_says_so(self) -> None:
+        refusals = [
+            ("Restore", "setItem", "vulnreport-recovery:"),
+            ("Discard", "removeItem", "vulnreport-pending:"),
+        ]
+        for action, method, refused_prefix in refusals:
+            with self.subTest(action):
+                self.open_page()
+                key = self.plant_copy("Kept owner", report_json()["saved_at"])
+                self.start(report_json())
+                self.page.evaluate(
+                    """([method, prefix]) => {
+                      const original = Storage.prototype[method];
+                      Storage.prototype[method] = function(key, ...rest) {
+                        if (key.startsWith(prefix)) throw new DOMException('blocked', 'SecurityError');
+                        return original.call(this, key, ...rest);
+                      };
+                    }""",
+                    [method, refused_prefix],
+                )
+                panel = self.page.locator("#app-diagnostics")
+
+                panel.get_by_role("button", name=action, exact=True).click()
+
+                expect(panel.get_by_role("heading")).to_have_text("Browser recovery unavailable")
+                self.assertEqual(self.page.evaluate("typeof saveCode"), "object", "the page reloaded")
+                self.assertIsNotNone(self.page.evaluate("key => localStorage.getItem(key)", key))
+
+    def test_a_save_check_that_returns_words_holds_the_save(self) -> None:
+        words = "Correct invalid Setup fields"
+        self.start(report_json())
+        save_button = self.page.locator("#save-button")
+        self.page.evaluate("words => { window.heldBy = words; }", words)
+
+        self.edit("Held by the check")
+        self.wait_without_a_save(IDLE_MS * 10)
+        self.assertEqual(save_button.text_content(), words)
+        self.assertEqual(save_button.get_attribute("data-save-state"), "unsaved")
+        save_button.click()
+        self.assertEqual(self.page.evaluate("saveRequests"), 0)
+        self.assertEqual(save_button.text_content(), words)
+
+        self.page.evaluate("() => { window.heldBy = undefined; }")
+        save_button.click()
+        self.expect_attempts(1, settled=SAVED)
+        self.assertEqual(self.saves[0]["engagement"]["app_owner"], "Held by the check")
+
+    def test_hold_saves_holds_every_save_until_released(self) -> None:
+        self.start(report_json())
+        save_button = self.page.locator("#save-button")
+        self.page.evaluate("() => saveCode.holdSaves(true)")
+
+        self.edit("Held for the scope dialog")
+        self.wait_without_a_save(IDLE_MS * 10)
+        self.assertEqual(save_button.text_content(), SCOPE_HOLD)
+        save_button.click()
+        # An upload asks for a save, with its words, before it goes.
+        self.assertIs(self.page.evaluate("() => saveCode.save('Uploading...')"), False)
+        self.assertEqual(self.page.evaluate("saveRequests"), 0)
+        self.assertEqual(save_button.text_content(), SCOPE_HOLD)
+
+        self.page.evaluate("() => saveCode.holdSaves(false)")
+        save_button.click()
+        self.expect_attempts(1, settled=SAVED)
+        self.assertEqual(self.saves[0]["engagement"]["app_owner"], "Held for the scope dialog")
+
+    def test_hold_saves_stops_the_next_round_of_a_save_already_out(self) -> None:
+        self.start(report_json())
+        save_button = self.page.locator("#save-button")
+        self.edit("Sent")
+        # One step in the page, so the save is still out when the second edit and the hold arrive.
+        self.page.evaluate(
+            """() => {
+              saveCode.save();
+              saveCode.report.engagement.app_owner = 'Typed while it was out';
+              saveCode.scheduleSave();
+              saveCode.holdSaves(true);
+            }"""
+        )
+
+        # The loop sets these words only once the first answer is back.
+        expect(save_button).to_have_text(SCOPE_HOLD)
+        self.assertEqual(len(self.saves), 1)
+        self.assertEqual(self.saves[0]["engagement"]["app_owner"], "Sent")
+        self.wait_without_a_save(IDLE_MS * 10)
+
+        self.page.evaluate("() => saveCode.holdSaves(false)")
+        save_button.click()
+        self.expect_attempts(2, settled=SAVED)
+        self.assertEqual(self.saves[1]["engagement"]["app_owner"], "Typed while it was out")
 
 
 if __name__ == "__main__":

@@ -363,6 +363,8 @@ def link_items(items: dict[str, Item], repo: Path) -> None:
             item.word = word if word and word != item.status else None
             if warning:
                 item.warnings.append(warning)
+            if item.status in FINISHED and next_steps(item.lines):
+                item.warnings.append("Finished, but still lists next steps.")
 
 
 def ref(item: Item) -> str:

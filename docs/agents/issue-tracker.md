@@ -49,7 +49,7 @@ Three header lines link one item to another. They sit beside `Status:`. In a pla
 - `Blocked by:` in an item that must wait for another. It also takes the numbers or titles of tickets in the same folder.
 - `Merged into:` in an item you close because another took over its question or work. Set its status to `wontfix`.
 
-`tools/observatory/observatory.py` draws the work items as a star map from these statuses, links and next steps.
+`tools/star_map/star_map.py` draws the work items as the Star Map from these statuses, links and next steps.
 
 When `/triage` finds that a request matches a file in `.out-of-scope/` and decides to let it go ahead:
 

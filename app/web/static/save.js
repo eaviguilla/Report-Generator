@@ -116,7 +116,9 @@
           localStorage.removeItem(key);
           return [];
         }
-      }).sort((left, right) => timestampMicros(right.envelope.capturedAt) - timestampMicros(left.envelope.capturedAt));
+      }).sort((left, right) =>
+        timestampMicros(right.envelope.capturedAt) - timestampMicros(left.envelope.capturedAt)
+        || timestampMicros(right.envelope.baseSavedAt) - timestampMicros(left.envelope.baseSavedAt));
       const selectedKey = sessionStorage.getItem(recoverySelectionKey);
       sessionStorage.removeItem(recoverySelectionKey);
       const selectedDraft = drafts.find(draft => draft.key === selectedKey);
@@ -234,7 +236,11 @@
         localStorage.removeItem(legacyLocalDraftKey);
         if (restoredDraftKey && restoredDraftKey !== localDraftKey) localStorage.removeItem(restoredDraftKey);
         restoredDraftKey = null;
-      } catch (error) { showRecoveryStorageWarning(error); }
+        return true;
+      } catch (error) {
+        showRecoveryStorageWarning(error);
+        return false;
+      }
     }
     function showLocalRecovery(candidate) {
       const basedOnCurrentRevision = candidate.envelope.baseSavedAt === serverReport.saved_at;
@@ -255,6 +261,10 @@
             primary: true,
             operation: "restore_local_draft",
             run: () => {
+              if (hasUnsavedEdits()) {
+                setSaveState(SAVE_STATES.UNSAVED, "Save current changes before restoring");
+                return;
+              }
               try {
                 sessionStorage.setItem(recoverySelectionKey, candidate.key);
               } catch (error) {
@@ -275,7 +285,7 @@
                 return;
               }
               diagnostics.clear();
-              setSaveState(SAVE_STATES.SAVED);
+              if (!hasUnsavedEdits()) setSaveState(SAVE_STATES.SAVED);
             },
           },
         ],
@@ -354,8 +364,13 @@
             label: "Load latest",
             operation: "load_latest_report",
             run: () => {
-              clearLocalDraft();
-              try { sessionStorage.removeItem(historyKey); } catch (error) { showRecoveryStorageWarning(error); }
+              try {
+                sessionStorage.removeItem(historyKey);
+              } catch (error) {
+                showRecoveryStorageWarning(error);
+                return;
+              }
+              if (!clearLocalDraft()) return;
               clearSaveConflict();
               // The tester's version is discarded, so pagehide must not write it back as the page reloads.
               pendingSave = false;
@@ -517,12 +532,21 @@
       clearTimeout(autoSaveTimer);
       saveInFlight = (async () => {
         try {
-          setSaveState(SAVE_STATES.SAVING);
+          let firstRound = true;
           while (savedRevision < saveRevision) {
             if (pendingScopeDecision) {
               setSaveState(SAVE_STATES.UNSAVED, "Confirm the scope target change");
               return false;
             }
+            if (!firstRound) {
+              const laterHeld = saveCheck?.();
+              if (laterHeld) {
+                setSaveState(SAVE_STATES.UNSAVED, laterHeld);
+                return false;
+              }
+            }
+            firstRound = false;
+            setSaveState(SAVE_STATES.SAVING);
             const revision = saveRevision;
             const sentReport = clone(report);
             const response = await fetch(`/reports/${reportId}`, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(sentReport)});

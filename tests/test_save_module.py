@@ -162,6 +162,47 @@ RECONCILE_CASES = [
 
 @unittest.skipIf(sync_playwright is None, "Playwright is not installed")
 class SaveModuleTests(unittest.TestCase):
+    def test_a_page_check_stops_the_next_round_of_a_save_already_out(self) -> None:
+        self.start(report_json())
+        save_button = self.page.locator("#save-button")
+        self.edit("Sent")
+        self.page.evaluate(
+            """hold => {
+              saveCode.save();
+              saveCode.report.engagement.app_owner = 'Typed while it was out';
+              saveCode.scheduleSave();
+              window.heldBy = hold;
+            }""",
+            SCOPE_HOLD,
+        )
+
+        expect(save_button).to_have_text(SCOPE_HOLD)
+        self.assertEqual(len(self.saves), 1)
+        self.assertEqual(self.saves[0]["engagement"]["app_owner"], "Sent")
+
+    def test_load_latest_stays_in_conflict_when_undo_history_cannot_be_removed(self) -> None:
+                self.run_into_conflict()
+                history_key = f"vulnreport-history:{REPORT_ID}"
+                self.page.evaluate(
+                        """prefix => {
+                            const original = Storage.prototype.removeItem;
+                            Storage.prototype.removeItem = function(key, ...rest) {
+                                if (key.startsWith(prefix)) throw new DOMException('blocked', 'SecurityError');
+                                return original.call(this, key, ...rest);
+                            };
+                        }""",
+                        "vulnreport-history:",
+                )
+                panel = self.page.locator("#app-diagnostics")
+
+                panel.get_by_role("button", name="Load latest").click()
+
+                self.assertEqual(self.page.evaluate("typeof saveCode"), "object", "the page reloaded")
+                expect(panel.get_by_role("heading")).to_have_text("Browser recovery unavailable")
+                self.assertEqual(self.page.locator("#save-button").get_attribute("data-save-state"), "conflict")
+                self.assertEqual(len(self.recovery_copies()), 1)
+                self.assertIn(history_key, self.stored_keys()["session"])
+
     @classmethod
     def setUpClass(cls) -> None:
         # Built before Playwright starts, which runs an event loop of its own.
@@ -368,6 +409,31 @@ class SaveModuleTests(unittest.TestCase):
         self.assertEqual(len(self.saves), 3)
         self.assertEqual(self.saves[2]["engagement"]["app_owner"], "Saved after the conflict")
 
+    def test_save_my_version_can_receive_and_resolve_a_second_conflict(self) -> None:
+        self.run_into_conflict()
+        second_latest = START.replace(minute=2).isoformat()
+        second_conflict = {**self.conflict}
+        second_body = json.loads(second_conflict["body"])
+        second_body["error"]["latest_saved_at"] = second_latest
+        second_conflict["body"] = json.dumps(second_body)
+        self.answers.append(lambda route: route.fulfill(**second_conflict))
+        panel = self.page.locator("#app-diagnostics")
+
+        panel.get_by_role("button", name="Save my version").click()
+
+        expect(self.page.locator("#save-button")).to_have_attribute("data-save-state", "conflict")
+        expect(panel.get_by_role("heading")).to_have_text("Save conflict")
+        self.assertEqual(len(self.saves), 2)
+        self.assertEqual(self.saves[1]["saved_at"], self.latest_saved_at)
+        self.assertEqual(len(self.recovery_copies()), 1)
+
+        panel.get_by_role("button", name="Save my version").click()
+
+        expect(self.page.locator("#save-button")).to_have_attribute("data-save-state", "saved")
+        self.assertEqual(len(self.saves), 3)
+        self.assertEqual(self.saves[2]["saved_at"], second_latest)
+        self.assertEqual(self.recovery_copies(), [])
+
     def test_load_latest_removes_the_recovery_copy_and_the_undo_history_and_reloads(self) -> None:
         self.run_into_conflict()
         history_key = f"vulnreport-history:{REPORT_ID}"
@@ -380,6 +446,26 @@ class SaveModuleTests(unittest.TestCase):
         self.assertEqual(self.recovery_copies(), [])
         self.assertNotIn(history_key, self.stored_keys()["session"])
         self.assertEqual(len(self.saves), 1)
+
+    def test_load_latest_stays_in_conflict_when_the_recovery_copy_cannot_be_removed(self) -> None:
+        self.run_into_conflict()
+        self.page.evaluate(
+            """() => {
+              const original = Storage.prototype.removeItem;
+              Storage.prototype.removeItem = function(key, ...rest) {
+                if (key.startsWith('vulnreport-pending:')) throw new DOMException('blocked', 'SecurityError');
+                return original.call(this, key, ...rest);
+              };
+            }"""
+        )
+        panel = self.page.locator("#app-diagnostics")
+
+        panel.get_by_role("button", name="Load latest").click()
+
+        self.assertEqual(self.page.evaluate("typeof saveCode"), "object", "the page reloaded")
+        expect(panel.get_by_role("heading")).to_have_text("Browser recovery unavailable")
+        self.assertEqual(self.page.locator("#save-button").get_attribute("data-save-state"), "conflict")
+        self.assertEqual(len(self.recovery_copies()), 1)
 
     def test_a_failed_save_retries_three_times_after_one_two_and_four_idle_delays(self) -> None:
         failures = [
@@ -468,6 +554,33 @@ class SaveModuleTests(unittest.TestCase):
         self.assertEqual(self.saves[0]["engagement"]["app_owner"], "Recovered owner")
         self.assertEqual(self.recovery_copies(), [])
 
+    def test_restore_waits_for_a_fresh_edit_to_save_before_arming_the_old_copy(self) -> None:
+        self.plant_copy("Old recovered owner", report_json()["saved_at"])
+        self.start(report_json())
+        self.edit("Fresh owner")
+        dialogs = []
+
+        def cancel_leave(dialog) -> None:
+            dialogs.append(dialog.type)
+            dialog.dismiss()
+
+        self.page.once("dialog", cancel_leave)
+        self.page.locator("#app-diagnostics").get_by_role("button", name="Restore", exact=True).click()
+
+        self.assertEqual(dialogs, [])
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Fresh owner")
+        save_button = self.page.locator("#save-button")
+        expect(save_button).to_have_text("Save current changes before restoring")
+        self.assertEqual(save_button.get_attribute("data-save-state"), "unsaved")
+        save_button.click()
+        expect(save_button).to_have_attribute("data-save-state", "saved")
+        saved_report = self.page.evaluate("saveCode.report")
+
+        self.page.reload()
+        self.start(saved_report)
+
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Fresh owner")
+
     def test_discard_removes_the_copy_left_behind(self) -> None:
         offers = [
             ("a copy of the saved revision", report_json()["saved_at"], "Unsaved changes from an earlier session are available."),
@@ -489,6 +602,54 @@ class SaveModuleTests(unittest.TestCase):
                 self.assertEqual(self.page.locator("#save-button").get_attribute("data-save-state"), "saved")
                 self.assertNotEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Discarded owner")
                 self.wait_without_a_save(IDLE_MS * 10)
+
+    def test_discarding_an_old_copy_does_not_claim_a_new_edit_is_saved(self) -> None:
+        self.plant_copy("Discarded owner", report_json()["saved_at"])
+        self.start(report_json())
+        panel = self.page.locator("#app-diagnostics")
+        expect(panel.get_by_role("heading")).to_have_text("Unsaved changes found")
+
+        self.edit("Fresh edit")
+        panel.get_by_role("button", name="Discard", exact=True).click()
+
+        expect(panel).to_have_count(0)
+        self.assertEqual(self.recovery_copies(), [])
+        self.assertEqual(self.page.locator("#save-button").get_attribute("data-save-state"), "unsaved")
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Fresh edit")
+
+    def test_equal_time_recovery_copies_prefer_the_newer_server_revision(self) -> None:
+        current = report_json()
+        copies = []
+        for suffix, owner, based_on in (
+            ("older", "Older-base copy", START.replace(hour=8).isoformat()),
+            ("current", "Current-base copy", current["saved_at"]),
+        ):
+            recovered = report_json()
+            recovered["engagement"]["app_owner"] = owner
+            copies.append({
+                "key": f"vulnreport-pending:{REPORT_ID}:closed-tab:{suffix}",
+                "envelope": {
+                    "schemaVersion": 1,
+                    "reportId": REPORT_ID,
+                    "tabId": f"closed-tab-{suffix}",
+                    "baseSavedAt": based_on,
+                    "capturedAt": START.isoformat(),
+                    "editRevision": 1,
+                    "report": recovered,
+                },
+            })
+        self.page.evaluate(
+            "copies => copies.forEach(copy => localStorage.setItem(copy.key, JSON.stringify(copy.envelope)))",
+            copies,
+        )
+        self.start(current)
+
+        panel = self.page.locator("#app-diagnostics")
+        with self.page.expect_navigation():
+            panel.get_by_role("button", name="Restore", exact=True).click()
+        self.start(current)
+
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Current-base copy")
 
     def test_a_save_leaves_another_tabs_copy_alone(self) -> None:
         first = self.page
@@ -629,7 +790,6 @@ class SaveModuleTests(unittest.TestCase):
         save_button.click()
         self.expect_attempts(2, settled=SAVED)
         self.assertEqual(self.saves[1]["engagement"]["app_owner"], "Typed while it was out")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 # Give the save machine its own module and a seam
 
-Status: done
+Status: ready-for-agent
 
 Found by the [3 October 2026 review](../report.html#review-2026-10-03-c3), recommendation 3, rated Worth exploring, ports and adapters.
 
@@ -54,4 +54,6 @@ Decided without asking, then confirmed with the user:
 - DATA_MAP §9, §10 and §12 change in the same commit as the move.
 - The `/research` step is dropped. Review item 03 settled the JavaScript test runner on 4 October: Playwright, a blank page, no Node.js. `tests/test_rule_cases.py` shows how.
 
-Built on 5 October 2026 through the five tickets in `.scratch/save-module/issues/`.
+## Next steps
+
+1. `/implement`: Build [ticket 02](../../save-module/issues/02-the-save-code-moves-into-its-own-file.md) next; ticket 01 is done. The five tickets in `.scratch/save-module/issues/` carry the work, and the spec was skipped because the Answers above already hold its decisions.

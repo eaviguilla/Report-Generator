@@ -7,14 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-_PATH = Path(__file__).resolve().parent.parent / "tools" / "observatory" / "observatory.py"
-_SPEC = importlib.util.spec_from_file_location("observatory", _PATH)
-observatory = importlib.util.module_from_spec(_SPEC)
-sys.modules["observatory"] = observatory
-_SPEC.loader.exec_module(observatory)
+_PATH = Path(__file__).resolve().parent.parent / "tools" / "star_map" / "star_map.py"
+_SPEC = importlib.util.spec_from_file_location("star_map", _PATH)
+star_map = importlib.util.module_from_spec(_SPEC)
+sys.modules["star_map"] = star_map
+_SPEC.loader.exec_module(star_map)
 
 
-class ObservatoryTests(unittest.TestCase):
+class StarMapTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -26,7 +26,7 @@ class ObservatoryTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
 
     def items(self, existing: set[str] | None = None) -> dict[str, dict]:
-        return {i["path"]: i for i in observatory.build(self.repo, existing or set())["items"]}
+        return {i["path"]: i for i in star_map.build(self.repo, existing or set())["items"]}
 
     def test_status_words_become_the_official_statuses(self) -> None:
         cases = [
@@ -46,14 +46,14 @@ class ObservatoryTests(unittest.TestCase):
         ]
         for raw, ticket_type, merged, expected in cases:
             with self.subTest(raw=raw, ticket_type=ticket_type, merged=merged):
-                status, warning = observatory.official_status(observatory.status_word(raw), ticket_type, merged)
+                status, warning = star_map.official_status(star_map.status_word(raw), ticket_type, merged)
                 self.assertEqual(status, expected)
                 self.assertIsNone(warning)
 
     def test_an_unknown_or_missing_status_shows_as_needs_triage_with_a_warning(self) -> None:
         for word, fragment in (("someday", '"someday"'), (None, "no Status: line")):
             with self.subTest(word=word):
-                status, warning = observatory.official_status(word, None, False)
+                status, warning = star_map.official_status(word, None, False)
                 self.assertEqual(status, "needs-triage")
                 self.assertIn(fragment, warning)
 
@@ -203,7 +203,7 @@ class ObservatoryTests(unittest.TestCase):
         self.write(".scratch/x/issues/01-a.md", "# A\n")
         script = self.repo / "tool.py"
         script.write_text("", encoding="utf-8")
-        first = observatory.snapshot(self.repo, (script,))
+        first = star_map.snapshot(self.repo, (script,))
         self.assertEqual(len(first), 2)
         edits = {
             "saved": lambda: os.utime(self.repo / ".scratch/x/issues/01-a.md", ns=(1, 1)),
@@ -213,9 +213,9 @@ class ObservatoryTests(unittest.TestCase):
         }
         for name, edit in edits.items():
             with self.subTest(name=name):
-                before = observatory.snapshot(self.repo, (script,))
+                before = star_map.snapshot(self.repo, (script,))
                 edit()
-                self.assertNotEqual(observatory.snapshot(self.repo, (script,)), before)
+                self.assertNotEqual(star_map.snapshot(self.repo, (script,)), before)
 
     def test_watch_rebuilds_once_after_the_files_stop_changing(self) -> None:
         cases = {
@@ -228,24 +228,24 @@ class ObservatoryTests(unittest.TestCase):
             with self.subTest(name=name):
                 feed = iter(states)
                 rebuilds = []
-                observatory.watch(lambda: next(feed), lambda: rebuilds.append(1), lambda: None, rounds=len(states) - 1)
+                star_map.watch(lambda: next(feed), lambda: rebuilds.append(1), lambda: None, rounds=len(states) - 1)
                 self.assertEqual(len(rebuilds), expected)
 
     def test_a_page_is_written_whole_and_leaves_no_temporary_file(self) -> None:
         page = self.repo / "page.html"
         page.write_text("old", encoding="utf-8")
-        observatory.write_page(page, "new")
+        star_map.write_page(page, "new")
         self.assertEqual(page.read_text(encoding="utf-8"), "new")
         self.assertEqual([p.name for p in self.repo.iterdir()], ["page.html"])
-        with patch.object(observatory.os, "replace", side_effect=PermissionError("locked")):
+        with patch.object(star_map.os, "replace", side_effect=PermissionError("locked")):
             with self.assertRaisesRegex(PermissionError, "locked"):
-                observatory.write_page(page, "newer")
+                star_map.write_page(page, "newer")
         self.assertEqual(page.read_text(encoding="utf-8"), "new")
         self.assertEqual([p.name for p in self.repo.iterdir()], ["page.html"])
 
     def test_no_text_in_an_item_can_close_the_page_script(self) -> None:
-        page = observatory.render(
-            "<script>const DATA = /*OBSERVATORY_DATA*/null;</script>",
+        page = star_map.render(
+            "<script>const DATA = /*STAR_MAP_DATA*/null;</script>",
             {"items": [{"title": "</script><script>alert(1)</script>"}]},
         )
         self.assertEqual(page.count("</script>"), 1)

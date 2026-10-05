@@ -2,7 +2,7 @@
 
 Type: grilling
 Status: done
-Map: [Observatory and the architecture review](../map.md)
+Map: [Star Map and the architecture review](../map.md)
 
 ## Question
 

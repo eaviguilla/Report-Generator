@@ -1,4 +1,4 @@
-# Observatory and the architecture review
+# Star Map and the architecture review
 
 Status: in-progress
 
@@ -6,10 +6,10 @@ Status: in-progress
 
 A spec, written with `/to-spec`, for two pieces of tooling:
 
-- the **observatory**: a page generated from this repo's work items that shows them as linked nodes, with a detail panel, next steps, and a copy button for each next step;
+- the **Star Map**: a page generated from this repo's work items that shows them as linked nodes, with a detail panel, next steps, and a copy button for each next step;
 - the **architecture review**, `/improve-codebase-architecture`, changed so that it files its recommendations into `.scratch/` as review items, each with a status and next steps.
 
-The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the spec, because the user asked for it. The official statuses and the rules that keep next steps and links current followed the same day. The spec now covers only the architecture review change, built after this map closes through `/to-tickets` and `/implement`.
+The Star Map was built on 2026-10-03 in `tools/star_map/`, ahead of the spec, because the user asked for it. The official statuses and the rules that keep next steps and links current followed the same day. The spec now covers only the architecture review change, built after this map closes through `/to-tickets` and `/implement`.
 
 ## Notes
 
@@ -19,7 +19,7 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 
 | Name | Meaning |
 |---|---|
-| observatory | the page |
+| Star Map | the page |
 | work item | one node with a status: a review item, plan, spec, issue, or wayfinder map or ticket |
 | decision record | a node with no status; it records a decision and is shown for reference |
 | out-of-scope file | a file `/triage` writes in `.out-of-scope/` for each feature idea it turns down; a node with no status, drawn only while an open work item came from it |
@@ -42,12 +42,12 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 
 **Settled while charting.**
 
-- This map ends at decisions; nothing is built inside it, except the observatory, which the user asked for early.
+- This map ends at decisions; nothing is built inside it, except the Star Map, which the user asked for early.
 - One graph. Unrelated threads show as separate groups, and items connect only where a real link exists.
 - The markdown files are the record (`.scratch/`, `docs/plans/`, `docs/adr/`); the page is generated from them.
 - "Function" in the user's request means a feature or an idea, not a code function.
 - The starting set is every item created since mattpocock/skills was installed (commit `663d12d`, 2026-10-02 00:32), linked or not, as [What a work item is, and how a link is recorded](issues/03-what-a-work-item-is-and-how-a-link-is-recorded.md) settled. `docs/plans/split-release-into-burp-and-default.md` is in it.
-- The tool lives in `tools/observatory/`, tracked in git. One Python script, standard library only, reads the records and the git log, writes one HTML page and opens it. Every run rebuilds the page; the built file is gitignored. Neither release script ships it: both package only `app/`, `resources/` and a few root files.
+- The tool lives in `tools/star_map/`, tracked in git. One Python script, standard library only, reads the records and the git log, writes one HTML page and opens it. Every run rebuilds the page; the built file is gitignored. Neither release script ships it: both package only `app/`, `resources/` and a few root files.
 
 **Skills.** Grilling tickets: `/grilling` and `/domain-modeling`. Prototype tickets: `/prototype`, UI branch. Research tickets: `/research`. `/writing-for-agents` belongs to the build, after this map closes.
 
@@ -68,8 +68,8 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 - [What a work item is, and how a link is recorded](issues/03-what-a-work-item-is-and-how-a-link-is-recorded.md): the path gives a node its type, and the top item of a thread stands for the feature; commits are neither nodes nor links; every item since `663d12d` shows, linked or not; three links, each one header line, are came from (the folder or `From:`), `Blocked by:` and `Merged into:`, and `context:` lists all three; rules in `docs/agents/issue-tracker.md`, the plan rules and `ADR-FORMAT.md` tell sessions to write them.
 
 - [Does a spec or map take its status from its tickets?](issues/04-does-a-spec-or-map-take-its-status-from-its-tickets.md): statuses stay explicit; the graph may separately show when all direct children are finished, without propagating status, including from a spec to its originating review item.
-- [Which layout shows the work items best](issues/06-which-layout-shows-the-work-items-best.md): a force-directed star map on a dark sky, one kind of star per status and a cloud per thread; links told apart by colour and dashes; the page is the observatory, in `tools/observatory/`; no commit list and no library.
-- [Whether the observatory shows out-of-scope files](issues/08-whether-the-observatory-shows-out-of-scope-files.md): a file `/triage` writes in `.out-of-scope/` is a node with no status, drawn only while an open item names it in a `From:` line, and it goes into that item's `context:`; when you change your mind about a turned-down idea, triage copies its reasons into the request and deletes the file; built on its own through [Show out-of-scope files on the observatory](../observatory/issues/01-show-out-of-scope-files.md), because the spec does not depend on it.
+- [Which layout shows the work items best](issues/06-which-layout-shows-the-work-items-best.md): a force-directed star map on a dark sky, one kind of star per status and a cloud per thread; links told apart by colour and dashes; the page is the Star Map, in `tools/star_map/`; no commit list and no library.
+- [Whether the Star Map shows out-of-scope files](issues/08-whether-the-star-map-shows-out-of-scope-files.md): a file `/triage` writes in `.out-of-scope/` is a node with no status, drawn only while an open item names it in a `From:` line, and it goes into that item's `context:`; when you change your mind about a turned-down idea, triage copies its reasons into the request and deletes the file; built on its own through [Show out-of-scope files on the Star Map](../star-map/issues/01-show-out-of-scope-files.md), because the spec does not depend on it.
 
 ## Not yet specified
 
@@ -78,7 +78,7 @@ The observatory was built on 2026-10-03 in `tools/observatory/`, ahead of the sp
 - Any change to the app: `app/`, `resources/`, the app's tests.
 - Code-level nodes such as functions or classes. The graphify graph already covers code.
 - Items created before the install commit `663d12d`.
-- Changing the review skill inside this map. The observatory was the one exception, built at the user's request.
+- Changing the review skill inside this map. The Star Map was the one exception, built at the user's request.
 
 ## Next steps
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build the observatory, a star map of this repo's work items, and open it in the browser.
+"""Build the Star Map of this repo's work items, and open it in the browser.
 
-    python3 tools/observatory/observatory.py      (macOS and Linux)
-    py -3 tools\\observatory\\observatory.py      (Windows)
+    python3 tools/star_map/star_map.py      (macOS and Linux)
+    py -3 tools\\star_map\\star_map.py      (Windows)
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ SCRIPT = Path(__file__).resolve()
 HERE = SCRIPT.parent
 REPO = HERE.parent.parent
 TEMPLATE = HERE / "page.html"
-OUTPUT = HERE / "observatory.html"
-DATA_MARK = "/*OBSERVATORY_DATA*/null"
+OUTPUT = HERE / "star_map.html"
+DATA_MARK = "/*STAR_MAP_DATA*/null"
 # mattpocock/skills was installed at this commit; items that already existed then get no star.
 CUTOFF = "663d12d"
 
@@ -498,7 +498,7 @@ def rebuild_once() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build the observatory page from this repo's work items and open it.")
+    parser = argparse.ArgumentParser(description="Build the Star Map page from this repo's work items and open it.")
     parser.add_argument("--no-open", action="store_true", help="write the page without opening it")
     parser.add_argument("--watch", action="store_true", help="rebuild the page whenever a work item or this tool changes, until stopped")
     args = parser.parse_args(argv)
@@ -516,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
     data = build(REPO, existing)
     write_page(OUTPUT, render(TEMPLATE.read_text(encoding="utf-8"), data))
     warnings = [(i["path"], w) for i in data["items"] for w in i["warnings"]]
-    print(f"Observatory: {len(data['items'])} items, {len(warnings)} warnings.")
+    print(f"Star Map: {len(data['items'])} items, {len(warnings)} warnings.")
     for path, warning in warnings:
         print(f"  {path}: {warning}")
     print(f"Wrote {OUTPUT.relative_to(REPO).as_posix()}")

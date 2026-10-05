@@ -2,7 +2,7 @@
 
 An open work item lists its next steps in a `## Next steps` section of its own file, main one first, as
 [issue-tracker.md](issue-tracker.md) describes. Each step names one of Matt's skills and says why in one
-short sentence. The observatory, `tools/observatory/observatory.py`, turns each step into a command to
+short sentence. The Star Map, `tools/star_map/star_map.py`, turns each step into a command to
 copy: `/<skill> <item> context: <items it needs>`.
 
 | Skill | Suggest it when |

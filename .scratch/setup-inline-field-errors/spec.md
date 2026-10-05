@@ -1,6 +1,6 @@
 # Setup messages show next to the field they are about
 
-Status: ready-for-agent
+Status: done
 
 From: [Setup field validation](../../docs/plans/setup-field-validation.md)
 
@@ -35,7 +35,3 @@ Branch `prototype/setup-inline-field-errors`, commit `0fe2f22`, file `.scratch/s
 
 - Text under the Content page's Additional Information fields. They keep the browser's bubble, with the new wording.
 - Any change to which values are refused or which details are required.
-
-## Next steps
-
-1. `/implement`: Start with ticket 01. Tickets 02 and 03 wait on it, in that order.

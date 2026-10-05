@@ -196,7 +196,8 @@ Trace to the function that is actually wrong before editing. The seams where the
 
 | Layer | File |
 |---|---|
-| save state machine, timers, recovery, navigation | `app/web/static/app.js` |
+| save state machine, timers, recovery copies, undo, Back | `app/web/static/save.js` |
+| Next, page rules and rendering | `app/web/static/app.js` |
 | routes, concurrency headers, uploads | `app/main.py` |
 | locking, paths, identity, legacy repair | `app/workspace.py` |
 | derived state, provisioning, validation | `app/report_service.py` |
@@ -209,7 +210,7 @@ Trace to the function that is actually wrong before editing. The seams where the
 - **Line endings.** Most files in this repo are stored with CRLF. Rewriting one with a tool that normalizes newlines turns a five-line change into a whole-file diff. Use the editor's edit tools, not shell rewrites, and check with `git diff --stat` before you call it done.
 - **Browser-test timing is not the app's.** The harness defaults autosave to 500 ms idle (`AUTOSAVE_TEST_DEFAULT`), not the app's 5 s; set `window.VULNREPORT_AUTOSAVE_IDLE_MS` with `add_init_script` to change it. A real second tab is `self.context.new_page()` (shared localStorage); `self.other_profile_page()` is a second browser profile, which is what the existing "two tabs" tests use.
 - **`draft.json` has a sibling.** `draft.bak.json` is written alongside it. A test that inspects the saved file should be explicit about which one it means.
-- **The data-layer contract.** If your fix touches `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/main.py`, or `app/web/static/app.js`, follow `.github/instructions/data-layer.instructions.md` and keep `docs/DATA_MAP.md` honest.
+- **The data-layer contract.** If your fix touches `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/main.py`, `app/web/static/save.js`, or `app/web/static/app.js`, follow `.github/instructions/data-layer.instructions.md` and keep `docs/DATA_MAP.md` honest.
 
 ## Output Format
 

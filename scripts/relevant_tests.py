@@ -47,6 +47,7 @@ RULE_COPIES = (".github/instructions/", ".claude/rules/")
 RULE_SYNC_TEST = "tests.test_ai_rules_sync"
 FILE_PAGES: list[tuple[str, frozenset[str]]] = [
     ("app/web/static/manager.js", frozenset({"home"})),
+    ("app/web/static/save.js", REPORT_PAGES),  # the save code, loaded by Setup, Findings and Content only
     ("app/web/static/", ALL_PAGES),  # dialog.js, theme.js, diagnostics.js and every stylesheet load everywhere
     ("app/web/templates/page1_setup.html", frozenset({"setup"})),
     ("app/web/templates/page2_findings.html", frozenset({"findings"})),

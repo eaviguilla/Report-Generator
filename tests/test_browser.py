@@ -3463,6 +3463,40 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(rows).to_have_count(added - 1)
         expect(accounts).to_be_in_viewport()
 
+    def test_undo_of_a_setup_button_marks_the_field_it_changed(self) -> None:
+        def two_components(report) -> None:
+            report.engagement.tested_channels = ["thick_client"]
+            report.scope_targets = [
+                ScopeTarget(target_id="tgt_main", environment="production", channel="thick_client", value="Acme.exe", description="Main client", order=0),
+                ScopeTarget(target_id="tgt_updater", environment="production", channel="thick_client", value="Updater.exe", description="Updater", order=1),
+            ]
+
+        def limitation_offer(report) -> None:
+            report.engagement.report_type = "retest"
+            report.engagement.non_production_label = "UAT"
+
+        # Each button takes the cursor away from the field it changes before the step is recorded.
+        cases = [
+            ("Remove account", None, lambda page: page.get_by_role("button", name="Remove test account 1"), lambda page: page.get_by_label("User role 1")),
+            ("Remove component", two_components, lambda page: page.get_by_role("button", name="Remove Thick Client component 1"), lambda page: page.get_by_role("textbox", name="Thick Client Component", exact=True).first),
+            ("Use it", limitation_offer, lambda page: page.locator("#limitations-offer").get_by_role("button", name="Use it"), lambda page: page.get_by_label("Limitations")),
+        ]
+        for name, prepare, button, field in cases:
+            with self.subTest(name):
+                report_id = self.ready_report()
+                if prepare:
+                    report = main.workspace.load(report_id)
+                    prepare(report)
+                    main.workspace.save(report)
+                page = self.context.new_page()
+                page.goto(f"{self.base_url}/reports/{report_id}/setup")
+                button(page).click()
+
+                with page.expect_navigation():
+                    page.get_by_role("button", name="Undo last change").click()
+
+                expect(field(page)).to_have_class(MARKED)
+
     def _add_zebra_finding(self, report_id: str) -> Vulnerability:
         """A second complete finding, after the seeded one on Findings and on Content."""
         report = main.workspace.load(report_id)
@@ -3602,6 +3636,28 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         expect(rows).to_have_count(2)
         expect(heading).to_be_in_viewport()
+
+    def test_redo_of_a_library_insert_marks_the_select_all_it_focused(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        # A second production target, so the new finding's locations start with Select all.
+        report.scope_targets.append(ScopeTarget(target_id="tgt_second", environment="production", channel="web", value="https://prod2.example.test"))
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        page.get_by_role("combobox", name="Search vulnerability library").fill(main.library.entries[0]["title"])
+        page.locator("#library-results [role=option]").first.click()
+        expect(rows).to_have_count(2)
+        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+        expect(rows).to_have_count(1)
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Redo last change").click()
+
+        expect(page.locator("#findings > tr.finding-location-row").nth(1).get_by_role("button", name="Select all")).to_have_class(MARKED)
 
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()

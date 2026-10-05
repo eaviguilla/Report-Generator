@@ -9,6 +9,9 @@ from typing import get_args
 from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, ReportType, Segment, Severity, Status
 from .report_service import CHARACTER_RULES, MAX_TEST_ACCOUNTS, PLACEHOLDER_TEXT, RESOLVED_REMEDIATION, SCOPE_LIMITS
 
+# Each report page by the last part of its address, with the name a tester sees.
+REPORT_PAGES = (("setup", "Setup"), ("findings", "Findings"), ("edit", "Content"))
+
 
 def client_vocabulary() -> dict:
     """Every list in the model's own order, JSON-ready. A labelled list is [value, label] pairs."""
@@ -26,4 +29,5 @@ def client_vocabulary() -> dict:
         "scope_limits": SCOPE_LIMITS,
         "placeholder_pattern": {"source": PLACEHOLDER_TEXT.pattern, "flags": "i" if PLACEHOLDER_TEXT.flags & re.IGNORECASE else ""},
         "resolved_remediation": RESOLVED_REMEDIATION,
+        "report_pages": [list(report_page) for report_page in REPORT_PAGES],
     }

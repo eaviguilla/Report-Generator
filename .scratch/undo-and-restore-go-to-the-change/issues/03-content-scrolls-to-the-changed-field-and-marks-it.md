@@ -21,7 +21,3 @@ Out of scope: Findings, which ticket 04 covers.
 ## What deviated
 
 Content's name for a field is its finding's `uid`, its section's content type and its fragment's `frag_id`; an Additional Information field uses the `{uid}:{key}` id its card already carried for Go to. A control in a section but outside a fragment, such as Add a fragment or a library offer, names the section alone, and Undo then scrolls to that section. Building the case where the field is gone turned up a gap: Delete fragment, Move, Convert and the offer buttons rebuild the pane before the step is recorded, so the focused button was gone and the step named nothing. `render()` now keeps the name of what had focus until the end of that task, and the step takes it. The pointed fragment becomes Go to's target, so the mark survives the pane's rebuilds and the incomplete rings on other fields stay off until the next click, as after Go to. Every section starts open on a page load, so no code opens a collapsed one. The new case for a finding Content does not show first is an Undo on Content of a Description edit, which also covers the Undo that reloads Content. Restore has no browser test of its own: it hands the page its copy's field the same way, and `tests/test_save_module.py` covers that. DATA_MAP §9 also changed, to describe Content's names.
-
-## Next steps
-
-1. `/implement`: Build [ticket 04](04-findings-scrolls-to-the-changed-field-and-marks-it.md); this ticket is done.

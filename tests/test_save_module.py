@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from app import main
 from app.models import Report
+from app.vocabulary import client_vocabulary
 
 try:
     from playwright.sync_api import expect, sync_playwright
@@ -367,27 +368,34 @@ class SaveModuleTests(unittest.TestCase):
 
     def start(self, report: dict, page_name: str = "findings") -> None:
         self.page.evaluate(
-            """([report, idle, page]) => {
+            """([report, idle, page, pages]) => {
               window.VULNREPORT_AUTOSAVE_IDLE_MS = idle;
               window.saveCode = window.vrSave.start({
-                root: document.querySelector("main"), serverReport: report, page, saveCheck: () => window.heldBy, onSaved: () => {},
+                root: document.querySelector("main"), serverReport: report, page, pageNames: Object.fromEntries(pages),
+                saveCheck: () => window.heldBy, onSaved: () => {},
                 nameField: element => element?.dataset?.field ? {name: element.dataset.field} : null,
               });
             }""",
-            [report, IDLE_MS, page_name],
+            [report, IDLE_MS, page_name, client_vocabulary()["report_pages"]],
         )
 
     def changed_field(self):
         return self.page.evaluate("saveCode.changedField")
 
-    def test_a_step_and_a_recovery_copy_record_the_field_they_were_made_in(self) -> None:
+    def test_a_step_records_the_field_it_was_made_in(self) -> None:
         self.start(report_json())
 
         self.edit_in_field("Typed in the field")
-        self.page.clock.run_for(150)
 
         [step] = self.history()["undoHistory"]
         self.assertEqual(step["field"], OWNER_FIELD)
+
+    def test_a_recovery_copy_records_the_last_field_changed(self) -> None:
+        self.start(report_json())
+        self.edit_in_field("Typed in the field")
+
+        self.page.clock.run_for(150)
+
         [copy] = self.recovery_copies()
         self.assertEqual(copy["field"], OWNER_FIELD)
 
@@ -468,15 +476,22 @@ class SaveModuleTests(unittest.TestCase):
 
         self.assertEqual(self.changed_field(), OWNER_FIELD)
 
-    def test_an_undo_step_and_a_recovery_copy_record_the_page_they_were_made_on(self) -> None:
+    def test_an_undo_step_records_the_page_it_was_made_on(self) -> None:
         self.page.goto(page_url("setup"))
         self.start(report_json(), "setup")
 
         self.edit("Typed on Setup")
-        self.page.clock.run_for(150)
 
         [step] = self.history()["undoHistory"]
         self.assertEqual(step["page"], "setup")
+
+    def test_a_recovery_copy_records_the_page_its_edits_were_made_on(self) -> None:
+        self.page.goto(page_url("setup"))
+        self.start(report_json(), "setup")
+        self.edit("Typed on Setup")
+
+        self.page.clock.run_for(150)
+
         [copy] = self.recovery_copies()
         self.assertEqual(copy["page"], "setup")
 
@@ -925,12 +940,14 @@ class SaveModuleTests(unittest.TestCase):
     def test_restore_or_discard_that_storage_refuses_keeps_the_copy_and_says_so(self) -> None:
         refusals = [
             ("Restore", "setItem", "vulnreport-recovery:"),
+            ("Restore", "setItem", "vulnreport-changed-field:"),
             ("Discard", "removeItem", "vulnreport-pending:"),
         ]
         for action, method, refused_prefix in refusals:
-            with self.subTest(action):
+            with self.subTest(action=action, refused=refused_prefix):
                 self.open_page()
-                key = self.plant_copy("Kept owner", report_json()["saved_at"])
+                # With a field, so Restore also writes the field the opened page points at.
+                key = self.plant_copy("Kept owner", report_json()["saved_at"], field=OWNER_FIELD)
                 self.start(report_json())
                 self.page.evaluate(
                     """([method, prefix]) => {
@@ -949,6 +966,34 @@ class SaveModuleTests(unittest.TestCase):
                 expect(panel.get_by_role("heading")).to_have_text("Browser recovery unavailable")
                 self.assertEqual(self.page.evaluate("typeof saveCode"), "object", "the page reloaded")
                 self.assertIsNotNone(self.page.evaluate("key => localStorage.getItem(key)", key))
+                self.assertNotIn(f"vulnreport-recovery:{REPORT_ID}", self.stored_keys()["session"])
+
+    def test_an_undo_that_storage_refuses_stays_on_the_page_with_the_change_kept(self) -> None:
+        for refused_prefix in ("vulnreport-recovery:", "vulnreport-changed-field:"):
+            with self.subTest(refused=refused_prefix):
+                self.open_page()
+                self.step_made_on("findings", "Typed in the field", in_field=True)
+                self.page.evaluate(
+                    """prefix => {
+                      const original = Storage.prototype.setItem;
+                      Storage.prototype.setItem = function(key, ...rest) {
+                        if (key.startsWith(prefix)) throw new DOMException('blocked', 'SecurityError');
+                        return original.call(this, key, ...rest);
+                      };
+                    }""",
+                    refused_prefix,
+                )
+                # Never answered, so a save that goes out cannot reload the page before the checks below.
+                self.answers.append(lambda route: None)
+                sent = self.page.evaluate("saveRequests")
+
+                self.page.locator("#undo-button").click()
+
+                expect(self.page.locator("#app-diagnostics").get_by_role("heading")).to_have_text("Browser recovery unavailable")
+                self.assertEqual(self.page.evaluate("saveRequests"), sent, "the Undo saved")
+                self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Typed in the field")
+                self.assertTrue(self.page.locator("#undo-button").is_enabled())
+                self.assertNotIn(f"vulnreport-recovery:{REPORT_ID}", self.stored_keys()["session"])
 
     def test_a_save_check_that_returns_words_holds_the_save(self) -> None:
         words = "Correct invalid Setup fields"

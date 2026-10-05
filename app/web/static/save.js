@@ -63,12 +63,11 @@
     const activeElement = document.activeElement;
     return activeElement?.matches('input:not([type="checkbox"],[type="radio"],[type="file"]), textarea, [contenteditable="true"]') ? activeElement : null;
   };
-  // Each report page by the last part of its address, with the name a tester sees.
-  const PAGE_NAMES = Object.freeze({setup:"Setup", findings:"Findings", edit:"Content"});
-  const knownPage = name => Object.hasOwn(PAGE_NAMES, name) ? name : null;
   // app.js calls this once per report page; it returns the report the page edits, the server's or a recovery copy.
-  function start({root, serverReport, page, saveCheck, onSaved, nameField}) {
+  // pageNames maps each report page, by the last part of its address, to the name a tester sees.
+  function start({root, serverReport, page, pageNames, saveCheck, onSaved, nameField}) {
     const diagnostics = window.VulnReportDiagnostics;
+    const knownPage = name => Object.hasOwn(pageNames, name) ? name : null;
     const reportId = serverReport.report_id;
     // A copy written during an Undo or Redo belongs to the step's page, not this one.
     let draftPage = page;
@@ -157,11 +156,10 @@
     } catch (error) {
       recoveryStorageError ||= error;
     }
+    // Throws when storage refuses, so the caller can stay on the page.
     function pointNextPageAt(target, field) {
-      try {
-        if (field) sessionStorage.setItem(changedFieldKey, JSON.stringify({page:target, field}));
-        else sessionStorage.removeItem(changedFieldKey);
-      } catch (error) { showRecoveryStorageWarning(error); }
+      if (field) sessionStorage.setItem(changedFieldKey, JSON.stringify({page:target, field}));
+      else sessionStorage.removeItem(changedFieldKey);
     }
     const maxHistoryEntries = 20;
     let undoHistory = [];
@@ -289,7 +287,7 @@
         kind: "warning",
         actions: [
           {
-            label: copyPage && copyPage !== page ? `Restore on ${PAGE_NAMES[copyPage]}` : "Restore",
+            label: copyPage && copyPage !== page ? `Restore on ${pageNames[copyPage]}` : "Restore",
             primary: true,
             operation: "restore_local_draft",
             run: () => {
@@ -298,12 +296,13 @@
                 return;
               }
               try {
+                // The pointer first: a selection left behind would restore the copy at the next reload.
+                pointNextPageAt(copyPage || page, candidate.envelope.field);
                 sessionStorage.setItem(recoverySelectionKey, candidate.key);
               } catch (error) {
                 showRecoveryStorageWarning(error);
                 return;
               }
-              pointNextPageAt(copyPage || page, candidate.envelope.field);
               openPage(copyPage);
             },
           },
@@ -484,13 +483,13 @@
       };
       if (!persistLocalDraft() || !storeHistory()) return rollback();
       try {
+        pointNextPageAt(draftPage, draftField);
         sessionStorage.setItem(recoverySelectionKey, localDraftKey);
       } catch (error) {
         showRecoveryStorageWarning(error);
         return rollback();
       }
       allowUnsavedUnload = true;
-      pointNextPageAt(draftPage, draftField);
       // Leave only once the server has the undone state, so its page gate judges that; a refused save still leaves.
       return save().then(() => {
         openPage(stepPage);

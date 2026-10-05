@@ -1,6 +1,6 @@
 # 01: One plain format for every field message
 
-Status: ready-for-agent
+Status: done
 
 **What to build:** Every message for a Setup refusal or issue, and for a character the Content page's Additional Information fields refuse, follows one format in Python and in JavaScript. A message names its field the way the tester sees it, says what is wrong, then says what to do. A missing value is one instruction. No message holds a code, an escape such as `"\u0007"`, a Unicode number, a spelled-out character name such as "digit zero", or `--`. The wording was agreed on 2026-10-05 against the prototype; see the [spec](../spec.md).
 
@@ -34,10 +34,6 @@ The field's name is the one beside it on the page: `Application name`, `CI numbe
 - [x] The character-name tables (`CHARACTER_NAMES`, `DIGIT_NAMES`, `_character_name`, `characterNames`, `digitNames`, `characterName`) and `portable_names` go if nothing else uses them. Grep `app/`, `tests/` and `scripts/` first; no maintained source, test or script uses them.
 - [x] Tests that pin the old words change with them: the `test_app.py` test that pins every `setup_refusal_message` string, and the browser and acceptance tests that assert "contains invalid character", "must be at most", "cannot start or end with a space", "-- remove one" or "Missing:".
 - [x] `docs/DATA_MAP.md` §12: the "character-rule message wording" and "setup completeness" rows name the new functions.
-
-## Next steps
-
-1. `/implement`: The wording is agreed, and nothing waits on another ticket.
 
 ## Comments
 

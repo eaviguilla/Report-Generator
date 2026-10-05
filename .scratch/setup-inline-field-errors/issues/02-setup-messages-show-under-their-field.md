@@ -1,6 +1,6 @@
 # 02: Setup messages show under the field they are about
 
-Status: ready-for-agent
+Status: done
 
 Blocked by: [01: One plain format for every field message](01-one-plain-format-for-field-messages.md)
 
@@ -34,10 +34,6 @@ When it shows:
 - [x] `docs/DATA_MAP.md` §12, the "setup completeness" row: how `validateSetupPage` and the notice now read the results.
 
 Out of scope: the Content page's Additional Information fields keep the browser's bubble.
-
-## Next steps
-
-1. Await merge into `feat/setup-inline-field-errors`.
 
 ## Comments
 

@@ -1,6 +1,6 @@
 # 03: A field stops at its character limit and says so
 
-Status: ready-for-agent
+Status: done
 
 Blocked by: [02: Setup messages show under the field they are about](02-setup-messages-show-under-their-field.md)
 
@@ -24,10 +24,6 @@ The note:
 - [x] Browser tests: typing stops at the limit and the note shows; a paste longer than the room left is cut and the note says so; a Web/API line and a component name go past their limits and show the message; a stored value over its limit shows the message and can be shortened. In headless Chromium, a synthetic `ClipboardEvent("paste")` followed by `document.execCommand("insertText")` drives a paste; the prototype was checked that way.
 - [x] `docs/DATA_MAP.md` §12, the "a Setup field is at most its length" row: replace "No input carries `maxlength`" with the new behaviour.
 - [x] `docs/plans/setup-field-validation.md`, "What deviated": add a dated line under the "No HTML `maxlength`" bullet that points here.
-
-## Next steps
-
-Awaiting merge into `feat/setup-inline-field-errors`.
 
 ## Comments
 

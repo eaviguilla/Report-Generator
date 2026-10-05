@@ -208,7 +208,20 @@
     };
     document.addEventListener("click", letGo);
   };
-  const nameField = page === "setup" ? setupFieldName : null;
+  const contentFieldName = element => {
+    const block = element?.closest?.("#finding-editor .finding-card [data-content-type]");
+    if (!block) return null;
+    return {
+      finding: block.closest(".finding-card").id.replace(/^finding-/, ""),
+      content: block.dataset.contentType,
+      fragment: element.closest("[data-fragment-id]")?.dataset.fragmentId || null,
+    };
+  };
+  // A pane rebuild drops the focused control before its step is recorded, so the step names what render() saw.
+  let contentFieldBeforeRender = null;
+  const nameField = page === "setup" ? setupFieldName
+    : page === "edit" ? element => contentFieldName(element) || contentFieldBeforeRender
+    : null;
   const {isRecord, activeTextEntry} = window.vrSave;
   const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, saveCheck, onSaved, nameField});
   const updateSetupValidationNotice = () => {
@@ -3446,6 +3459,8 @@
     };
     document.addEventListener("reportchange", refreshContentOffers);
     const render = (focusedFindingUid) => {
+      contentFieldBeforeRender = contentFieldName(document.activeElement);
+      queueMicrotask(() => { contentFieldBeforeRender = null; });
       // Rebuilding the pane resets its scroll, which would throw the tester back to the top after an upload.
       const restoreScroll = pane.scrollTop;
       const findings = ordered();
@@ -3904,7 +3919,24 @@
         requestAnimationFrame(() => { pane.scrollTop = restoreScroll; });
       }
     };
+    // Marked as Go to marks, but not focused, so Ctrl+Z still reaches the app.
+    const pointed = changedField && report.vulnerabilities.some(finding => finding.uid === changedField.finding) ? changedField : null;
+    if (pointed) selectedFindingUid = pointed.finding;
     render();
+    if (pointed) {
+      const findFragmentCard = () => pointed.fragment && pane.querySelector(`#finding-${CSS.escape(pointed.finding)} [data-fragment-id="${CSS.escape(pointed.fragment)}"]`);
+      if (findFragmentCard()) {
+        reviewTargetId = pointed.fragment;
+        showReviewTarget();
+        updateReadinessPanel();
+      }
+      // Two frames, as Go to waits, for lists and tables to size themselves.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const card = findFragmentCard();
+        const section = pane.querySelector(`#finding-${CSS.escape(pointed.finding)} [data-content-type="${CSS.escape(pointed.content || "")}"]`);
+        (card || section)?.scrollIntoView({behavior:"smooth", block: card ? "center" : "start"});
+      }));
+    }
   }
   root.id === "setup" ? setup() : continuousEditor();
   if (changedField && page === "setup") pointAtSetupField(changedField);

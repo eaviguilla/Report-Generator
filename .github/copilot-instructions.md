@@ -35,8 +35,8 @@ document matching the house template. No database, no frontend framework, no bui
 - **Data:** `data/apps/<app>/<month>_<type>_<id>/draft.json` + `draft.bak.json` + `evidence/*.png`.
   Test drafts, not real reports: base no decision on their contents, and change or delete them only when the user asks.
 - **Tests:** `tests/` (unittest; `test_browser.py` is Playwright). Dev deps in `requirements-dev.txt`.
-- **Observatory:** `py -3 tools/observatory/observatory.py` (`python3` on macOS) draws the work items in
-  `docs/plans/`, `.scratch/` and `docs/adr/` as a star map, with next steps to copy, and opens it. It is
+- **Star Map:** `py -3 tools/star_map/star_map.py` (`python3` on macOS) draws the work items in
+  `docs/plans/`, `.scratch/` and `docs/adr/` as linked stars, with next steps to copy, and opens it. It is
   planning tooling, not part of the app, and neither release ships it. With `--watch` it rebuilds the page
   whenever a work item or the tool changes; the VS Code task in `.vscode/tasks.json` starts that when the
   folder opens, once you allow automatic tasks for the folder. Reload the tab to see a rebuild. An edit to the

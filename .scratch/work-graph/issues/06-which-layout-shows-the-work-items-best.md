@@ -3,7 +3,7 @@
 Type: prototype
 Status: done
 Blocked by: 03
-Map: [Observatory and the architecture review](../map.md)
+Map: [Star Map and the architecture review](../map.md)
 
 ## Question
 
@@ -20,7 +20,7 @@ Capture the prototype as `/prototype` says (a throwaway branch, out of main) wit
 
 ## Answer
 
-Settled with the user on 2026-10-03, through `/prototype`. The prototype lived on a throwaway branch, `prototype/observatory-layouts`, which the user had deleted once the built observatory replaced it. Its commits were `269e159`, with all three layouts and the three line styles, and `707bec0`, with only the chosen star map.
+Settled with the user on 2026-10-03, through `/prototype`. The prototype lived on a throwaway branch, which the user had deleted once the built Star Map replaced it. Its commits were `269e159`, with all three layouts and the three line styles, and `707bec0`, with only the chosen star map.
 
 ### Layout
 
@@ -62,7 +62,7 @@ The pattern alone tells the three kinds apart, so the page still works for colou
 
 ### Name, commits and library
 
-- **Name.** The page is the observatory, chosen over star chart, lodestar and keeping "work graph". The tool's folder becomes `tools/observatory/`. The effort folder `.scratch/work-graph/` keeps its name, because every ticket links to it.
+- **Name.** The page is the Star Map. It was first named the observatory, chosen over star chart, lodestar and keeping "work graph", and the user renamed it Star Map on 2026-10-05. The tool's folder is `tools/star_map/`. The effort folder `.scratch/work-graph/` keeps its name, because every ticket links to it.
 - **Commits.** The panel lists no commits. The page tracks the work items still needed to finish, and commit subjects mislead: commit `f6c215d`, about no-findings reports, added this whole map.
 - **Library.** None. The prototype is SVG and CSS animation written by hand, loads nothing from the internet, and opens from disk. vis-network, the graphify page's library, is one 702,611-byte file under Apache-2.0 or MIT and could be copied in, but nothing needs it. This settles the map's open question about a graph library.
 
@@ -72,8 +72,8 @@ In VS Code's built-in browser the page loads from a `file:` URL, the address kee
 
 ### For the build
 
-- Build the star map from the prototype's design. Do not copy its code, which has no tests and holds hand-written items.
-- Name the page, the tool and its folder observatory.
+- Build the Star Map from the prototype's design. Do not copy its code, which has no tests and holds hand-written items.
+- Name the page Star Map, the tool `star_map.py`, and its folder `tools/star_map/`.
 - Check Copy from disk in the default browser on macOS and on Windows.
 
 ## Comments
@@ -81,7 +81,8 @@ In VS Code's built-in browser the page loads from a `file:` URL, the address kee
 - 2026-10-03: Prototype built at `.scratch/work-graph/prototype/layouts.html`, uncommitted, waiting for the user's pick. Three layouts: A is a graph with one force layout per thread, B is a left-to-right flow by stage, and C is lanes by thread with status columns. The bar's Data menu shows two real states besides today: ticket 03 still open, so tickets 04 and 06 show as blocked, and ticket 06 resolved, so the map shows the cue for everything made from it being finished. Review items are not filed yet, so their paths and statuses are samples, and every next step is written by hand. In VS Code's built-in browser, opened from disk, the URL updates and Copy works through the Clipboard API. The user's own browser is not checked yet.
 - 2026-10-03: The user picked layout A, the graph, and asked for a less plain look, taking ideas from the star map in [rengwu/wayfinder-maps](https://github.com/rengwu/wayfinder-maps). A is now a star map: a dark sky, one kind of star per status, a faint nebula per thread named after its top item, and curved links with an arrow halfway. A Lines menu in the bar switches between colour and dashes, colour only, and dashes only. Still no library, only SVG and CSS animation. Waiting for the user's choice of line style.
 - 2026-10-03: The user picked colour and dashes for the lines. Next the user decides the page's name; "work graph" is the current one.
-- 2026-10-03: The user named the page observatory and dropped the commit list. The prototype went to branch `prototype/observatory-layouts` and left the working tree. Resolved.
+- 2026-10-03: The user named the page and dropped the commit list. The prototype went to a throwaway branch and left the working tree. Resolved.
 - 2026-10-03: The user asked to keep only the star map. Commit `707bec0` on the branch drops the flow and lanes layouts, the line-style menu and the commit list.
-- 2026-10-03: The user asked to build the observatory now, ahead of the spec. `tools/observatory/observatory.py` reads the work item files and writes `observatory.html` from `page.html`, and `tests/test_observatory.py` covers its reading rules. One change from "For the build": the drawing code in `page.html` is the prototype's, cleaned up, because it was already checked in the browser. The hand-written items are gone. The same build added a status line to the map, the four link lines ticket 03 listed, and next steps in the eight open items.
+- 2026-10-03: The user asked to build the Star Map now, ahead of the spec. `tools/star_map/star_map.py` reads the work item files and writes `star_map.html` from `page.html`, and `tests/test_star_map.py` covers its reading rules. One change from "For the build": the drawing code in `page.html` is the prototype's, cleaned up, because it was already checked in the browser. The hand-written items are gone. The same build added a status line to the map, the four link lines ticket 03 listed, and next steps in the eight open items.
 - 2026-10-03: The user had the prototype branch deleted. It was never pushed.
+- 2026-10-05: The user renamed the page from Observatory to Star Map. The tool, its test and the build ticket's folder moved to `tools/star_map/star_map.py`, `tests/test_star_map.py` and `.scratch/star-map/`.

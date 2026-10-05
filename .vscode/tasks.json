@@ -2,13 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Observatory: rebuild on save",
+      "label": "Star Map: rebuild on save",
       "type": "process",
       "command": "python3",
-      "args": ["tools/observatory/observatory.py", "--watch"],
+      "args": ["tools/star_map/star_map.py", "--watch"],
       "windows": {
         "command": "py",
-        "args": ["-3", "tools/observatory/observatory.py", "--watch"]
+        "args": ["-3", "tools/star_map/star_map.py", "--watch"]
       },
       "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,

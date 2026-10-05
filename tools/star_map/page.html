@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Observatory</title>
-<!-- Template: tools/observatory/observatory.py puts the work items in place of the data mark and writes observatory.html. -->
+<title>Star Map</title>
+<!-- Template: tools/star_map/star_map.py puts the work items in place of the data mark and writes star_map.html. -->
 <style>
 :root {
   --bg: #05070d; --surface: #0a0f1d; --ink: #e2e8f0; --muted: #94a3b8; --line: #1e293b; --panel: 360px;
@@ -148,7 +148,7 @@ header.top { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: c
 </head>
 <body>
 <header class="top">
-  <div class="brand"><b>Observatory</b><span class="muted small" id="built"></span></div>
+  <div class="brand"><b>Star Map</b><span class="muted small" id="built"></span></div>
   <div class="legend" id="legend"></div>
 </header>
 <main id="stage" aria-label="Work items"></main>
@@ -156,7 +156,7 @@ header.top { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: c
 <script>
 "use strict";
 
-const DATA = /*OBSERVATORY_DATA*/null;
+const DATA = /*STAR_MAP_DATA*/null;
 
 // ---------- vocabulary ----------
 
@@ -644,11 +644,11 @@ function writeURL() {
 }
 
 if (!DATA) {
-  document.getElementById("stage").innerHTML = `<p class="empty-note">This is the template. Run <code>python3 tools/observatory/observatory.py</code> to build the observatory.</p>`;
+  document.getElementById("stage").innerHTML = `<p class="empty-note">This is the template. Run <code>python3 tools/star_map/star_map.py</code> to build the Star Map.</p>`;
 } else if (!VIEW.length) {
   document.getElementById("stage").innerHTML = `<p class="empty-note">No work items or decision records were created since ${esc(DATA.cutoff)}.</p>`;
 } else {
-  document.getElementById("built").textContent = `Built ${DATA.built}. Rebuild with tools/observatory/observatory.py.`;
+  document.getElementById("built").textContent = `Built ${DATA.built}. Rebuild with tools/star_map/star_map.py.`;
   document.getElementById("legend").innerHTML = skyLegend();
   const asked = new URLSearchParams(location.search).get("item");
   if (asked && Object.hasOwn(BY, asked)) state.item = asked;

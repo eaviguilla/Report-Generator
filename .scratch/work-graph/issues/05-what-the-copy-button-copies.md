@@ -3,7 +3,7 @@
 Type: grilling
 Status: wontfix
 Merged into: [Which next steps a work item suggests, and what the copy button copies](01-next-steps-and-the-copied-command.md)
-Map: [Observatory and the architecture review](../map.md)
+Map: [Star Map and the architecture review](../map.md)
 
 ## Question
 

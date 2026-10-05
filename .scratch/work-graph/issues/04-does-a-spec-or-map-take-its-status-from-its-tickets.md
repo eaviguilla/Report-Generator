@@ -3,7 +3,7 @@
 Type: grilling
 Status: done
 Blocked by: 03
-Map: [Observatory and the architecture review](../map.md)
+Map: [Star Map and the architecture review](../map.md)
 
 ## Question
 

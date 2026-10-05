@@ -15,8 +15,8 @@ data/vulnreport-errors.log*
 # generated output
 generated/*
 !generated/.gitkeep
-tools/observatory/observatory.html
-tools/observatory/.observatory-*.tmp
+tools/star_map/star_map.html
+tools/star_map/.star_map-*.tmp
 
 # release packaging output
 /dist/

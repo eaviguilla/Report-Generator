@@ -18,7 +18,7 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 - How it works: `docs/ARCHITECTURE.md`. Data contract: `docs/DATA_MAP.md` (§12 rules that exist twice, §13 sharp edges). Routes: `docs/ROUTES.md`. Word tokens: `docs/DOCX_TEMPLATE.md`.
 - `data/` holds test drafts, not real reports: base no decision on their contents, and change or delete them only when I ask. The Word masters are `resources/*.docx`.
 - Traps load by file path from `.claude/rules/`. Those files are generated from `.github/instructions/*.instructions.md` (the Copilot rules): edit the `.github` file, then run `.venv/bin/python scripts/sync_ai_rules.py`. `tests/test_ai_rules_sync.py` fails when they drift.
-- Work items (plans, `.scratch/` issues and maps, decision records): `.venv/bin/python tools/observatory/observatory.py` draws them as a star map with next steps to copy. Their statuses, `From:`, `Blocked by:` and `Merged into:` lines and `## Next steps` lists follow `docs/agents/issue-tracker.md`.
+- Work items (plans, `.scratch/` issues and maps, decision records): `.venv/bin/python tools/star_map/star_map.py` draws them as the Star Map, with next steps to copy. Their statuses, `From:`, `Blocked by:` and `Merged into:` lines and `## Next steps` lists follow `docs/agents/issue-tracker.md`.
 
 ## Rules
 - Every bug fix gets a regression test. Before each test run, state its scope in one line; `relevant_tests.py` prints it.

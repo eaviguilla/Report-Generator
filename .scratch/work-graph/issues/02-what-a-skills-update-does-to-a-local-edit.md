@@ -3,7 +3,7 @@
 Type: research
 Status: wontfix
 Merged into: [How the architecture review files its items](07-how-the-architecture-review-files-its-items.md)
-Map: [Observatory and the architecture review](../map.md)
+Map: [Star Map and the architecture review](../map.md)
 
 ## Question
 

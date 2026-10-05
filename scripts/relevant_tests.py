@@ -342,6 +342,20 @@ def select(tier: str, changed: dict[str, set[int] | None], modules: dict[str, Te
 
 # --- running ------------------------------------------------------------------------------------------
 
+RAN = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
+
+
+def verdict(results: list[tuple[int, str]]) -> str:
+    """The unindented last line, from each run's exit code and output, so a grep for ^OK or ^FAILED finds it."""
+    runs = len(results)
+    failed = sum(1 for code, _ in results if code)
+    if failed:
+        whose = "Its output is" if failed == 1 else "Their output is"
+        return f"FAILED: {failed} of {runs} run{'s' * (runs != 1)} failed. {whose} above."
+    tests = sum(int(count) for _, text in results for count in RAN.findall(text))
+    return f"OK: {tests} test{'s' * (tests != 1)} passed in {runs} run{'s' * (runs != 1)}"
+
+
 def run(chosen: Selection, modules: dict[str, TestModule | None]) -> int:
     jobs: list[list[str]] = []
     if chosen.python:
@@ -362,16 +376,17 @@ def run(chosen: Selection, modules: dict[str, TestModule | None]) -> int:
             output.seek(0)
             return targets, code, output.read()
 
-    failed = 0
+    results: list[tuple[int, str]] = []
     with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
         for targets, code, text in pool.map(execute, jobs):
+            results.append((code, text))
             summary = [line for line in text.splitlines() if line.startswith(("Ran ", "OK", "FAILED"))]
             label = f"{len(targets)} target(s)" if len(targets) > 3 else " ".join(targets)
             print(f"  {label}: {' '.join(summary) or 'no summary'}")
             if code:
-                failed += 1
                 print(text[-6000:])
-    return 1 if failed else 0
+    print(verdict(results))
+    return 1 if any(code for code, _ in results) else 0
 
 
 def main(argv: list[str]) -> int:

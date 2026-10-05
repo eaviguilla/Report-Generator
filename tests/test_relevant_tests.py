@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.relevant_tests import ALL_PAGES, DECLARATION, FILE_PAGES, REPORT_PAGES, ROOT, RULE_SYNC_TEST, app_js_pages, browser_tags, changed_tests, parse_diff, parse_module, select, test_modules
+from scripts.relevant_tests import ALL_PAGES, DECLARATION, FILE_PAGES, REPORT_PAGES, ROOT, RULE_SYNC_TEST, app_js_pages, browser_tags, changed_tests, parse_diff, parse_module, select, test_modules, verdict
 
 SAMPLE_TESTS = '''import unittest
 
@@ -134,6 +134,24 @@ class SelectorTests(unittest.TestCase):
             self.assertEqual(select("affected", {path: None}, modules).python, {RULE_SYNC_TEST}, path)
         for path in (".github/copilot-instructions.md", ".claude/settings.json", "CLAUDE.md"):
             self.assertEqual(select("affected", {path: None}, modules).python, set(), f"{path} has no copy to compare")
+
+
+PASSED = "....\n----------------------------------------------------------------------\nRan {} tests in 1.2s\n\nOK\n"
+
+
+class VerdictTests(unittest.TestCase):
+    def test_every_run_passing_gives_an_ok_line_with_the_summed_test_count(self) -> None:
+        line = verdict([(0, PASSED.format(352)), (0, PASSED.format(190)), (0, PASSED.format(6))])
+        self.assertEqual(line, "OK: 548 tests passed in 3 runs")
+
+    def test_one_failing_run_gives_a_failed_line(self) -> None:
+        failing = "F.\n" + PASSED.format(2).replace("OK", "FAILED (failures=1)")
+        line = verdict([(0, PASSED.format(10)), (1, failing), (0, PASSED.format(4))])
+        self.assertEqual(line, "FAILED: 1 of 3 runs failed. Its output is above.")
+
+    def test_a_failed_run_with_no_summary_line_still_counts_as_failed(self) -> None:
+        line = verdict([(0, PASSED.format(10)), (1, "ImportError: No module named 'tests.gone'\n")])
+        self.assertEqual(line, "FAILED: 1 of 2 runs failed. Its output is above.")
 
 
 if __name__ == "__main__":

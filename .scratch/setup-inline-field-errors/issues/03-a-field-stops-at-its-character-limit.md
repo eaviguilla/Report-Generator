@@ -16,19 +16,20 @@ The note:
 - A paste cut to fit: `Tester holds up to 60 characters, so the paste was cut to fit.`
 - It is grey, not red. It sits where ticket 02 puts a message, is linked by `aria-describedby`, and is announced politely, because it appears while the tester is in the field. It clears on the next edit and when the tester leaves the field. It holds neither the save nor Next.
 
-- [ ] `maxlength` on each field above, with the note on a blocked keystroke and on a cut paste.
-- [ ] A value already over its limit, from an old draft or an import, keeps its message, can still be shortened, and gets no note.
-- [ ] The server keeps its length refusal for changed values, because Undo, local draft recovery and other pages can still send one.
-- [ ] Check how Chromium counts a line break against a textarea's `maxlength`. The server counts one. If Chromium counts two, Limitations stops early, which is safe; record which in `docs/DATA_MAP.md`.
+- [x] `maxlength` on each field above, with the note on a blocked keystroke and on a cut paste.
+- [x] A value already over its limit, from an old draft or an import, keeps its message, can still be shortened, and gets no note.
+- [x] The server keeps its length refusal for changed values, because Undo, local draft recovery and other pages can still send one.
+- [x] Check how Chromium counts a line break against a textarea's `maxlength`. The server counts one. If Chromium counts two, Limitations stops early, which is safe; record which in `docs/DATA_MAP.md`.
 - [x] Check that a paste cut by `maxlength` never leaves half an emoji, which the server would refuse as a hidden character. If Chromium can leave one, cut the paste in a `paste` handler instead.
-- [ ] Browser tests: typing stops at the limit and the note shows; a paste longer than the room left is cut and the note says so; a Web/API line and a component name go past their limits and show the message; a stored value over its limit shows the message and can be shortened. In headless Chromium, a synthetic `ClipboardEvent("paste")` followed by `document.execCommand("insertText")` drives a paste; the prototype was checked that way.
-- [ ] `docs/DATA_MAP.md` §12, the "a Setup field is at most its length" row: replace "No input carries `maxlength`" with the new behaviour.
-- [ ] `docs/plans/setup-field-validation.md`, "What deviated": add a dated line under the "No HTML `maxlength`" bullet that points here.
+- [x] Browser tests: typing stops at the limit and the note shows; a paste longer than the room left is cut and the note says so; a Web/API line and a component name go past their limits and show the message; a stored value over its limit shows the message and can be shortened. In headless Chromium, a synthetic `ClipboardEvent("paste")` followed by `document.execCommand("insertText")` drives a paste; the prototype was checked that way.
+- [x] `docs/DATA_MAP.md` §12, the "a Setup field is at most its length" row: replace "No input carries `maxlength`" with the new behaviour.
+- [x] `docs/plans/setup-field-validation.md`, "What deviated": add a dated line under the "No HTML `maxlength`" bullet that points here.
 
 ## Next steps
 
-1. `/implement`: Small and decided. Build it once ticket 02 is done.
+Awaiting merge into `feat/setup-inline-field-errors`.
 
 ## Comments
 
 2026-10-05: In headless Chromium, synthetic paste plus `document.execCommand("insertText")` never left an unpaired surrogate. With one UTF-16 unit available, `😀` was rejected; mixed pastes cut at code-point boundaries (`A😀` at max 2 became `A`, `A😀B` at max 3 became `A😀`). No custom paste handler is needed.
+2026-10-05: Headless Chromium counts a textarea line break as one `maxlength` unit, matching the server's length count.

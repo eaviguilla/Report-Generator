@@ -20,4 +20,4 @@ Out of scope: Findings, which ticket 04 covers.
 
 ## Next steps
 
-1. `/implement`: Build it once ticket 02 is done. Ticket 04 can be built before or after it.
+1. `/implement`: Ticket 02 is done, so nothing blocks this. Ticket 04 can be built before or after it.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import socket
 import hashlib
 import threading
@@ -40,6 +41,8 @@ AUTOSAVE_TEST_DEFAULT = """(() => {
         set: value => { explicit = value; },
     });
 })()"""
+# The mark Content's Go to button leaves, which Undo, Redo and Restore also leave on the changed field.
+MARKED = re.compile(r"\bis-review-target\b")
 
 
 def setup_issue(field_name: str, value: str, environment: str = "production") -> str:
@@ -3290,6 +3293,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_function(f"{owner_value} === ''", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "")
         self.assertEqual(page.url, f"{self.base_url}/reports/{report_id}/setup")
+        expect(page.get_by_label("Application Owner")).to_have_class(MARKED)
+        expect(page.get_by_label("Application Owner")).not_to_be_focused()
         page.get_by_role("button", name="Redo last change").click()
         page.wait_for_function(f"{owner_value} === 'Undo this value'", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Undo this value")
@@ -3354,6 +3359,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 page.wait_for_url(f"**/reports/{report_id}/setup", timeout=10_000)
                 application_name = page.get_by_label("Application Name")
                 expect(application_name).to_have_value("Bad/App")
+                expect(application_name).to_have_class(MARKED)
                 self.assertEqual(application_name.evaluate("input => input.validationMessage"), setup_issue("app_name", "Bad/App"))
                 expect(page.locator("#save-button")).to_have_text("Correct invalid Setup fields")
                 self.assertEqual(main.workspace.load(report_id).engagement.app_name, saved_name)
@@ -3410,6 +3416,46 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Unsaved setup owner")
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "recovered")
+        owner = page.get_by_label("Application Owner")
+        expect(owner).to_have_class(MARKED)
+        expect(owner).to_be_in_viewport()
+        expect(owner).not_to_be_focused()
+        page.get_by_role("heading", name="Limitations").click()
+        expect(owner).not_to_have_class(MARKED)
+
+    def test_undo_of_a_coverage_change_marks_its_box(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        api = page.get_by_label("Test API", exact=True)
+        api.check()
+        expect(api).to_be_focused()
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+
+        expect(api).not_to_be_checked()
+        expect(api).to_have_class(MARKED)
+
+    def test_undo_of_an_added_test_account_lands_on_its_section(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        # Short enough that Test Accounts starts below the fold.
+        page.set_viewport_size({"width": 1280, "height": 400})
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        accounts = page.locator("#setup > section", has=page.locator("#test-accounts"))
+        rows = page.locator("#test-accounts input[aria-label^='User role']")
+        added = rows.count() + 1
+        page.get_by_role("button", name="Add account").click()
+        expect(page.get_by_label(f"User role {added}")).to_be_focused()
+        page.evaluate("() => window.scrollTo(0, 0)")
+        expect(accounts).not_to_be_in_viewport()
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+
+        expect(rows).to_have_count(added - 1)
+        expect(accounts).to_be_in_viewport()
 
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()

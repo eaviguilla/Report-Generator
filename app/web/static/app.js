@@ -179,8 +179,38 @@
   const saveCheck = root.dataset.step === "setup" ? () => setupSaveCheck() : null;
   const onSaved = () => updateEngagementName();
   const page = root.id === "setup" ? root.dataset.step : "edit";
+  // A Setup field's name: its section's heading text (a count is appended inside it), then what tells it apart there.
+  const headingText = container => container?.querySelector("h2")?.firstChild?.nodeValue || null;
+  const setupFieldName = element => {
+    const section = element?.closest?.("#setup > section");
+    if (!section || !element.matches("input, select, textarea")) return null;
+    const componentRow = element.closest(".scope-component-row");
+    return {
+      section: headingText(section),
+      path: element.dataset.path || null,
+      label: element.getAttribute("aria-label") || element.closest("label")?.firstChild?.nodeValue || null,
+      panel: headingText(element.closest(".scope-panel")),
+      row: componentRow ? [...componentRow.parentElement.querySelectorAll(".scope-component-row")].indexOf(componentRow) : null,
+    };
+  };
+  // Marked as Go to marks, and scrolled to; the cursor stays out, so Ctrl+Z still reaches the app.
+  const pointAtSetupField = name => {
+    const section = [...root.querySelectorAll(":scope > section")].find(candidate => headingText(candidate) === name.section);
+    const wanted = JSON.stringify(name);
+    const field = section && [...section.querySelectorAll("input, select, textarea")].find(control => JSON.stringify(setupFieldName(control)) === wanted);
+    (field || section)?.scrollIntoView({block: field ? "center" : "start"});
+    if (!field) return;
+    field.classList.add("is-review-target");
+    const letGo = event => {
+      if (event.target.closest(".is-review-target")) return;
+      field.classList.remove("is-review-target");
+      document.removeEventListener("click", letGo);
+    };
+    document.addEventListener("click", letGo);
+  };
+  const nameField = page === "setup" ? setupFieldName : null;
   const {isRecord, activeTextEntry} = window.vrSave;
-  const {report, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, saveCheck, onSaved});
+  const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, saveCheck, onSaved, nameField});
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
@@ -1215,7 +1245,8 @@
       document.querySelector("#add-test-account").onclick = () => {
         report.engagement.test_accounts.push({user_role:"", username:""});
         renderAccounts();
-        accountBody.lastElementChild?.querySelector("input")?.focus();
+        // The last row in the table is the new account's hidden message row, so find its input by label.
+        [...accountBody.querySelectorAll('input[aria-label^="User role"]')].at(-1)?.focus();
         scheduleSave();
       };
       renderAccounts();
@@ -1448,6 +1479,8 @@
       });
     };
     const renderCoverage = () => {
+      // Rebuilt under the tester's cursor, so focus goes back to the same control and the undo step can name it.
+      const focusedName = JSON.stringify(setupFieldName(document.activeElement));
       [configuration, windows].forEach(container => {
         container.querySelectorAll("[data-setup-message-control]").forEach(control => setupMessageControllers.delete(control));
       });
@@ -1842,6 +1875,10 @@
         scopeGrid.append(panel);
       });
       if (setupNotice?.dataset.validationAttempted === "true") updateSetupFieldIssues(true);
+      if (focusedName !== "null") {
+        [...root.querySelectorAll("#test-configuration input, #test-windows input, #test-windows select")]
+          .find(control => JSON.stringify(setupFieldName(control)) === focusedName)?.focus({preventScroll:true});
+      }
     };
     renderCoverage();
     }
@@ -3870,6 +3907,7 @@
     render();
   }
   root.id === "setup" ? setup() : continuousEditor();
+  if (changedField && page === "setup") pointAtSetupField(changedField);
   updateSetupSectionSummaries();
   updateEngagementName(serverReport);
 })();

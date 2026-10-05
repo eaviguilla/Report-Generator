@@ -18,4 +18,4 @@ Out of scope: replacing page tests, which tickets 04 and 05 do.
 
 ## Next steps
 
-1. `/implement`: Start once ticket 02 is done.
+1. `/implement`: Ticket 02 is done, so nothing blocks this. `window.vrSave` already offers `reconcileCanonicalObject` without a page; its "What deviated" paragraph lists what else `save.js` holds.

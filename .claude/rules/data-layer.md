@@ -8,6 +8,7 @@ paths:
   - "app/main.py"
   - "app/library.py"
   - "app/web/static/app.js"
+  - "app/web/static/save.js"
 ---
 <!-- Generated from .github/instructions/data-layer.instructions.md. Edit that file, not this one. -->
 

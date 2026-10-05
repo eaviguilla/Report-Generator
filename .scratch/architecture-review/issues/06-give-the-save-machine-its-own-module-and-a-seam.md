@@ -56,4 +56,4 @@ Decided without asking, then confirmed with the user:
 
 ## Next steps
 
-1. `/implement`: Build [ticket 02](../../save-module/issues/02-the-save-code-moves-into-its-own-file.md) next; ticket 01 is done. The five tickets in `.scratch/save-module/issues/` carry the work, and the spec was skipped because the Answers above already hold its decisions.
+1. `/implement`: Build [ticket 03](../../save-module/issues/03-the-save-code-runs-in-a-test-with-no-report-page.md) next; tickets 01 and 02 are done. The five tickets in `.scratch/save-module/issues/` carry the work, and the spec was skipped because the Answers above already hold its decisions.

@@ -12,9 +12,10 @@ document matching the house template. No database, no frontend framework, no bui
   reconciliation, page gates) → `app/workspace.py` (locking, folders, load/save) →
   `app/storage.py` (atomic JSON writes). Schema is `app/models.py` (Pydantic, schema 1.4).
 - **Browser:** `app/web/templates/*.html` embed the report as JSON, and every page also carries the
-  fixed lists and character rules from `app/vocabulary.py`; `app/web/static/app.js` is the
-  whole client — `setup()` for Setup/Findings, `continuousEditor()` for Content, plus autosave,
-  undo, and the 409 conflict flow. `manager.js` is the home page.
+  fixed lists and character rules from `app/vocabulary.py`. `app/web/static/save.js` loads first
+  and holds the save code: autosave, save conflicts, recovery copies, undo and redo, and Back.
+  `app/web/static/app.js` is the page code: `setup()` for Setup/Findings, `continuousEditor()` for
+  Content; it starts the save code once through `window.vrSave.start`. `manager.js` is the home page.
 - **Word pipeline:** `app/docx_report.py` picks one of four `resources/MAIN*.docx` masters and
   splices in the small component documents under `resources/`; `app/docx_captions.py` makes real
   caption fields and drives Word itself (Windows + Word + `pywin32` only);
@@ -138,7 +139,8 @@ A change to docs, comments or instructions alone needs nothing, and the script s
 |---|---|
 | `app.js` inside `setup()` | Setup and Findings page tests |
 | `app.js` inside `continuousEditor()` | Content page tests |
-| any other `app.js` code (save machine, twin rules, renderers) | every report-page test |
+| any other `app.js` code (twin rules, renderers) | every report-page test |
+| `save.js` (autosave, save conflicts, recovery copies, undo) | every report-page test |
 | `manager.js`, `home.html` | home page tests |
 | one page template | that page's tests |
 | CSS, `dialog.js`, `theme.js`, `diagnostics.js`, shared partials, server code in `app/*.py`, `tests/support.py` | every browser test |

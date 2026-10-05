@@ -54,5 +54,6 @@ or `wontfix`.
 | locking, paths, identity, legacy repair | `app/workspace.py` |
 | derived state, validation rules | `app/report_service.py` |
 | routes, concurrency headers, uploads | `app/main.py` |
-| client state, timers, navigation, mirrored rules | `app/web/static/app.js` |
+| client save state, timers, recovery copies, undo, Back | `app/web/static/save.js` |
+| Next, mirrored rules | `app/web/static/app.js` |
 | state seeding | `app/web/templates/*.html` |

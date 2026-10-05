@@ -117,6 +117,10 @@ class SelectorTests(unittest.TestCase):
         for path in ("app/main.py", "app/workspace.py", "app/storage.py"):
             self.assertEqual(pages_for(path), ALL_PAGES, f"{path} is server code every page talks to")
 
+    def test_the_save_code_selects_every_report_page_and_not_the_home_page(self) -> None:
+        pages = next(found for prefix, found in FILE_PAGES if "app/web/static/save.js".startswith(prefix))
+        self.assertEqual(pages, REPORT_PAGES, "only Setup, Findings and Content load save.js")
+
     def test_the_real_app_js_still_has_its_two_page_entry_points(self) -> None:
         """If these are renamed, every app.js change quietly selects all report-page tests."""
         source = (ROOT / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")

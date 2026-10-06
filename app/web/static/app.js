@@ -143,7 +143,7 @@
     const options = () => [...listbox.querySelectorAll('[role="option"]')];
     const setActive = index => {
       const available = options();
-      activeIndex = available.length ? (index + available.length) % available.length : -1;
+      activeIndex = index >= 0 && index < available.length ? index : -1;
       available.forEach((option, optionIndex) => {
         option.id ||= `${listbox.id}-${optionIndex}`;
         option.setAttribute("aria-selected", String(optionIndex === activeIndex));
@@ -155,12 +155,14 @@
         input.removeAttribute("aria-activedescendant");
       }
     };
-    new MutationObserver(() => setActive(-1)).observe(listbox, {childList:true});
+    new MutationObserver(() => setActive(0)).observe(listbox, {childList:true});
     input.addEventListener("keydown", event => {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        if (!options().length) return;
+        const count = options().length;
+        if (!count) return;
         event.preventDefault();
-        setActive(activeIndex + (event.key === "ArrowDown" ? 1 : -1));
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setActive(activeIndex < 0 ? (step > 0 ? 0 : count - 1) : (activeIndex + step + count) % count);
       } else if (event.key === "Enter" && activeIndex >= 0) {
         event.preventDefault();
         event.stopImmediatePropagation();

@@ -929,6 +929,8 @@ def _render_component_content(
             if isinstance(fragment, InstanceTitleFragment):
                 instance_number += 1
                 rendered.extend(_render_instance_title(document, component_root, fragment, instance_number))
+                # Each instance names its own environment, even when it matches the one before.
+                labelled_environment = None
                 continue
             # One label per run of images.
             if (

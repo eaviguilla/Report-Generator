@@ -59,6 +59,14 @@ _Avoid_: user, credential, login
 The access the tester had to the application: from inside the client's network (Internal) or from outside it (External).
 _Avoid_: network type, exposure
 
+**Instance title**:
+A heading in a finding's content that starts one instance of the finding. The Word report prints it as "Instance n:" followed by the tester's words, numbered from 1 in each section.
+_Avoid_: instance heading, instance label
+
+**Environment label**:
+The line above proof-of-concept images that names their environment: `PROD:`, or the non-production label in capitals, such as `UAT:`. The Word report prints one before the first image of each environment, and again after an instance title.
+_Avoid_: environment title, environment tag, image label
+
 **Supporting image**:
 A proof-of-concept image for a tested environment the finding does not affect.
 _Avoid_: extra image, stale image

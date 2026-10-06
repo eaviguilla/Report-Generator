@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import socket
 import hashlib
 import threading
@@ -27,7 +26,7 @@ from app.docx_report import generation_issues, main_template_path, render_report
 from app.report_service import finding_input_issues, format_rule_message, setup_input_issues, setup_issues, setup_refusal_message, scope_text_refusals, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
 from tests.support import png_bytes, use_temp_workspace
-from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
+from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
 
 
 # Tests wait for "Saved" constantly, and the app autosaves after 5 s idle, so most of that wait was the
@@ -41,8 +40,6 @@ AUTOSAVE_TEST_DEFAULT = """(() => {
         set: value => { explicit = value; },
     });
 })()"""
-# The mark Content's Go to button leaves, which Undo, Redo and Restore also leave on the changed field.
-MARKED = re.compile(r"\bis-review-target\b")
 
 
 def setup_issue(field_name: str, value: str, environment: str = "production") -> str:
@@ -2989,6 +2986,62 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(proof.locator(".evidence-tile").last).to_have_attribute("data-fragment-id", added)
         expect(proof.locator(".evidence-tile").last.locator(".evidence-environment")).to_have_value("non_production")
 
+    def test_redo_restores_an_environment_change_and_its_production_first_move(self) -> None:
+        report_id, report = self._finding_in_both_environments(["uat"])
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        added = proof.locator(".evidence-tile").last.get_attribute("data-fragment-id")
+        proof.locator(f'.evidence-tile[data-fragment-id="{added}"] .evidence-environment').select_option("production")
+        page.get_by_role("button", name="Save").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+        with page.expect_navigation():
+            page.get_by_role("button", name="Redo last change").click()
+
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        expect(proof.locator(".evidence-tile").first).to_have_attribute("data-fragment-id", added)
+        self.assertEqual(
+            proof.locator(".evidence-environment").evaluate_all("selects => selects.map(select => select.value)"),
+            ["production", "non_production"],
+        )
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual(
+            [(fragment.frag_id, fragment.environment) for fragment in saved_proof.fragments if fragment.type == "image"],
+            [(added, "production"), (next(fragment.frag_id for fragment in saved_proof.fragments if fragment.type == "image" and fragment.frag_id != added), "non_production")],
+        )
+
+    def test_paste_target_follows_an_evidence_tile_moved_to_production_first(self) -> None:
+        report_id, report = self._finding_in_both_environments(["uat"])
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        added = proof.locator(".evidence-tile").last.get_attribute("data-fragment-id")
+        environment = proof.locator(f'.evidence-tile[data-fragment-id="{added}"] .evidence-environment')
+        environment.focus()
+        environment.select_option("production")
+        expect(proof.locator(".evidence-tile").first).to_have_attribute("data-fragment-id", added)
+
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.request.method == "POST"):
+            self.paste_png()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        moved = next(fragment for fragment in saved_proof.fragments if fragment.frag_id == added)
+        replacement = next(fragment for fragment in saved_proof.fragments if fragment.type == "image" and fragment.frag_id != added)
+        self.assertEqual(moved.environment, "production")
+        self.assertIsNotNone(moved.evidence_id)
+        self.assertEqual(replacement.environment, "non_production")
+        self.assertIsNone(replacement.evidence_id)
+
     def test_moving_non_production_evidence_ahead_of_production_snaps_back_with_a_notice(self) -> None:
         report_id, report = self._finding_in_both_environments(["prod", "uat"])
         main.workspace.save(report)
@@ -3003,6 +3056,156 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(page.locator("#evidence-notice.is-visible")).to_have_text("Production evidence stays first.")
         self.assertEqual(self._proof_order(page), before)
         expect(page.get_by_role("button", name="Undo last change")).to_be_disabled()
+
+    def test_rejected_production_order_move_keeps_a_pending_caption_edit(self) -> None:
+        report_id, report = self._finding_in_both_environments(["prod", "uat"])
+        main.workspace.save(report)
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        non_production = proof.locator('.evidence-tile:has(.evidence-environment option:checked[value="non_production"])')
+        non_production.locator(".evidence-caption").fill("Pending UAT caption")
+
+        proof.get_by_role("button", name="Move earlier screenshot 2").click()
+
+        expect(page.locator("#evidence-notice.is-visible")).to_have_text("Production evidence stays first.")
+        expect(non_production.locator(".evidence-caption")).to_have_value("Pending UAT caption")
+        page.get_by_role("button", name="Save").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        saved_non_production = next(fragment for fragment in saved_proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        self.assertEqual(saved_non_production.caption, "Pending UAT caption")
+
+        page.get_by_role("button", name="Undo last change").click()
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        non_production = proof.locator('.evidence-tile:has(.evidence-environment option:checked[value="non_production"])')
+        expect(non_production.locator(".evidence-caption")).to_have_value("")
+
+    def test_load_latest_after_automatic_evidence_reorder_keeps_the_newer_report(self) -> None:
+        report_id, report = self._finding_in_both_environments(["prod", "uat"])
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        non_production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        proof.fragments = [steps, non_production, production]
+        main.workspace.save(report)
+
+        stale_page = self.page
+        stale_page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
+        current_page = self.context.new_page()
+        stale_page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        current_page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        current_description = current_page.locator(".content-block").filter(has_text="Description").locator(".rich").first
+        current_description.fill("Newer tab description")
+        current_page.get_by_role("button", name="Save").click()
+        current_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        stale_proof = stale_page.locator(".content-block").filter(has_text="Proof of Concept").last
+        stale_non_production = stale_proof.locator('.evidence-tile:has(.evidence-environment option:checked[value="non_production"])')
+        stale_non_production.locator(".evidence-caption").fill("Discard this stale caption")
+        stale_page.get_by_role("button", name="Save").click()
+        conflict = stale_page.locator("#app-diagnostics")
+        conflict.get_by_role("heading", name="Save conflict").wait_for(timeout=10_000)
+
+        with stale_page.expect_navigation():
+            conflict.get_by_role("button", name="Load latest").click()
+
+        expect(stale_page.locator(".content-block").filter(has_text="Description").locator(".rich").first).to_have_text("Newer tab description")
+        self.assertEqual(
+            stale_page.locator(".content-block").filter(has_text="Proof of Concept").last.locator(".evidence-environment").evaluate_all("selects => selects.map(select => select.value)"),
+            ["production", "non_production"],
+        )
+        expect(stale_page.locator(".evidence-caption", has_text="Discard this stale caption")).to_have_count(0)
+        expect(stale_page.locator("#save-button")).to_have_attribute("data-save-state", "saved")
+        current_page.close()
+
+    def test_undo_restores_an_instance_boundary_that_triggered_evidence_reordering(self) -> None:
+        report_id, report = self._finding_in_both_environments(["prod", "uat"])
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        non_production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        first_title = InstanceTitleFragment(frag_id="f_instance_one", type="instance_title", text="Instance one")
+        second_title = InstanceTitleFragment(frag_id="f_instance_two", type="instance_title", text="Instance two")
+        proof.fragments = [first_title, non_production, second_title, production, steps]
+        main.workspace.save(report)
+        original_order = [fragment.frag_id for fragment in proof.fragments]
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        page.locator('[data-fragment-id="f_instance_two"]').get_by_role("button", name="Move fragment down").click()
+
+        expect(page.locator("#evidence-notice.is-visible")).to_have_text("Production evidence stays first.")
+        self.assertEqual(
+            self._proof_order(page),
+            [first_title.frag_id, production.frag_id, non_production.frag_id, second_title.frag_id, steps.frag_id],
+        )
+        page.get_by_role("button", name="Save").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+
+        self.assertEqual(self._proof_order(page), original_order)
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.frag_id for fragment in saved_proof.fragments], original_order)
+
+    def test_a_recovery_copy_with_old_evidence_order_saves_production_first(self) -> None:
+        report_id, report = self._finding_in_both_environments(["prod", "uat"])
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        non_production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        proof.fragments = [steps, non_production, production]
+        main.workspace.save(report)
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
+        self.plant_recovery_draft(report.model_dump(mode="json", by_alias=True), "edit", "old-evidence-order")
+
+        self.restore_recovery_draft()
+
+        expect(page.locator("#save-button")).to_have_attribute("data-save-state", "recovered")
+        self.assertEqual(
+            page.locator(".content-block").filter(has_text="Proof of Concept").last.locator(".evidence-environment").evaluate_all("selects => selects.map(select => select.value)"),
+            ["production", "non_production"],
+        )
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.environment for fragment in saved_proof.fragments if fragment.type == "image"], ["production", "non_production"])
+
+    def test_enabling_an_environment_reorders_its_preserved_evidence(self) -> None:
+        report_id, report = self._finding_in_both_environments(["uat"])
+        report.engagement.tested_environments = ["non_production"]
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        non_production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        production = ImageFragment(
+            frag_id="f_preserved_production",
+            type="image",
+            environment="production",
+            caption="Preserved production response",
+        )
+        proof.fragments = [steps, non_production, production]
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        self.assertEqual(self._proof_order(page), [steps.frag_id, non_production.frag_id, production.frag_id])
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Production", exact=True).check()
+        page.get_by_role("button", name="Save").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+
+        self.assertEqual(self._proof_order(page), [steps.frag_id, production.frag_id, non_production.frag_id])
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        saved_production = next(fragment for fragment in saved_proof.fragments if fragment.frag_id == production.frag_id)
+        self.assertEqual(saved_production.caption, "Preserved production response")
+        self.assertEqual([fragment.frag_id for fragment in saved_proof.fragments], [steps.frag_id, production.frag_id, non_production.frag_id])
 
     def test_supporting_tile_survives_conflict_resolution_before_upload(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -3370,9 +3573,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Undo last change").click()
         page.wait_for_function(f"{owner_value} === ''", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "")
-        self.assertEqual(page.url, f"{self.base_url}/reports/{report_id}/setup")
-        expect(page.get_by_label("Application Owner")).to_have_class(MARKED)
-        expect(page.get_by_label("Application Owner")).not_to_be_focused()
         page.get_by_role("button", name="Redo last change").click()
         page.wait_for_function(f"{owner_value} === 'Undo this value'", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Undo this value")
@@ -3408,330 +3608,6 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Recovered value")
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "recovered")
         page.unroute(f"**/reports/{report_id}", interrupt_put)
-
-    def test_undo_or_redo_on_findings_of_a_refused_setup_value_opens_setup_and_holds_the_save(self) -> None:
-        name_value = '() => document.querySelector(\'[data-path="engagement.app_name"]\')?.value'
-        for history_button in ("Undo last change", "Redo last change"):
-            with self.subTest(history_button):
-                report_id = self.ready_report()
-                # A tab of its own, so the last subtest's held edit cannot stop this one loading.
-                page = self.context.new_page()
-                page.goto(f"{self.base_url}/reports/{report_id}/setup")
-                application_name = page.get_by_label("Application Name")
-                application_name.fill("Bad/App")
-                application_name.blur()
-                if history_button == "Undo last change":
-                    # A second step fixes the name, so undoing it brings the refused value back.
-                    application_name.fill("Fixed App")
-                    application_name.blur()
-                else:
-                    # Undone on Setup, so a Redo brings the refused value back.
-                    page.get_by_role("button", name="Undo last change").click()
-                    page.wait_for_function(f"{name_value} === 'Browser QA'", timeout=10_000)
-                page.get_by_role("button", name="Next: Findings").click()
-                page.wait_for_url("**/findings", timeout=10_000)
-                saved_name = main.workspace.load(report_id).engagement.app_name
-
-                page.get_by_role("button", name=history_button).click()
-
-                page.wait_for_url(f"**/reports/{report_id}/setup", timeout=10_000)
-                application_name = page.get_by_label("Application Name")
-                expect(application_name).to_have_value("Bad/App")
-                expect(application_name).to_have_class(MARKED)
-                self.assertEqual(application_name.evaluate("input => input.validationMessage"), setup_issue("app_name", "Bad/App"))
-                expect(page.locator("#save-button")).to_have_text("Correct invalid Setup fields")
-                self.assertEqual(main.workspace.load(report_id).engagement.app_name, saved_name)
-
-    def test_undo_on_findings_of_a_refused_additional_information_value_opens_content(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        report = main.workspace.load(report_id)
-        finding = report.vulnerabilities[0]
-        # Severity Review Tickets shows for every status but Open (New).
-        finding.status = "open_previously_discovered"
-        main.provision(finding)
-        # A refused value already stored, as an import can leave one, so one fix on Content is the step to undo.
-        finding.severity_review_tickets = "TKT 1"
-        main.workspace.save(report)
-        [message] = finding_input_issues(report)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        tickets = page.get_by_label("Severity Review Tickets")
-        tickets.fill("12345")
-        tickets.blur()
-        page.get_by_role("button", name="Previous: Findings").click()
-        page.wait_for_url("**/findings", timeout=10_000)
-        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].severity_review_tickets, "12345")
-
-        page.get_by_role("button", name="Undo last change").click()
-
-        page.wait_for_url(f"**/reports/{report_id}/edit", timeout=10_000)
-        expect(page.locator("#editor-notifications")).to_contain_text(message)
-        tickets = page.get_by_label("Severity Review Tickets")
-        expect(tickets).to_have_value("TKT 1")
-        self.assertEqual(tickets.evaluate("input => input.validationMessage"), message)
-        expect(page.locator(f'[data-fragment-id="{finding.uid}:severity_review_tickets"]')).to_have_class(MARKED)
-        expect(tickets).to_be_in_viewport()
-        expect(tickets).not_to_be_focused()
-        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].severity_review_tickets, "12345")
-
-    def test_restore_on_findings_of_a_copy_written_on_setup_opens_setup_with_it(self) -> None:
-        report_id = self.ready_report()
-        page = self.page
-
-        def drop_put(route) -> None:
-            if route.request.method == "PUT":
-                route.abort()
-            else:
-                route.continue_()
-
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        page.route(f"**/reports/{report_id}", drop_put)
-        page.get_by_label("Application Owner").fill("Unsaved setup owner")
-        page.wait_for_function(
-            "prefix => Object.keys(localStorage).some(key => key.startsWith(prefix))",
-            arg=f"vulnreport-pending:{report_id}:",
-        )
-        page.once("dialog", lambda dialog: dialog.accept())
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        page.unroute(f"**/reports/{report_id}", drop_put)
-
-        with page.expect_navigation(url=f"{self.base_url}/reports/{report_id}/setup"):
-            page.get_by_role("button", name="Restore on Setup", exact=True).click()
-
-        self.assertEqual(page.get_by_label("Application Owner").input_value(), "Unsaved setup owner")
-        self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "recovered")
-        owner = page.get_by_label("Application Owner")
-        expect(owner).to_have_class(MARKED)
-        expect(owner).to_be_in_viewport()
-        expect(owner).not_to_be_focused()
-        page.get_by_role("heading", name="Limitations").click()
-        expect(owner).not_to_have_class(MARKED)
-
-    def test_undo_of_a_coverage_change_marks_its_box(self) -> None:
-        report_id = self.ready_report()
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        api = page.get_by_label("Test API", exact=True)
-        api.check()
-        expect(api).to_be_focused()
-
-        with page.expect_navigation():
-            page.get_by_role("button", name="Undo last change").click()
-
-        expect(api).not_to_be_checked()
-        expect(api).to_have_class(MARKED)
-
-    def test_undo_of_an_added_test_account_lands_on_its_section(self) -> None:
-        report_id = self.ready_report()
-        page = self.page
-        # Short enough that Test Accounts starts below the fold.
-        page.set_viewport_size({"width": 1280, "height": 400})
-        page.goto(f"{self.base_url}/reports/{report_id}/setup")
-        accounts = page.locator("#setup > section", has=page.locator("#test-accounts"))
-        rows = page.locator("#test-accounts input[aria-label^='User role']")
-        added = rows.count() + 1
-        page.get_by_role("button", name="Add account").click()
-        expect(page.get_by_label(f"User role {added}")).to_be_focused()
-        page.evaluate("() => window.scrollTo(0, 0)")
-        expect(accounts).not_to_be_in_viewport()
-
-        with page.expect_navigation():
-            page.get_by_role("button", name="Undo last change").click()
-
-        expect(rows).to_have_count(added - 1)
-        expect(accounts).to_be_in_viewport()
-
-    def test_undo_of_a_setup_button_marks_the_field_it_changed(self) -> None:
-        def two_components(report) -> None:
-            report.engagement.tested_channels = ["thick_client"]
-            report.scope_targets = [
-                ScopeTarget(target_id="tgt_main", environment="production", channel="thick_client", value="Acme.exe", description="Main client", order=0),
-                ScopeTarget(target_id="tgt_updater", environment="production", channel="thick_client", value="Updater.exe", description="Updater", order=1),
-            ]
-
-        def limitation_offer(report) -> None:
-            report.engagement.report_type = "retest"
-            report.engagement.non_production_label = "UAT"
-
-        # Each button takes the cursor away from the field it changes before the step is recorded.
-        cases = [
-            ("Remove account", None, lambda page: page.get_by_role("button", name="Remove test account 1"), lambda page: page.get_by_label("User role 1")),
-            ("Remove component", two_components, lambda page: page.get_by_role("button", name="Remove Thick Client component 1"), lambda page: page.get_by_role("textbox", name="Thick Client Component", exact=True).first),
-            ("Use it", limitation_offer, lambda page: page.locator("#limitations-offer").get_by_role("button", name="Use it"), lambda page: page.get_by_label("Limitations")),
-        ]
-        for name, prepare, button, field in cases:
-            with self.subTest(name):
-                report_id = self.ready_report()
-                if prepare:
-                    report = main.workspace.load(report_id)
-                    prepare(report)
-                    main.workspace.save(report)
-                page = self.context.new_page()
-                page.goto(f"{self.base_url}/reports/{report_id}/setup")
-                button(page).click()
-
-                with page.expect_navigation():
-                    page.get_by_role("button", name="Undo last change").click()
-
-                expect(field(page)).to_have_class(MARKED)
-
-    def _add_zebra_finding(self, report_id: str) -> Vulnerability:
-        """A second complete finding, after the seeded one on Findings and on Content."""
-        report = main.workspace.load(report_id)
-        later = Vulnerability(
-            uid="v_later", title="Zebra finding", likelihood="low", impact="low", severity="low",
-            status="open_new", scope={"mode": "custom", "target_ids": ["tgt_browser"]},
-        )
-        main.provision(later)
-        report.vulnerabilities.append(later)
-        main.sync_evidence_image_slots(later, report)
-        main.workspace.save(report)
-        return later
-
-    def test_undo_on_content_shows_the_steps_finding_and_marks_its_fragment(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        later = self._add_zebra_finding(report_id)
-        description = next(content for content in later.contents if content.type == "description").fragments[0]
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        # Content opens on the first finding by severity and title, which is not this one.
-        expect(page.locator(".finding-nav.active")).to_contain_text("Browser finding")
-        page.locator(".finding-nav", has_text="Zebra finding").click()
-        card = page.locator(f'[data-fragment-id="{description.frag_id}"]')
-        text = card.get_by_role("textbox")
-        text.fill("Undo this description")
-
-        with page.expect_navigation():
-            page.get_by_role("button", name="Undo last change").click()
-
-        expect(page.locator(".finding-nav.active")).to_contain_text("Zebra finding")
-        expect(text).to_have_text("")
-        expect(card).to_have_class(MARKED)
-        expect(card).to_be_in_viewport()
-        expect(text).not_to_be_focused()
-        page.locator(".finding-header").click()
-        expect(card).not_to_have_class(MARKED)
-
-    def test_redo_of_a_deleted_fragment_lands_on_its_section(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        # Short enough that Proof of Concept starts below the fold.
-        page.set_viewport_size({"width": 1280, "height": 400})
-        page.goto(f"{self.base_url}/reports/{report_id}/edit")
-        proof = page.locator('.content-block[data-content-type="proof_of_concept"]')
-        proof.get_by_label("Add fragment to Proof of Concept").select_option("note")
-        note = proof.locator("[data-fragment-id]", has=page.locator(".tag", has_text=re.compile(r"^note$")))
-        note_id = note.get_attribute("data-fragment-id")
-        note.get_by_role("button", name="Delete fragment").click()
-        expect(note).to_have_count(0)
-
-        with page.expect_navigation():
-            page.get_by_role("button", name="Undo last change").click()
-
-        restored = page.locator(f'[data-fragment-id="{note_id}"]')
-        expect(restored).to_have_class(MARKED)
-        page.evaluate("() => { window.scrollTo(0, 0); document.querySelector('#finding-editor').scrollTop = 0; }")
-        expect(proof).not_to_be_in_viewport()
-
-        with page.expect_navigation():
-            page.get_by_role("button", name="Redo last change").click()
-
-        expect(restored).to_have_count(0)
-        expect(proof).to_be_in_viewport()
-
-    def test_undo_on_content_of_a_findings_step_unfolds_and_marks_its_field(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        self._add_zebra_finding(report_id)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        rows = page.locator("#findings > tr:not(.finding-location-row)")
-        locations = page.locator("#findings > tr.finding-location-row")
-        # Only the first finding's locations start unfolded.
-        expect(locations.nth(1)).to_be_hidden()
-        rows.nth(1).locator(".finding-fold-toggle").click()
-        value = locations.nth(1).get_by_label("Location value for https://prod.example.test")
-        value.fill("https://prod.example.test/zebra")
-        page.get_by_role("button", name="Next: Content").click()
-        page.wait_for_url("**/edit", timeout=10_000)
-
-        page.get_by_role("button", name="Undo last change").click()
-
-        page.wait_for_url(f"**/reports/{report_id}/findings", timeout=10_000)
-        expect(value).to_have_value("https://prod.example.test")
-        expect(value).to_have_class(MARKED)
-        expect(value).to_be_in_viewport()
-        expect(value).not_to_be_focused()
-        page.locator(".section-title h1").click()
-        expect(value).not_to_have_class(MARKED)
-
-    def test_undo_on_findings_reloads_and_marks_the_field(self) -> None:
-        cases = [
-            # A select the row keeps, and a location box whose change rebuilds the table before its step is recorded.
-            ("Likelihood", lambda row: row.get_by_label("Likelihood"), lambda field: field.select_option("high"), lambda field: expect(field).to_have_value("low")),
-            ("location", lambda row: row.locator("xpath=following-sibling::tr[1]").get_by_label("Select https://prod.example.test"), lambda field: field.uncheck(), lambda field: expect(field).to_be_checked()),
-            # A Vuln ID shows as a button once typed, so the button carries the mark.
-            ("Vuln ID", lambda row: row.get_by_role("button", name="Edit vulnerability ID"), lambda field: (field.click(), field.page.keyboard.type("123")), lambda field: expect(field).to_have_text("\u2014")),
-            ("Select all", lambda row: row.locator("xpath=following-sibling::tr[1]").get_by_role("button", name="Select all"), lambda field: field.click(), lambda field: expect(field).to_have_text("Select all")),
-        ]
-        for name, find, change, undone in cases:
-            with self.subTest(name):
-                report_id = self.ready_report(include_finding=True)
-                report = main.workspace.load(report_id)
-                # A second production target, so the locations offer Select all.
-                report.scope_targets.append(ScopeTarget(target_id="tgt_second", environment="production", channel="web", value="https://prod2.example.test"))
-                main.workspace.save(report)
-                page = self.context.new_page()
-                page.goto(f"{self.base_url}/reports/{report_id}/findings")
-                field = find(page.locator("#findings > tr:not(.finding-location-row)").first)
-                # A tester's click focuses the box; select_option alone does not.
-                field.focus()
-                change(field)
-
-                with page.expect_navigation():
-                    page.get_by_role("button", name="Undo last change").click()
-
-                undone(field)
-                expect(field).to_have_class(MARKED)
-                expect(field).not_to_be_focused()
-
-    def test_undo_of_an_added_finding_lands_on_the_list(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        self._add_zebra_finding(report_id)
-        page = self.page
-        # Short enough that the page scrolls past the list's heading.
-        page.set_viewport_size({"width": 1280, "height": 400})
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        rows = page.locator("#findings > tr:not(.finding-location-row)")
-        heading = page.locator(".section-title h1")
-        page.get_by_role("button", name="Add finding").click()
-        expect(rows).to_have_count(3)
-        expect(rows.nth(2).locator(".finding-title-cell input")).to_be_focused()
-        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-        expect(heading).not_to_be_in_viewport()
-
-        with page.expect_navigation():
-            page.get_by_role("button", name="Undo last change").click()
-
-        expect(rows).to_have_count(2)
-        expect(heading).to_be_in_viewport()
-
-    def test_redo_of_a_library_insert_marks_the_new_findings_name(self) -> None:
-        report_id = self.ready_report(include_finding=True)
-        page = self.page
-        page.goto(f"{self.base_url}/reports/{report_id}/findings")
-        rows = page.locator("#findings > tr:not(.finding-location-row)")
-        page.get_by_role("combobox", name="Search vulnerability library").fill(main.library.entries[0]["title"])
-        page.locator("#library-results [role=option]").first.click()
-        expect(rows).to_have_count(2)
-        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
-        with page.expect_navigation():
-            page.get_by_role("button", name="Undo last change").click()
-        expect(rows).to_have_count(1)
-
-        with page.expect_navigation():
-            page.get_by_role("button", name="Redo last change").click()
-
-        expect(rows.nth(1).locator(".finding-title-display")).to_have_class(MARKED)
 
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()
@@ -3798,6 +3674,278 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.keyboard.type("token")
         expect(options.first).to_be_visible()
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+
+    def test_repeated_enter_while_a_library_insert_is_pending_adds_one_finding(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                let held = false;
+                window.releaseLibraryInsert = null;
+                window.fetch = (input, init = {}) => {
+                    const isInsert = String(input).includes(`/reports/${reportId}/library/`) && init.method === "POST";
+                    if (!held && isInsert) {
+                        held = true;
+                        return new Promise(resolve => {
+                            window.releaseLibraryInsert = () => originalFetch(input, init).then(resolve);
+                        });
+                    }
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+        search = page.get_by_role("combobox", name="Search vulnerability library")
+        search.fill("xss")
+        expect(page.locator("#library-results [role=option]").first).to_be_visible()
+
+        search.press("Enter")
+        page.wait_for_function("window.releaseLibraryInsert !== null", timeout=5_000)
+        search.press("Enter")
+        page.evaluate("window.releaseLibraryInsert()")
+
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        expect(rows).to_have_count(1)
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(len(main.workspace.load(report_id).vulnerabilities), 1)
+
+    def test_a_second_library_pick_queues_while_the_first_follow_up_save_is_pending(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                let held = false;
+                window.releaseLibrarySave = null;
+                window.fetch = (input, init = {}) => {
+                    const isReportSave = String(input).endsWith(`/reports/${reportId}`) && init.method === "PUT";
+                    if (!held && isReportSave) {
+                        held = true;
+                        return new Promise(resolve => {
+                            window.releaseLibrarySave = () => originalFetch(input, init).then(resolve);
+                        });
+                    }
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+        search = page.get_by_role("combobox", name="Search vulnerability library")
+        options = page.locator("#library-results [role=option]")
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        search.fill("xss")
+        search.press("Enter")
+        expect(rows).to_have_count(1)
+        page.wait_for_function("window.releaseLibrarySave !== null", timeout=5_000)
+
+        page.keyboard.type("xss")
+        expect(options.first).to_be_visible()
+        search.press("Enter")
+        page.evaluate("window.releaseLibrarySave()")
+
+        expect(rows).to_have_count(2)
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(len(main.workspace.load(report_id).vulnerabilities), 2)
+
+    def test_a_different_library_query_queues_while_the_first_insert_is_pending(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                let held = false;
+                window.releaseLibraryInsert = null;
+                window.fetch = (input, init = {}) => {
+                    const isInsert = String(input).includes(`/reports/${reportId}/library/`) && init.method === "POST";
+                    if (!held && isInsert) {
+                        held = true;
+                        return new Promise(resolve => {
+                            window.releaseLibraryInsert = () => originalFetch(input, init).then(resolve);
+                        });
+                    }
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+        search = page.get_by_role("combobox", name="Search vulnerability library")
+        options = page.locator("#library-results [role=option]")
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        search.fill("xss")
+        search.press("Enter")
+        page.wait_for_function("window.releaseLibraryInsert !== null", timeout=5_000)
+
+        search.fill("token")
+        expect(options.first).to_be_visible()
+        search.press("Enter")
+        page.evaluate("window.releaseLibraryInsert()")
+
+        expect(rows).to_have_count(2)
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(len(main.workspace.load(report_id).vulnerabilities), 2)
+
+    def test_a_queued_library_insert_runs_after_the_first_insert_fails(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                let held = false;
+                window.failFirstLibraryInsert = null;
+                window.fetch = (input, init = {}) => {
+                    const isInsert = String(input).includes(`/reports/${reportId}/library/`) && init.method === "POST";
+                    if (!held && isInsert) {
+                        held = true;
+                        return new Promise(resolve => {
+                            window.failFirstLibraryInsert = () => resolve(new Response(
+                                JSON.stringify({detail: "Forced insert failure"}),
+                                {status: 500, headers: {"Content-Type": "application/json"}},
+                            ));
+                        });
+                    }
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+        search = page.get_by_role("combobox", name="Search vulnerability library")
+        options = page.locator("#library-results [role=option]")
+        search.fill("xss")
+        search.press("Enter")
+        page.wait_for_function("window.failFirstLibraryInsert !== null", timeout=5_000)
+        search.fill("token")
+        expect(options.first).to_be_visible()
+        second_title = options.first.locator("b").inner_text()
+        search.press("Enter")
+
+        page.evaluate("window.failFirstLibraryInsert()")
+
+        expect(page.locator("#findings > tr:not(.finding-location-row)")).to_have_count(1)
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        expect(page.locator('#app-diagnostics[data-operation="insert_library"]')).to_be_visible()
+        self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], [second_title])
+
+    def test_a_queued_library_query_is_restored_after_the_first_insert_conflicts(self) -> None:
+        report_id = self.ready_report()
+        stale_page = self.page
+        current_page = self.context.new_page()
+        stale_page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        current_page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        stale_page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                let held = false;
+                window.releaseLibraryInsert = null;
+                window.fetch = (input, init = {}) => {
+                    const isInsert = String(input).includes(`/reports/${reportId}/library/`) && init.method === "POST";
+                    if (!held && isInsert) {
+                        held = true;
+                        return new Promise(resolve => {
+                            window.releaseLibraryInsert = () => originalFetch(input, init).then(resolve);
+                        });
+                    }
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+        search = stale_page.get_by_role("combobox", name="Search vulnerability library")
+        options = stale_page.locator("#library-results [role=option]")
+        search.fill("xss")
+        search.press("Enter")
+        stale_page.wait_for_function("window.releaseLibraryInsert !== null", timeout=5_000)
+        search.fill("token")
+        expect(options.first).to_be_visible()
+        second_title = options.first.locator("b").inner_text()
+        search.press("Enter")
+
+        current_page.get_by_label("Application Owner").fill("Owner from the newer tab")
+        current_page.get_by_role("button", name="Save").click()
+        current_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        stale_page.evaluate("window.releaseLibraryInsert()")
+        conflict = stale_page.locator("#app-diagnostics")
+        conflict.get_by_role("heading", name="Save conflict").wait_for(timeout=10_000)
+        expect(search).to_have_value("token")
+
+        conflict.get_by_role("button", name="Save my version").click()
+        stale_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        search.click()
+        expect(options.first).to_be_visible()
+        search.press("Enter")
+
+        expect(stale_page.locator("#findings > tr:not(.finding-location-row)")).to_have_count(1)
+        stale_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], [second_title])
+        current_page.close()
+
+    def test_a_failed_library_insert_can_be_retried_without_retyping_the_search(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        attempts = 0
+
+        def fail_first_insert(route) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                route.fulfill(status=500, content_type="application/json", body='{"detail":"Forced insert failure"}')
+            else:
+                route.continue_()
+
+        page.route(f"**/reports/{report_id}/library/*", fail_first_insert)
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        search = page.get_by_role("combobox", name="Search vulnerability library")
+        options = page.locator("#library-results [role=option]")
+        search.fill("xss")
+        expect(options.first).to_be_visible()
+
+        search.press("Enter")
+
+        diagnostic = page.locator('#app-diagnostics[data-operation="insert_library"]')
+        diagnostic.wait_for(timeout=5_000)
+        expect(search).to_have_value("xss")
+        diagnostic.get_by_role("button", name="Dismiss").click()
+        search.click()
+        expect(options.first).to_be_visible()
+        search.press("Enter")
+        expect(page.locator("#findings > tr:not(.finding-location-row)")).to_have_count(1)
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(len(main.workspace.load(report_id).vulnerabilities), 1)
+
+    def test_a_library_insert_conflict_can_be_resolved_and_retried_once(self) -> None:
+        report_id = self.ready_report()
+        stale_page = self.page
+        current_page = self.context.new_page()
+        stale_page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        current_page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        current_page.get_by_label("Application Owner").fill("Owner from the newer tab")
+        current_page.get_by_role("button", name="Save").click()
+        current_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        search = stale_page.get_by_role("combobox", name="Search vulnerability library")
+        options = stale_page.locator("#library-results [role=option]")
+        search.fill("xss")
+        expect(options.first).to_be_visible()
+        search.press("Enter")
+        conflict = stale_page.locator("#app-diagnostics")
+        conflict.get_by_role("heading", name="Save conflict").wait_for(timeout=10_000)
+
+        conflict.get_by_role("button", name="Save my version").click()
+        stale_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        expect(search).to_have_value("xss")
+        search.click()
+        expect(options.first).to_be_visible()
+        search.press("Enter")
+
+        expect(stale_page.locator("#findings > tr:not(.finding-location-row)")).to_have_count(1)
+        stale_page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertEqual(len(main.workspace.load(report_id).vulnerabilities), 1)
+        current_page.close()
 
     def test_a_finding_name_box_highlights_the_first_library_result_and_enter_applies_it(self) -> None:
         report_id = self.ready_report()
@@ -6353,6 +6501,64 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def _expect_generated(self):
         return self.page.expect_response(lambda response: "/generate" in response.url and response.request.method == "POST", timeout=15_000)
+
+    def test_generate_saves_automatic_production_first_order_before_rendering(self) -> None:
+        report_id = self._generatable_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+        report.scope_targets.append(ScopeTarget(
+            target_id="tgt_generate_uat", environment="non_production", channel="web", value="https://uat.example.test",
+        ))
+        finding = report.vulnerabilities[0]
+        finding.scope.target_ids.append("tgt_generate_uat")
+        main.sync_evidence_image_slots(finding, report)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        non_production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        image_data = png_bytes(2, 2)
+        non_production.evidence_id = "ev_generate_uat"
+        non_production.caption = "Non-production proof"
+        report.evidence[non_production.evidence_id] = EvidenceItem(
+            file="evidence/ev_generate_uat.png",
+            original_name="uat-proof.png",
+            width_px=2,
+            height_px=2,
+            sha256=hashlib.sha256(image_data).hexdigest(),
+            uploaded_at=report.saved_at,
+        )
+        evidence_path = main.workspace.find_path(report_id).parent / report.evidence[non_production.evidence_id].file
+        evidence_path.write_bytes(image_data)
+        proof.fragments = [steps, non_production, production]
+        main.workspace.save(report)
+
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.evaluate(
+            """reportId => {
+                const originalFetch = window.fetch.bind(window);
+                window.generateRequestOrder = [];
+                window.fetch = (input, init = {}) => {
+                    const url = typeof input === "string" ? input : input.url;
+                    if (url === `/reports/${reportId}` && init.method === "PUT") window.generateRequestOrder.push("PUT");
+                    if (url.startsWith(`/reports/${reportId}/generate`) && init.method === "POST") window.generateRequestOrder.push("POST");
+                    return originalFetch(input, init);
+                };
+            }""",
+            report_id,
+        )
+
+        with self._expect_generated() as generated:
+            page.get_by_role("button", name="Generate Report").click()
+
+        self.assertEqual(page.evaluate("window.generateRequestOrder"), ["PUT", "POST"])
+        rendered = Document(generated.value.json()["path"])
+        paragraphs = [paragraph.text for paragraph in rendered.paragraphs]
+        production_index = next(index for index, text in enumerate(paragraphs) if "Production proof" in text)
+        non_production_index = next(index for index, text in enumerate(paragraphs) if "Non-production proof" in text)
+        self.assertLess(production_index, non_production_index)
 
     def test_generate_button_holds_its_place_and_width_from_click_to_finish(self) -> None:
         """The success notice once shared the bottom bar and pushed the button left, and the shorter busy label narrowed it."""

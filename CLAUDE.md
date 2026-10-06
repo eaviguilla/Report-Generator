@@ -4,6 +4,8 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 
 @.claude/skills/unslop/SKILL.md
 
+Before you send a reply longer than three sentences, read `.claude/skills/unslop/SKILL.md` if it is not already in your context, then fix every pattern it lists in your draft.
+
 ## Commands (bash/zsh; on Windows use `py -3` for `.venv/bin/python`)
 - Start: `python3 app/init.py` (creates `.venv`, installs `requirements.txt`, serves on the first free port 8765-8799)
 - Dev setup: `.venv/bin/python -m pip install -r requirements-dev.txt` then `.venv/bin/python -m playwright install chromium`
@@ -21,12 +23,12 @@ Local-only pentest report writer: a tester fills Setup, Findings and Content pag
 - Work items (plans, `.scratch/` issues and maps, decision records): `.venv/bin/python tools/star_map/star_map.py` draws them as the Star Map, with next steps to copy. Their statuses, `From:`, `Blocked by:` and `Merged into:` lines and `## Next steps` lists follow `docs/agents/issue-tracker.md`.
 
 ## Rules
-- Every bug fix gets a regression test. Before each test run, state its scope in one line; `relevant_tests.py` prints it.
+- Every bug fix starts with its regression test. Write it, run it, and see it fail before you change app code. A review finding the user asks you to fix counts as a bug report. Before each test run, state its scope in one line; `relevant_tests.py` prints it.
 - Do not modify `resources/*.docx` or other binary templates without asking.
 - Word automation (`pythoncom`, `win32com`) stays in `app/docx_captions.py`; `msvcrt` stays behind its existing guards in `app/workspace.py` and `app/init.py`.
 - `docs/plans/` is 25 files of up to 3,400 lines each. Never Read one whole: `grep -n '^## '` it, then Read only `## Answers` and `## Agreed plan`. A plan is a dated record: trust the code and `docs/DATA_MAP.md` over it, and run `git log -S` on a symbol the plan adds before believing a `done` status.
 - Implementing a plan: update its status and deviations in the same change, and mark it `done` only with the commit that contains the change.
-- More process rules: `.github/copilot-instructions.md` ("Implementing a plan", "Running tests in this repo", "Pushing changes"). Ignore its "Talking to me" section; my global style applies.
+- More process rules: `.github/copilot-instructions.md` ("Implementing a plan", "Running tests in this repo", "Pushing changes").
 - `docs/FORM_STATE_PLAN.md` is superseded research, not the shipped design.
 
 ## Code structure

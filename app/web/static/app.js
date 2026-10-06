@@ -2414,13 +2414,13 @@
           applyServerRevision(mutation.saved_at);
           const finding = mutation.finding;
           report.vulnerabilities.push(finding);
-          results.innerHTML = "";
           search.value = "";
+          // A click took the focus; focusing opens the whole library, so the list is emptied after.
+          search.focus();
+          results.innerHTML = "";
           search.setAttribute("aria-expanded", "false");
           renderFindings();
-          const addedRow = findingBody.lastElementChild;
-          addedRow?.scrollIntoView({behavior:"smooth", block:"center"});
-          addedRow?.querySelector("input")?.focus();
+          keepFieldName({finding: finding.uid, column: 0});
           scheduleSave();
           await save();
         } catch (error) {
@@ -2437,7 +2437,7 @@
         search.setAttribute("aria-expanded", "false");
       }
     };
-    search.onblur = () => setTimeout(() => { results.innerHTML = ""; search.setAttribute("aria-expanded", "false"); }, 150);
+    search.onblur = () => setTimeout(() => { if (document.activeElement === search) return; results.innerHTML = ""; search.setAttribute("aria-expanded", "false"); }, 150);
     }
     const validateSetupPage = reveal => {
       const results = window.vrRules.setupResults(report, vocabulary);

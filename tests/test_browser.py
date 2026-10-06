@@ -3637,12 +3637,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(rows).to_have_count(2)
         expect(heading).to_be_in_viewport()
 
-    def test_redo_of_a_library_insert_marks_the_select_all_it_focused(self) -> None:
+    def test_redo_of_a_library_insert_marks_the_new_findings_name(self) -> None:
         report_id = self.ready_report(include_finding=True)
-        report = main.workspace.load(report_id)
-        # A second production target, so the new finding's locations start with Select all.
-        report.scope_targets.append(ScopeTarget(target_id="tgt_second", environment="production", channel="web", value="https://prod2.example.test"))
-        main.workspace.save(report)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
         rows = page.locator("#findings > tr:not(.finding-location-row)")
@@ -3657,7 +3653,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         with page.expect_navigation():
             page.get_by_role("button", name="Redo last change").click()
 
-        expect(page.locator("#findings > tr.finding-location-row").nth(1).get_by_role("button", name="Select all")).to_have_class(MARKED)
+        expect(rows.nth(1).locator(".finding-title-display")).to_have_class(MARKED)
 
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()
@@ -3702,6 +3698,28 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator("#findings > tr:not(.finding-location-row)").wait_for()
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
         self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], [first_title])
+
+    def test_picking_a_library_result_keeps_the_focus_in_the_empty_search_bar(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        search = page.get_by_role("combobox", name="Search vulnerability library")
+        options = page.locator("#library-results [role=option]")
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        search.click()
+        for count, (how, pick) in enumerate((("Enter", lambda: search.press("Enter")), ("click", lambda: options.first.click())), start=1):
+            with self.subTest(pick=how):
+                # Typed without a click, so it only reaches the bar if the bar kept the focus.
+                page.keyboard.type("xss")
+                expect(options.first).to_be_visible()
+                pick()
+                expect(rows).to_have_count(count)
+                expect(search).to_be_focused()
+                expect(search).to_have_value("")
+                expect(options).to_have_count(0)
+        page.keyboard.type("token")
+        expect(options.first).to_be_visible()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
 
     def test_a_finding_name_box_highlights_the_first_library_result_and_enter_applies_it(self) -> None:
         report_id = self.ready_report()

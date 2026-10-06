@@ -1603,8 +1603,8 @@ button.content-toggle:hover:not(:disabled) small {
   font-weight: 600;
 }
 
-/* Says what to do after a paste that had nowhere to go. The only message this flow shows. */
-#paste-notice {
+/* A short word on evidence: a paste that had nowhere to go, or a move the production-first order undid. */
+#evidence-notice {
   position: fixed;
   bottom: 18px;
   left: 50%;
@@ -1624,7 +1624,7 @@ button.content-toggle:hover:not(:disabled) small {
   pointer-events: none;
 }
 
-#paste-notice.is-visible {
+#evidence-notice.is-visible {
   opacity: 1;
   transform: translate(-50%, 0);
 }

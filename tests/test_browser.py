@@ -21,7 +21,7 @@ from PIL import Image
 from playwright.sync_api import expect, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 
-from app import acceptance, main
+from app import acceptance, main, report_service
 from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import finding_input_issues, format_rule_message, setup_input_issues, setup_issues, setup_refusal_message, scope_text_refusals, status_conclusion_runs
@@ -2615,8 +2615,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator(".evidence-tile").first.wait_for(timeout=5_000)
 
         self.paste_png()
-        page.wait_for_selector("#paste-notice.is-visible", timeout=5_000)
-        self.assertIn("evidence image", page.locator("#paste-notice").inner_text())
+        page.wait_for_selector("#evidence-notice.is-visible", timeout=5_000)
+        self.assertIn("evidence image", page.locator("#evidence-notice").inner_text())
         # Deliberately a pause: this checks an upload did NOT happen, and one would only start after
         # an asynchronous file read, so there is no event to wait for instead.
         page.wait_for_timeout(800)
@@ -2875,18 +2875,20 @@ class BrowserWorkflowTests(unittest.TestCase):
         proof.locator(".evidence-tile.has-evidence .evidence-environment").select_option("non_production")
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
         self.assertEqual(proof.locator(".evidence-tile").count(), 2, "the page did not add a replacement Production tile")
+        # The replacement Production slot goes ahead of the Non-Production screenshot.
         self.assertEqual(
             proof.locator(".evidence-environment").evaluate_all("selects => selects.map(select => select.value)"),
-            ["non_production", "production"],
+            ["production", "non_production"],
         )
         self.assertTrue(page.get_by_text("Production evidence image required", exact=True).is_visible())
 
         proof.locator(".evidence-tile.has-evidence .evidence-environment").select_option("production")
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
         self.assertEqual(proof.locator(".evidence-tile").count(), 2)
-        delete_buttons = proof.locator('button[aria-label^="Delete screenshot"]')
-        self.assertFalse(delete_buttons.nth(1).is_disabled(), "the now-extra empty tile cannot be deleted")
-        delete_buttons.nth(1).click()
+        empty_tile = proof.locator(".evidence-tile:not(.has-evidence)")
+        empty_delete = empty_tile.locator('button[aria-label^="Delete screenshot"]')
+        self.assertFalse(empty_delete.is_disabled(), "the now-extra empty tile cannot be deleted")
+        empty_delete.click()
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
         self.assertEqual(proof.locator(".evidence-tile").count(), 1)
         self.assertTrue(proof.get_by_role("button", name="Delete screenshot 1").is_disabled())
@@ -2925,6 +2927,82 @@ class BrowserWorkflowTests(unittest.TestCase):
         supporting.locator(".evidence-caption").fill("Same response in the test environment")
         rows.first.wait_for(state="attached")
         self.assertIn("requires image", rows.first.inner_text())
+
+    def _finding_in_both_environments(self, target_ids: list[str]) -> tuple[str, object]:
+        """A report testing both environments whose finding has the given locations, slots synced."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
+        report.scope_targets.append(ScopeTarget(target_id="tgt_browser_uat", environment="non_production", channel="web", value="https://test.example.test"))
+        report.vulnerabilities[0].scope.target_ids = [{"prod": report.vulnerabilities[0].scope.target_ids[0], "uat": "tgt_browser_uat"}[name] for name in target_ids]
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments = [fragment for fragment in proof.fragments if fragment.type != "image"]
+        main.sync_evidence_image_slots(report.vulnerabilities[0], report)
+        return report_id, report
+
+    def _proof_order(self, page) -> list[str]:
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        return proof.locator(".fragment[data-fragment-id], .evidence-tile").evaluate_all("nodes => nodes.map(node => node.dataset.fragmentId)")
+
+    def test_content_puts_stored_production_evidence_first_as_the_server_does(self) -> None:
+        report_id, report = self._finding_in_both_environments(["prod", "uat"])
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "production")
+        non_production = next(fragment for fragment in proof.fragments if fragment.type == "image" and fragment.environment == "non_production")
+        proof.fragments = [steps, non_production, ListFragment(frag_id="f_more_steps", type="numbered_list", items=[ListItem()]), production]
+        server_order = deepcopy(proof)
+        report_service.production_images_first(server_order, report.engagement.tested_environments)
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+
+        expected = [fragment.frag_id for fragment in server_order.fragments]
+        self.assertNotEqual(expected, [fragment.frag_id for fragment in proof.fragments], "the stored order needed no move")
+        self.assertEqual(self._proof_order(page), expected)
+        self.assertFalse(page.locator("#evidence-notice.is-visible").count(), "opening the page is not a move the tester made")
+
+    def test_a_supporting_image_switched_to_production_moves_to_the_first_tile(self) -> None:
+        report_id, report = self._finding_in_both_environments(["uat"])
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        added = proof.locator(".evidence-tile").last.get_attribute("data-fragment-id")
+
+        proof.locator(f'.evidence-tile[data-fragment-id="{added}"] .evidence-environment').select_option("production")
+
+        expect(proof.locator(".evidence-tile").first).to_have_attribute("data-fragment-id", added)
+        page.locator("#save-button").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        saved_proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.environment for fragment in saved_proof.fragments if fragment.type == "image"], ["production", "non_production"])
+
+        # One Undo takes back the environment and the move it caused.
+        page.get_by_role("button", name="Undo last change").click()
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        expect(proof.locator(".evidence-tile").last).to_have_attribute("data-fragment-id", added)
+        expect(proof.locator(".evidence-tile").last.locator(".evidence-environment")).to_have_value("non_production")
+
+    def test_moving_non_production_evidence_ahead_of_production_snaps_back_with_a_notice(self) -> None:
+        report_id, report = self._finding_in_both_environments(["prod", "uat"])
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        before = self._proof_order(page)
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+
+        proof.get_by_role("button", name="Move earlier screenshot 2").click()
+
+        expect(page.locator("#evidence-notice.is-visible")).to_have_text("Production evidence stays first.")
+        self.assertEqual(self._proof_order(page), before)
+        expect(page.get_by_role("button", name="Undo last change")).to_be_disabled()
 
     def test_supporting_tile_survives_conflict_resolution_before_upload(self) -> None:
         report_id = self.ready_report(include_finding=True)

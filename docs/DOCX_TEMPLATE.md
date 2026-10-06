@@ -418,6 +418,13 @@ it sets the environment of the images after it and adds no fragment, so a
 repeated label, whether from this generator or from a report written before
 it, imports cleanly.
 
+The generator prints images in their stored order and reorders nothing. The
+order arrives production first, because in each instance of Proof of Concept
+the app keeps production evidence ahead of non-production evidence when it
+saves (`production_images_first`, `docs/DATA_MAP.md`). So the first label there
+is `PROD:` whenever the instance holds production evidence. Previous Proof of
+Concept prints as the earlier engagement wrote it.
+
 Run `py -3 -m scripts.compose_component_test` to generate
 `generated/image-caption-test.docx`, an isolated proof containing one embedded
 image followed immediately by a `Figures and Tables` caption.

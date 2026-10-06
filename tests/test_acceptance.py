@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pydantic import ValidationError
 
 from app import acceptance, report_service
-from app.models import Engagement, ImageFragment, Report, Scope, ScopeTarget, TestAccount, Vulnerability
+from app.models import Content, Engagement, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, Report, Scope, ScopeTarget, TestAccount, Vulnerability
 from app.report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status
 from app.workspace import StaleReportError
 
@@ -232,6 +232,63 @@ class ProvisionTests(unittest.TestCase):
                 acceptance.provision(report)
 
                 self.assertEqual([fragment.environment for fragment in proof.fragments if fragment.type == "image"], expected)
+
+
+def both_environments_report(findings: list[Vulnerability]) -> Report:
+    report = stored_report([production_target(), ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test")], findings)
+    report.engagement.tested_environments = ["production", "non_production"]
+    return report
+
+
+def fragments(*names: str) -> list:
+    """s: steps, P: production image, N: non-production image, T: instance title. The name is the frag_id."""
+    built = {
+        "s": lambda name: ListFragment(frag_id=name, type="numbered_list", items=[ListItem()]),
+        "P": lambda name: ImageFragment(frag_id=name, type="image", environment="production"),
+        "N": lambda name: ImageFragment(frag_id=name, type="image", environment="non_production", caption="UAT response"),
+        "T": lambda name: InstanceTitleFragment(frag_id=name, type="instance_title", text=name),
+    }
+    return [built[name[0]](name) for name in names]
+
+
+class ProductionFirstTests(unittest.TestCase):
+    def test_production_evidence_leads_each_instance_of_a_proof_of_concept(self) -> None:
+        both = ["tgt_uat", "tgt_prod"]
+        cases = [
+            ("a production image moves alone, ahead of the first non-production one", both, "proof_of_concept", ["s1", "N1", "s2", "P1"], ["s1", "P1", "N1", "s2"]),
+            ("production already first moves nothing", both, "proof_of_concept", ["s1", "P1", "N1", "P2"], ["s1", "P1", "N1", "P2"]),
+            ("only the earliest production image moves", both, "proof_of_concept", ["s1", "N1", "P1", "P2"], ["s1", "P1", "N1", "P2"]),
+            ("an image never crosses an instance title", both, "proof_of_concept", ["T1", "s1", "N1", "T2", "s2", "N2", "P1"], ["T1", "s1", "N1", "T2", "s2", "P1", "N2"]),
+            ("images before the first instance title are a group", both, "proof_of_concept", ["s1", "N1", "P1", "T1", "s2", "N2"], ["s1", "P1", "N1", "T1", "s2", "N2"]),
+            ("an untouched supporting production image counts by its environment", ["tgt_uat"], "proof_of_concept", ["s1", "N1", "P1"], ["s1", "P1", "N1"]),
+            ("previous proof of concept stays as written", both, "previous_proof_of_concept", ["s1", "N1", "P1"], ["s1", "N1", "P1"]),
+        ]
+        for label, target_ids, section, layout, expected in cases:
+            with self.subTest(label):
+                finding = Vulnerability(uid="v_order", status="resolved", scope=Scope(target_ids=target_ids), contents=[Content(type=section, fragments=fragments(*layout))])
+                report = both_environments_report([finding])
+
+                acceptance.provision(report)
+
+                content = next(content for content in report.vulnerabilities[0].contents if content.type == section)
+                self.assertEqual([fragment.frag_id for fragment in content.fragments], expected)
+
+    def test_an_untested_environment_image_neither_moves_nor_counts(self) -> None:
+        finding = Vulnerability(uid="v_untested", scope=Scope(target_ids=["tgt_prod"]), contents=[Content(type="proof_of_concept", fragments=fragments("s1", "N1", "P1"))])
+        report = stored_report([production_target()], [finding])
+
+        acceptance.provision(report)
+
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.frag_id for fragment in proof.fragments], ["s1", "N1", "P1"])
+
+    def test_a_new_finding_located_in_non_production_first_gets_its_production_slot_first(self) -> None:
+        report = both_environments_report([Vulnerability(uid="v_new", scope=Scope(target_ids=["tgt_uat", "tgt_prod"]))])
+
+        acceptance.provision(report)
+
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.environment for fragment in proof.fragments if fragment.type == "image"], ["production", "non_production"])
 
 
 if __name__ == "__main__":

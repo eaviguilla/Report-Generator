@@ -664,6 +664,27 @@
     if (!report.engagement.tested_environments.includes(fragment.environment)) return false;
     return affectedEnvironments(finding).includes(fragment.environment) || Boolean(fragment.evidence_id || fragment.caption?.trim());
   };
+  // Twin of report_service.production_images_first; keep both in step. Returns whether an image moved.
+  const productionImagesFirst = proof => {
+    const fragments = proof.fragments;
+    let moved = false;
+    for (let start = 0; start < fragments.length;) {
+      let end = start + 1;
+      while (end < fragments.length && fragments[end].type !== "instance_title") end += 1;
+      const counted = [];
+      for (let index = start; index < end; index += 1) {
+        if (fragments[index].type === "image" && report.engagement.tested_environments.includes(fragments[index].environment)) counted.push(index);
+      }
+      const firstNonProduction = counted.find(index => fragments[index].environment === "non_production");
+      const firstProduction = counted.find(index => fragments[index].environment === "production");
+      if (firstNonProduction !== undefined && firstProduction > firstNonProduction) {
+        fragments.splice(firstNonProduction, 0, ...fragments.splice(firstProduction, 1));
+        moved = true;
+      }
+      start = end;
+    }
+    return moved;
+  };
   const imagesForEnvironment = (finding, environment) => finding.contents.filter(content => content.type !== "previous_proof_of_concept").flatMap(content => (content.fragments || []).filter(fragment => fragment.type === "image" && fragment.environment === environment));
   // Twin of report_service.sync_evidence_image_slots; keep both in step. Coverage is a property of
   // the proof of concept alone, so a carried previous-PoC image is never relabelled or counted here.
@@ -683,6 +704,7 @@
     images.filter(image => !image.environment).forEach(image => { image.environment = missing.shift() || environments[0] || null; });
     missing = environments.filter(environment => !covered().includes(environment));
     missing.forEach(environment => { const image = newFragment("image"); image.environment = environment; proof?.fragments.push(image); });
+    if (proof) productionImagesFirst(proof);
     // A carried previous-PoC slot still needs an environment to render under, even though it never
     // counts as this engagement's coverage. Provisioning creates it blank, so nothing else would.
     const previous = finding.contents.find(content => content.type === "previous_proof_of_concept");
@@ -2577,19 +2599,19 @@
     pasteTargetId = fragmentId;
     refreshPasteHints();
   };
-  let pasteHintTimer;
-  const showPasteNotice = () => {
-    let notice = document.querySelector("#paste-notice");
+  let evidenceNoticeTimer;
+  const showEvidenceNotice = text => {
+    let notice = document.querySelector("#evidence-notice");
     if (!notice) {
       notice = document.createElement("p");
-      notice.id = "paste-notice";
+      notice.id = "evidence-notice";
       notice.setAttribute("role", "status");
       document.body.append(notice);
     }
-    notice.textContent = "Click an evidence image first, then paste.";
+    notice.textContent = text;
     notice.classList.add("is-visible");
-    clearTimeout(pasteHintTimer);
-    pasteHintTimer = setTimeout(() => notice.classList.remove("is-visible"), 4000);
+    clearTimeout(evidenceNoticeTimer);
+    evidenceNoticeTimer = setTimeout(() => notice.classList.remove("is-visible"), 4000);
   };
   // One screenshot in an evidence set. Order is the fragment order, so the position control writes
   // straight into content.fragments and the report comes out in the order the tiles are shown.
@@ -3187,7 +3209,7 @@
     document.addEventListener("paste", event => {
       if (!clipboardImageFile(event.clipboardData)) return;
       const target = pasteTargetId && pane?.querySelector(`.evidence-tile[data-fragment-id="${pasteTargetId}"]`);
-      if (!target) { showPasteNotice(); return; }
+      if (!target) { showEvidenceNotice("Click an evidence image first, then paste."); return; }
       target.onpaste?.(event);
     });
     report.vulnerabilities.forEach(finding => { syncConclusion(finding); syncEvidenceImageSlots(finding); });
@@ -3514,6 +3536,9 @@
         selectedFindingUid = findings[0]?.uid;
         expandedContentTypes = undefined;
       }
+      // Every move on this page ends here, so a move that put non-production evidence first is undone here.
+      const shownProof = findings.find(finding => finding.uid === selectedFindingUid)?.contents.find(content => content.type === "proof_of_concept");
+      if (shownProof && productionImagesFirst(shownProof)) showEvidenceNotice("Production evidence stays first.");
       nav.innerHTML = "";
       pane.innerHTML = "";
       if (!findings.length) {

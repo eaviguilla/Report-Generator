@@ -3686,6 +3686,39 @@ class BrowserWorkflowTests(unittest.TestCase):
         cards.last.get_by_role("button", name="Move fragment up").click()
         self.assertEqual(cards.nth(initial_count - 1).locator(".tag").text_content(), "note")
 
+    def test_library_search_highlights_the_first_result_and_enter_adds_it(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        search = page.get_by_role("combobox", name="Search vulnerability library")
+        search.fill("xss")
+        options = page.locator("#library-results [role=option]")
+        expect(options.nth(1)).to_be_attached()
+        expect(options.first).to_have_attribute("aria-selected", "true")
+        expect(page.locator('#library-results [aria-selected="true"]')).to_have_count(1)
+        first_title = options.first.locator("b").inner_text()
+
+        search.press("Enter")
+        page.locator("#findings > tr:not(.finding-location-row)").wait_for()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], [first_title])
+
+    def test_a_finding_name_box_highlights_the_first_library_result_and_enter_applies_it(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_role("button", name="Add finding").click()
+        title = page.locator(".finding-title-cell input").first
+        title.fill("xss")
+        options = page.locator('.row-library-results [role="option"]')
+        expect(options.nth(1)).to_be_attached()
+        expect(options.first).to_have_attribute("aria-selected", "true")
+        expect(page.locator('.row-library-results [aria-selected="true"]')).to_have_count(1)
+        first_title = options.first.locator("b").inner_text()
+
+        title.press("Enter")
+        expect(page.locator(".finding-title-cell input").first).to_have_value(first_title)
+
     def test_editor_library_selection_commits_the_full_option_title(self) -> None:
         report_id = self.ready_report(include_finding=True)
         report, _ = self._complete_finding(report_id)

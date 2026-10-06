@@ -33,7 +33,8 @@ EXCLUDE_RELATIVE = {
     Path("resources/fixtures"),
     Path("resources/report-name.docx"),
 }
-EXCLUDE_NAMES = {"__pycache__", ".DS_Store"}
+# graphify-out: the code graph `graphify update app` writes into app/.
+EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "graphify-out"}
 EXCLUDE_SUFFIXES = {".pyc"}
 
 

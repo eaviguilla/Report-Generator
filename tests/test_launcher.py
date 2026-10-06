@@ -744,6 +744,19 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotIn(top, {"data", "generated", "burp", "tests"}, f"{name} must not ship")
             self.assertFalse(name.endswith((".jar", ".class")), f"{name}: nothing compiled or downloaded ships")
 
+    def test_no_release_ships_a_file_git_ignores(self) -> None:
+        """Ignored files are local state or tool output, such as the code graph `graphify update app` writes into app/."""
+        for script in (default_release, burp_release):
+            with self.subTest(script.__name__), tempfile.TemporaryDirectory() as dist, patch.object(script, "DIST", Path(dist)):
+                with zipfile.ZipFile(script.build_release("release-test")) as bundle:
+                    shipped = [name.split("/", 1)[1] for name in bundle.namelist() if not name.endswith("/")]
+                self.assertIn("app/main.py", shipped)
+                result = subprocess.run(
+                    ["git", "check-ignore", "-z", "--stdin"], cwd=REPO, input="\0".join(shipped).encode(), capture_output=True, check=False
+                )
+                self.assertIn(result.returncode, (0, 1), result.stderr)
+                self.assertEqual([path for path in result.stdout.decode().split("\0") if path], [])
+
 
 class JythonSelfCheckTests(unittest.TestCase):
     def run_jython(self, mode: str, data_folder: str, jar: str, timeout: int = 300) -> subprocess.CompletedProcess:

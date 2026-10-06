@@ -437,6 +437,27 @@ class FragmentRecognitionTests(unittest.TestCase):
                 stray = [fragment for fragment in fragments if fragment["type"] == "instance_title" and fragment["text"].rstrip(":").upper() == label]
                 self.assertEqual(stray, [], "the environment heading survived as a visible fragment")
 
+    def test_an_environment_label_repeated_after_an_instance_title_imports_cleanly(self) -> None:
+        """Reports written before this app repeat the label after each instance title too."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+            proof.fragments = [
+                ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])]),
+                ImageFragment(frag_id="f_first", type="image", environment="production", evidence_id="ev_shot", caption="First response"),
+                InstanceTitleFragment(frag_id="f_title", type="instance_title", text="Second account"),
+                ImageFragment(frag_id="f_second", type="image", environment="production", evidence_id="ev_shot", caption="Second response"),
+            ]
+            document = render_report_docx(report, TEMPLATE, folder)
+            self.assertEqual([item.text for item in Document(BytesIO(document)).paragraphs].count("PROD:"), 2, "the label must print twice for this to test anything")
+
+            payload, _evidence, _summary = parse_report_docx(document)
+            imported = next(content for content in payload["vulnerabilities"][0]["contents"] if content["type"] == "previous_proof_of_concept")
+            self.assertEqual([fragment["type"] for fragment in imported["fragments"]], ["numbered_list", "image", "instance_title", "image"])
+            self.assertEqual(imported["fragments"][2]["text"], "Second account")
+            self.assertEqual([fragment["environment"] for fragment in imported["fragments"] if fragment["type"] == "image"], ["production", "production"])
+
     def test_every_fragment_type_is_recognisable_in_a_generated_report(self) -> None:
         document = self._rendered()
         formats = numbering_formats(document)

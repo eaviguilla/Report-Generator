@@ -407,6 +407,17 @@ supplies image, code, and table caption formatting. An environment may contain
 any number of images. The final generator rejects missing required environment
 evidence.
 
+In Proof of Concept and Previous Proof of Concept, an environment label
+(`PROD:`, or the non-production label in capitals such as `UAT:`) prints above
+an image whose environment differs from the last label printed, and again
+after an instance title even when the environment is the same, so Prod, UAT,
+Prod, Prod, UAT prints `PROD:`, `UAT:`, `PROD:`, `UAT:`. Nothing else between
+images, such as steps or notes, prints a new label. The label renders from the
+instance-title component, and the importer tells it apart by its text alone:
+it sets the environment of the images after it and adds no fragment, so a
+repeated label, whether from this generator or from a report written before
+it, imports cleanly.
+
 Run `py -3 -m scripts.compose_component_test` to generate
 `generated/image-caption-test.docx`, an isolated proof containing one embedded
 image followed immediately by a `Figures and Tables` caption.

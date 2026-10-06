@@ -395,6 +395,75 @@ class DocxReportTests(unittest.TestCase):
                     self.assertEqual([paragraph.text for paragraph in rendered.paragraphs].count("UAT:"), 0)
                     self.assertEqual(len(rendered.inline_shapes), 1)
 
+    @staticmethod
+    def _image(frag_id: str, environment: str, caption: str) -> ImageFragment:
+        evidence_id = "ev_prod" if environment == "production" else "ev_other"
+        return ImageFragment(frag_id=frag_id, type="image", environment=environment, evidence_id=evidence_id, caption=caption)
+
+    @staticmethod
+    def _label_sequence(rendered, captions: list[str]) -> list[str]:
+        """Environment labels, instance titles and the named captions, in document order."""
+        sequence = []
+        for text in (paragraph.text.strip() for paragraph in rendered.paragraphs):
+            if text in ("PROD:", "UAT:") or text.startswith("Instance "):
+                sequence.append(text)
+            else:
+                sequence.extend(caption for caption in captions if caption in text)
+        return sequence
+
+    def test_an_environment_label_prints_whenever_the_environment_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._supporting_image_report(report_folder, ["production", "non_production"], self._image("f_unused", "non_production", "Unused"))
+            images = [
+                self._image("f_p1", "production", "Screenshot P1"),
+                self._image("f_u1", "non_production", "Screenshot U1"),
+                self._image("f_p2", "production", "Screenshot P2"),
+                self._image("f_p3", "production", "Screenshot P3"),
+                self._image("f_u2", "non_production", "Screenshot U2"),
+            ]
+            report.vulnerabilities = [self._finding("v_labels", "Authorization bypass", "high", "001", ["t_prod"], images)]
+            self.assertEqual(generation_issues(report), [])
+
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
+            self.assertEqual(self._label_sequence(rendered, [image.caption for image in images]), [
+                "PROD:", "Screenshot P1", "UAT:", "Screenshot U1", "PROD:", "Screenshot P2", "Screenshot P3", "UAT:", "Screenshot U2",
+            ])
+
+    def test_an_instance_title_brings_back_the_environment_label_and_a_note_does_not(self) -> None:
+        def sequence() -> list:
+            return [
+                self._image("f_p1", "production", "Screenshot P1"),
+                NoteFragment(frag_id="f_between", type="note", runs=[Run(text="Then refresh the page.")]),
+                self._image("f_p2", "production", "Screenshot P2"),
+                InstanceTitleFragment(frag_id="f_second", type="instance_title", text="Second account"),
+                self._image("f_p3", "production", "Screenshot P3"),
+            ]
+
+        captions = ["Screenshot P1", "Screenshot P2", "Screenshot P3", "Current response"]
+        expected = ["PROD:", "Screenshot P1", "Screenshot P2", "Instance 1: Second account", "PROD:", "Screenshot P3"]
+        for section in ("proof_of_concept", "previous_proof_of_concept"):
+            with self.subTest(section), tempfile.TemporaryDirectory() as temporary_directory:
+                report_folder = Path(temporary_directory)
+                if section == "proof_of_concept":
+                    report = self._supporting_image_report(report_folder, ["production", "non_production"], self._image("f_unused", "non_production", "Unused"))
+                    report.vulnerabilities = [self._finding("v_labels", "Authorization bypass", "high", "001", ["t_prod"], sequence())]
+                else:
+                    report = self._retest_report(report_folder, ("ev_prod",))
+                    finding = self._finding("v_labels", "Authorization bypass", "high", "001", ["t_prod"], [self._image("f_current", "production", "Current response")])
+                    report.vulnerabilities = [finding]
+                    self._carry_history(finding, "production", "ev_prod")
+                    next(content for content in finding.contents if content.type == "previous_proof_of_concept").fragments = sequence()
+                self.assertEqual(generation_issues(report), [])
+
+                rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
+                labels = self._label_sequence(rendered, captions)
+                if section == "previous_proof_of_concept":
+                    # This finding's own proof of concept prints too; only the carried section is under test.
+                    current = next(index for index in range(len(labels)) if labels[index:index + 2] == ["PROD:", "Current response"])
+                    del labels[current:current + 2]
+                self.assertEqual(labels, expected)
+
     def _retest_report(self, report_folder: Path, evidence_ids: tuple[str, ...]) -> Report:
         """A production-only finding in an engagement that also tested non-production."""
         evidence_folder = report_folder / "evidence"

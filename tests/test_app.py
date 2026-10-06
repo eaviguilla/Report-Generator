@@ -2590,6 +2590,23 @@ class TwinRuleTests(unittest.TestCase):
         self.assertGreaterEqual(checked, 40, "the twin table's Python column named almost nothing checkable")
         self.assertEqual(missing, [], f"DATA_MAP section 12 names Python symbols that no longer exist: {missing}")
 
+    def test_the_data_map_has_one_verification_note_and_no_prose_line_over_400_characters(self) -> None:
+        """Read and search tools cut a line at 2,000 characters, and agents added a header note per change."""
+        lines = (Path(__file__).resolve().parent.parent / "docs" / "DATA_MAP.md").read_text(encoding="utf-8").splitlines()
+        notes = [line[:70] for line in lines if line.startswith(("> Last verified", "> Latest verification"))]
+        self.assertLessEqual(len(notes), 1, f"DATA_MAP.md should hold one verification note, not {len(notes)}: {notes}")
+        in_code, checked, long_lines = False, 0, []
+        for number, line in enumerate(lines, 1):
+            if line.lstrip().startswith("```"):
+                in_code = not in_code
+            elif not in_code and not line.lstrip().startswith("|") and line.strip():
+                checked += 1
+                if len(line) > 400:
+                    long_lines.append(f"line {number}: {len(line)} characters")
+        # A floor, so a fence that never closes cannot turn this green by skipping the rest of the file.
+        self.assertGreaterEqual(checked, 250, "almost no prose lines in DATA_MAP.md were checked")
+        self.assertEqual(long_lines, [], "DATA_MAP.md has prose lines over 400 characters")
+
 
 if __name__ == "__main__":
     unittest.main()

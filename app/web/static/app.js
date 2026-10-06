@@ -179,7 +179,8 @@
   // setup() builds the Setup check after the save code has started, so the save code calls through this.
   let setupSaveCheck = () => {};
   const saveCheck = root.dataset.step === "setup" ? () => setupSaveCheck() : null;
-  const onSaved = () => updateEngagementName();
+  let automaticChangesPending = false;
+  const onSaved = () => { automaticChangesPending = false; updateEngagementName(); };
   const page = root.id === "setup" ? root.dataset.step : "edit";
   // A Setup field's name: its section's heading text (a count is appended inside it), then what tells it apart there.
   const headingText = container => container?.querySelector("h2")?.firstChild?.nodeValue || null;
@@ -338,6 +339,7 @@
     // "default" rather than "primary" so the dialog focuses Cancel, and a second Enter cannot generate.
     if (noFindings && !await window.vrDialog.confirm({title:"This report has no findings", message:"Generate a report with no findings?", confirmLabel:"Generate with no findings", cancelLabel:"Cancel", tone:"default"})) return;
     const label = button.textContent;
+    if (automaticChangesPending && !hasUnsavedEdits()) scheduleSave();
     // The busy labels are shorter; hold the idle width so nothing in the bar moves.
     button.style.minWidth = `${button.getBoundingClientRect().width}px`;
     button.dataset.busy = "true";
@@ -704,13 +706,14 @@
     images.filter(image => !image.environment).forEach(image => { image.environment = missing.shift() || environments[0] || null; });
     missing = environments.filter(environment => !covered().includes(environment));
     missing.forEach(environment => { const image = newFragment("image"); image.environment = environment; proof?.fragments.push(image); });
-    if (proof) productionImagesFirst(proof);
+    const moved = proof ? productionImagesFirst(proof) : false;
     // A carried previous-PoC slot still needs an environment to render under, even though it never
     // counts as this engagement's coverage. Provisioning creates it blank, so nothing else would.
     const previous = finding.contents.find(content => content.type === "previous_proof_of_concept");
     (previous?.fragments || []).forEach(fragment => {
       if (fragment.type === "image" && !fragment.environment && environments.length) fragment.environment = environments[0];
     });
+    return moved;
   };
   // Single owner of the rule: provisioning guarantees these fragments exist, so allowing a delete
   // would only have the next save put one back and make the editor look like it lost the change.
@@ -2294,7 +2297,22 @@
         });
       });
     };
-    const renderFindings = () => { rememberFocusedField(); findingBody.innerHTML = ""; report.vulnerabilities.forEach((finding, index) => { const row = document.createElement("tr"); const selectedTargets = finding.scope.target_ids || []; const locationValues = finding.scope.location_values || {}; const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>"; row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`; const locationRow = document.createElement("tr"); locationRow.className = "finding-location-row"; locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`; const controls = row.querySelectorAll("input,select"); const titleInput = controls[0]; const rowResults = row.querySelector(".row-library-results"); const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
+    const renderFindings = () => {
+    rememberFocusedField();
+    findingBody.innerHTML = "";
+    report.vulnerabilities.forEach((finding, index) => {
+      const row = document.createElement("tr");
+      const selectedTargets = finding.scope.target_ids || [];
+      const locationValues = finding.scope.location_values || {};
+      const locationControls = Object.entries(locationGroups).filter(([, targets]) => targets.length).map(([environment, targets]) => `<fieldset class="location-group" data-location-group="${environment}"><legend>${locationLabels[environment]}</legend>${targets.length > 1 ? `<label class="select-all"><input type="checkbox" data-select-all="${environment}" ${targets.every(target => selectedTargets.includes(target.target_id)) ? "checked" : ""}>Select all</label>` : ""}<div class="location-checklist">${targets.map(target => `<div class="location-option"><label class="location-toggle"><input type="checkbox" data-location="${environment}" value="${target.target_id}" aria-label="Select ${escape(target.value)}" ${selectedTargets.includes(target.target_id) ? "checked" : ""}></label>${selectedTargets.includes(target.target_id) ? `<input class="location-value" data-location-value="${target.target_id}" value="${escape(locationValues[target.target_id] ?? target.value)}" aria-label="Location value for ${escape(target.value)}">` : `<span class="location-preview">${escape(target.value)}</span>`}</div>`).join("")}</div></fieldset>`).join("") || "<span class=\"muted\">Add targets in setup.</span>";
+      row.innerHTML = `<td class="finding-title-cell"><input value="${escape(finding.title)}" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="Search or select a vulnerability"><div class="row-library-results" role="listbox"></div></td><td>${select(severity, finding.likelihood, true)}</td><td>${select(severity, finding.impact, true)}</td><td>${select(severity, finding.severity)}</td><td><input value="${escape(finding.display_id || "")}" inputmode="numeric" maxlength="5" pattern="[0-9]*" autocomplete="off"></td><td>${select(statuses.map(x=>x[0]), finding.status)}</td><td><button class="danger" type="button">Delete</button></td>`;
+      const locationRow = document.createElement("tr");
+      locationRow.className = "finding-location-row";
+      locationRow.innerHTML = `<td colspan="7"><div class="finding-location"><strong>Location</strong><div class="location-controls">${locationControls}</div></div></td>`;
+      const controls = row.querySelectorAll("input,select");
+      const titleInput = controls[0];
+      const rowResults = row.querySelector(".row-library-results");
+      const clearResults = () => { rowResults.innerHTML = ""; titleInput.setAttribute("aria-expanded", "false"); };
       let titleBeforeEdit = finding.title || "";
       let conclusionBeforeEdit = conclusionParagraphText(finding);
       const renderRowResults = () => { const matches = libraryMatches(titleInput.value); rowResults.innerHTML = matches.map(entry => libraryOptionMarkup(entry)).join(""); rowResults.style.width = `${document.querySelector("#library-search").getBoundingClientRect().width}px`; const requiredHeight = Math.min(rowResults.scrollHeight, 300) + 8; rowResults.classList.toggle("opens-up", window.innerHeight - titleInput.getBoundingClientRect().bottom < requiredHeight); titleInput.setAttribute("aria-expanded", String(matches.length > 0)); rowResults.querySelectorAll("[data-id]").forEach(item => item.onclick = async () => { const entry = library.find(candidate => candidate.library_id === item.dataset.id); if (!entry || finding.library_ref?.library_id === entry.library_id) { clearResults(); return; } if (await replaceFromLibrary(finding, entry, titleBeforeEdit)) { renderFindings(); scheduleSave(); } }); };
@@ -2421,35 +2439,51 @@
     const results = document.querySelector("#library-results");
     const search = document.querySelector("#search");
     wireLibraryCombobox(search, results);
+    let librarySelectionRevision = 0;
     const renderLibraryResults = () => {
       const query = search.value.toLowerCase();
       const matches = libraryMatches(query);
       results.innerHTML = matches.map(entry => libraryOptionMarkup(entry, true)).join("");
       search.setAttribute("aria-expanded", String(matches.length > 0));
-      results.querySelectorAll("[data-id]").forEach(item => item.onclick = () => trackMutation(async () => {
-        try {
-          setSaveState(SAVE_STATES.SAVING, "Adding...");
-          if (!(await save("Adding..."))) return;
-          const response = await fetch(`/reports/${reportId}/library/${item.dataset.id}`, {method:"POST", headers:{"X-Report-Saved-At":report.saved_at}});
-          if (!response.ok) throw await diagnostics.fromResponse(response, "insert_library", "Unable to add finding");
-          const mutation = await response.json();
-          applyServerRevision(mutation.saved_at);
-          const finding = mutation.finding;
-          report.vulnerabilities.push(finding);
+      results.querySelectorAll("[data-id]").forEach(item => {
+        let selected = false;
+        item.onclick = () => {
+          if (selected) return;
+          selected = true;
+          const selectedQuery = search.value;
+          const selectionRevision = ++librarySelectionRevision;
           search.value = "";
-          // A click took the focus; focusing opens the whole library, so the list is emptied after.
           search.focus();
           results.innerHTML = "";
           search.setAttribute("aria-expanded", "false");
-          renderFindings();
-          keepFieldName({finding: finding.uid, column: 0});
-          scheduleSave();
-          await save();
-        } catch (error) {
-          if (error.status === 409) markSaveConflict(error, "insert_library");
-          else showOperationError(error, "insert_library", "Unable to add finding");
-        }
-      }));
+          trackMutation(async () => {
+            let inserted = false;
+            try {
+              setSaveState(SAVE_STATES.SAVING, "Adding...");
+              if (!(await save("Adding..."))) return;
+              const response = await fetch(`/reports/${reportId}/library/${item.dataset.id}`, {method:"POST", headers:{"X-Report-Saved-At":report.saved_at}});
+              if (!response.ok) throw await diagnostics.fromResponse(response, "insert_library", "Unable to add finding");
+              const mutation = await response.json();
+              applyServerRevision(mutation.saved_at);
+              const finding = mutation.finding;
+              report.vulnerabilities.push(finding);
+              inserted = true;
+              renderFindings();
+              keepFieldName({finding: finding.uid, column: 0});
+              scheduleSave();
+              await save();
+            } catch (error) {
+              if (error.status === 409) markSaveConflict(error, "insert_library");
+              else showOperationError(error, "insert_library", "Unable to add finding");
+            } finally {
+              if (!inserted && selectionRevision === librarySelectionRevision && !search.value) {
+                search.value = selectedQuery;
+                renderLibraryResults();
+              }
+            }
+          });
+        };
+      });
     };
     search.oninput = renderLibraryResults;
     search.onfocus = renderLibraryResults;
@@ -3212,7 +3246,10 @@
       if (!target) { showEvidenceNotice("Click an evidence image first, then paste."); return; }
       target.onpaste?.(event);
     });
-    report.vulnerabilities.forEach(finding => { syncConclusion(finding); syncEvidenceImageSlots(finding); });
+    report.vulnerabilities.forEach(finding => {
+      syncConclusion(finding);
+      if (syncEvidenceImageSlots(finding)) automaticChangesPending = true;
+    });
     let selectedFindingUid = report.vulnerabilities[0]?.uid;
     let expandedContentTypes;
     let engagementContextOpen = false;

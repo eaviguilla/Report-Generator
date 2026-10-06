@@ -63,14 +63,6 @@ To change a rule, edit `.github/instructions/*.instructions.md`, then run `py -3
 when they drift. `.claude/agents/` holds hand-maintained copies of `.github/agents/`: a change to one side
 needs the same change on the other.
 
-# Talking to me
-
-- **Open with a recap.** Before any summary, decision point, or question: 2–3 plain sentences on what we were just working on, why, and where it stands now.
-- **Plain language.** No invented codenames, abbreviations, or callbacks like "the earlier fix" or "option B from before" — restate the thing in place, every time.
-- **Self-contained questions.** When asking me to decide something, the question itself must carry everything needed to answer it: the background, the options, the tradeoffs, and your recommendation. Never require scrolling back.
-- **One question at a time.** When a summary or decision point holds several open questions or next steps, say so up front ("three decisions are waiting; here's the first"), then present only the first and wait for the answer before raising the next. Never dump them all at once — it's too much mental load.
-- **Always end with `Next action:`.** Every response ends with a final line naming what I do next. Not a summary — an instruction. Examples: `Next action: none.` / `Next action: review the output above.` / `Next action: consider the output above.` / `Next action: choose from the options above.` / `Next action: execute step 1.` Pick the one that actually fits; invent a better verb when none of those do.
-
 # Implementing a plan
 
 `docs/plans/` holds one document per change, each opening with a status line from the seven in

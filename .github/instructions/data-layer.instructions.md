@@ -20,7 +20,7 @@ Update `docs/DATA_MAP.md` when you change any of:
 - client state shape, the save or autosave path, or a navigation gate
 - a rule that exists in both Python and JavaScript
 
-Refresh the "Last verified" line at the top when you do. Section 13 collects known sharp edges; add to it when you find one, and delete the entry when you fix it. A new route also goes in `docs/ROUTES.md`.
+Replace the one "Last verified" line at the top with the date and one sentence on what changed. Section 13 collects known sharp edges; add to it when you find one, and delete the entry when you fix it. A new route also goes in `docs/ROUTES.md`.
 
 You do not need to touch the map for changes with no data consequence, such as wording, formatting, or a pure refactor that preserves names and behaviour.
 

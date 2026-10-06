@@ -10,7 +10,7 @@ from functools import cache
 from itertools import zip_longest
 from typing import Callable, Literal
 
-from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
+from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
 
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@\\-](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9._@\\-])?$")
@@ -634,6 +634,28 @@ def _covered_environments(content: Content | None) -> set[Environment]:
     return {fragment.environment for fragment in content.fragments if isinstance(fragment, ImageFragment) and fragment.environment}
 
 
+def production_images_first(proof: Content, tested_environments: list[Environment]) -> bool:
+    """Twin of productionImagesFirst in app.js. In each instance, the earliest production image moves
+    to just before the first non-production one; steps stay put and nothing crosses an instance
+    title. Images of an untested environment neither move nor count. Returns whether one moved."""
+    fragments = proof.fragments
+    moved = False
+    start = 0
+    while start < len(fragments):
+        end = next((index for index in range(start + 1, len(fragments)) if isinstance(fragments[index], InstanceTitleFragment)), len(fragments))
+        counted = [
+            index for index in range(start, end)
+            if isinstance(fragments[index], ImageFragment) and fragments[index].environment in tested_environments
+        ]
+        first_non_production = next((index for index in counted if fragments[index].environment == "non_production"), None)
+        first_production = next((index for index in counted if fragments[index].environment == "production"), None)
+        if first_non_production is not None and first_production is not None and first_production > first_non_production:
+            fragments.insert(first_non_production, fragments.pop(first_production))
+            moved = True
+        start = end
+    return moved
+
+
 def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> None:
     """Ensure each affected environment has an image slot while preserving extra images.
 
@@ -682,6 +704,7 @@ def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> N
             caption="",
             width_mm=None,
         ))
+    production_images_first(proof, report.engagement.tested_environments)
     # A carried previous-PoC slot still needs an environment to render under, even though it never
     # counts as this engagement's coverage. Provisioning creates it blank, so nothing else would.
     previous = next((content for content in vulnerability.contents if content.type == "previous_proof_of_concept"), None)

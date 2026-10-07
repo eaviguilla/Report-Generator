@@ -129,10 +129,6 @@ def _parsed_ticket_lines(text: str) -> tuple[str, list[str]]:
     return "\n".join(tickets), invalid
 
 
-def _ticket_lines(text: str) -> str:
-    return _parsed_ticket_lines(text)[0]
-
-
 def numbering_formats(document) -> dict[str, str]:
     """Map each ``numId`` to its list format.
 

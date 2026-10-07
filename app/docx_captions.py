@@ -14,8 +14,6 @@ from docx.document import Document as DocumentType
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from .storage import atomic_write_bytes
-
 
 CAPTION_STYLE_NAMES = ("Figures and Tables", "Caption")
 MANUAL_FIGURE_PREFIX = re.compile(r"^\s*Figure\s+\d+\s*[:.\-]?\s*", re.IGNORECASE)
@@ -30,17 +28,6 @@ WD_GO_TO_PAGE = 1
 WD_GO_TO_ABSOLUTE = 1
 WD_STATISTIC_PAGES = 2
 WD_WITHIN_TABLE = 12
-
-
-def postprocess_image_captions(input_path: Path, output_path: Path | None = None) -> tuple[Path, int]:
-    """Convert image-adjacent caption text into native Word SEQ Figure fields."""
-    document = Document(input_path)
-    converted = add_native_image_captions(document)
-    destination = output_path or input_path.with_name(f"{input_path.stem}-captioned{input_path.suffix}")
-    output = BytesIO()
-    document.save(output)
-    atomic_write_bytes(destination, output.getvalue())
-    return destination, converted
 
 
 def update_docx_fields_with_word(input_path: Path, output_path: Path | None = None) -> Path:

@@ -23,7 +23,7 @@ from docx.oxml.ns import qn
 from fastapi.testclient import TestClient
 
 from app import main
-from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
+from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _parsed_ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import RESOLVED_REMEDIATION, character_issue, finding_input_issues, setup_issues
 from tests.support import png_bytes, use_temp_workspace
@@ -321,7 +321,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             ("", ""),
         ):
             with self.subTest(printed=printed):
-                self.assertEqual(_ticket_lines(printed), expected)
+                self.assertEqual(_parsed_ticket_lines(printed)[0], expected)
 
     def test_cvss_values_are_read_back_from_the_row_that_names_the_finding(self) -> None:
         """The table carries a row per rendered finding while the importer drops every Resolved one,

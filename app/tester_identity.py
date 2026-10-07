@@ -29,10 +29,6 @@ silently everywhere else. Four things are handled here that it does not:
 
 Auto-detection is a convenience, never an authority. An AD display name is
 frequently not what belongs on a client deliverable.
-
-Standalone:
-    python tester_identity.py
-    python tester_identity.py --json
 """
 
 from __future__ import annotations
@@ -52,7 +48,6 @@ NAME_SAM_COMPATIBLE = 2      # "DOMAIN\\username"  -- works off-domain too
 NAME_DISPLAY = 3             # "Viguilla, Elias Angelo"  -- what we want
 
 ERROR_MORE_DATA = 234        # expected from the size-probe call
-ERROR_NONE_MAPPED = 1332     # format unavailable (not domain-joined)
 
 
 @dataclass
@@ -202,19 +197,3 @@ def load_or_bootstrap(prefs_path: Path) -> dict:
         os.replace(tmp, prefs_path)
 
     return prefs.model_dump(mode="json")
-
-
-if __name__ == "__main__":
-    ident = resolve_identity()
-    if "--json" in sys.argv:
-        print(json.dumps(asdict(ident), indent=2))
-    else:
-        print(f"platform      {sys.platform}")
-        print(f"source        {ident.source}")
-        print(f"resolved_name {ident.resolved_name!r}")
-        print(f"display_name  {ident.display_name!r}")
-        if ident.source == "unresolved":
-            print("\n  Could not resolve a name. The tester must enter it manually.")
-        elif ident.source != "NameDisplay":
-            print("\n  NameDisplay unavailable (machine is likely not domain-joined).")
-            print("  Fell back -- the tester should confirm this name in Settings.")

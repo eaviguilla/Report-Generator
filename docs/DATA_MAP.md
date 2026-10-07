@@ -249,7 +249,7 @@ The allowlist (§12) is what constrains the value; the type does not.
 `cvss_vector` is free text under its own allowlist — the CVSS grammar itself is deliberately not validated, being too brittle across CVSS versions to keep in step across two languages.
 
 `severity_review_tickets` holds **bare digits, one ticket per line**: one `str` with embedded newlines rather than a `list[str]`, because the editor control is a single textarea and the document prints one run whose lines are `w:br`.
-The `GRIMPEN-` prefix is **never stored** — `docx_report.SEVERITY_TICKET_PREFIX` applies it on the way out, and `docx_import._ticket_lines` strips a leading letters-and-hyphen key of *any* name on the way back in, because real documents vary.
+The `GRIMPEN-` prefix is **never stored** — `docx_report.SEVERITY_TICKET_PREFIX` applies it on the way out, and `docx_import._parsed_ticket_lines` strips a leading letters-and-hyphen key of *any* name on the way back in, because real documents vary.
 An empty value prints the literal `N/A`, which `docx_import._clean` maps back to nothing.
 
 `Scope.custom_locations` is keyed **environment then channel** (`{production: {web: [...]}}`), mirroring `scope_text`, so a typed-in endpoint carries an app type just as a selected `ScopeTarget` does. Without that, a finding's app types could not be resolved and the proof-of-concept offer could never fire for it.

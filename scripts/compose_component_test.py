@@ -11,10 +11,10 @@ from docx.shared import Mm
 from docx.text.paragraph import Paragraph
 from PIL import Image, ImageDraw
 
-from app.docx_captions import postprocess_image_captions
 from app.docx_components import clone_component_elements, replace_component_token_runs
 from app.storage import atomic_write_bytes
 from app.models import Run
+from scripts.postprocess_captions import postprocess_image_captions
 
 
 ROOT = Path(__file__).resolve().parent.parent

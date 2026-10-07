@@ -352,7 +352,7 @@ stripped prints the literal `N/A`, unprefixed.
 Reading a finished report back, the importer matches on the label string rather
 than a position, then reads the following paragraph run by run —
 `paragraph.text` would silently drop the `w:br` lines — and normalises it with
-`_ticket_lines` (`app/docx_import.py` L87, L512-L522). That strips a leading key
+`_parsed_ticket_lines` in `app/docx_import.py`. That strips a leading key
 of any tracker rather than `GRIMPEN-` alone, splits on newlines, commas and
 semicolons, and keeps only the pieces that are wholly decimal. A piece such as
 `GRIMPEN-3523 (closed 2024)` is dropped whole rather than mined for the digits

@@ -12,7 +12,8 @@ from docx.oxml.ns import qn
 from docx.shared import Mm
 from PIL import Image
 
-from app.docx_captions import _remove_page_leading_blank_paragraphs, postprocess_image_captions
+from app.docx_captions import _remove_page_leading_blank_paragraphs
+from scripts.postprocess_captions import postprocess_image_captions
 
 
 class DocxCaptionTests(unittest.TestCase):

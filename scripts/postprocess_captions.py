@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 import argparse
+from io import BytesIO
 from pathlib import Path
 
-from app.docx_captions import postprocess_image_captions, update_docx_fields_with_word
+from docx import Document
+
+from app.docx_captions import add_native_image_captions, update_docx_fields_with_word
+from app.storage import atomic_write_bytes
+
+
+def postprocess_image_captions(input_path: Path, output_path: Path | None = None) -> tuple[Path, int]:
+    """Convert image-adjacent caption text into native Word SEQ Figure fields."""
+    document = Document(input_path)
+    converted = add_native_image_captions(document)
+    destination = output_path or input_path.with_name(f"{input_path.stem}-captioned{input_path.suffix}")
+    output = BytesIO()
+    document.save(output)
+    atomic_write_bytes(destination, output.getvalue())
+    return destination, converted
 
 
 def main() -> int:

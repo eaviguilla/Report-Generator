@@ -5,7 +5,9 @@
   const asString = value => typeof value === "string" ? value : "";
 
   // Python's str.strip(): String.prototype.trim also strips U+FEFF but keeps U+001C-U+001F and U+0085.
-  const strip = text => text.replace(/^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g, "");
+  const stripStart = text => text.replace(/^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/, "");
+  const stripEnd = text => text.replace(/[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/, "");
+  const strip = text => stripEnd(stripStart(text));
 
   // Letters and digits by the browser's own Unicode categories, as Setup has always judged them.
   const invalidCharacters = (value, rule) => [...new Set([...value].filter(character => !(
@@ -324,5 +326,5 @@
     throw new Error(`Unknown rule message: ${result.code}`);
   };
 
-  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, usernameRefusals, tooLong, formatRuleMessage};
+  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, stripStart, stripEnd, usernameRefusals, tooLong, formatRuleMessage};
 })();

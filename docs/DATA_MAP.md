@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-06**, after library selections became one-shot queue entries and Generate began saving automatic production-first evidence order before rendering Word.
+> Last verified against source: **2026-10-07**, after a paste on the Setup page began dropping the blanks it brings to the start or end of a line, as its own undo step.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -938,6 +938,12 @@ The trailing whitespace requirement is load-bearing — it is what keeps `1.2.3.
 It is **client-only with no Python owner, by decision, not omission**: this is a rule about the clipboard on its way into a field, not an invariant of the document, and a server-side stripper in `provision` would run on every save and permanently delete a `1.` a tester typed on purpose.
 Drafts arriving through `import_report` or `parse_report_docx` therefore bypass it, which is correct.
 The handler is bracketed by `finalizeTextTransaction()` so the paste is exactly one undo step rather than folding into the whole time the tester spent in that field, and `oninput` remains the only writer of `fragment.items`.
+
+**Setup paste drops the blanks it brings to the start or end of a line.** A `paste` listener on the Setup page passes the clipboard text through `setupPasteText`, which cuts the blanks of `vrRules.strip` wherever the pasted text meets the start or end of a line in the box.
+A paste into an empty box loses both ends, while ` App` pasted after `My` keeps its space; in a box with several lines every pasted line is cut at its own ends.
+It inserts with `document.execCommand("insertText")`, which keeps `maxlength` and the box's own undo, and the character-limit note measures the cleaned text, not the clipboard's.
+Like the list paste it is client-only and bracketed by `finalizeTextTransaction()`, so each paste is one undo step.
+Typing is never cut, and a saved value that already has blanks at its ends stays as it is: the Word report prints every Setup value through `_display_value`, which strips it.
 
 **The scope-text survival pair is asymmetric, and deliberately so far only by accident.** For a `mode == "custom"` finding the server appends to `removed_references` when **any** submitted `target_id` is missing from the new target set, whether or not the finding keeps other locations.
 The client's `scopeTextStrandedFindings` only reports a finding that ends up with **no** location at all.

@@ -21,7 +21,7 @@ The copy of a report the browser keeps of edits the tester made on one page and 
 _Avoid_: local draft, recovery draft, snapshot
 
 **Undo step**:
-One change the tester made on one page, which Undo takes back and Redo brings back whole. Typing in one field until the tester leaves it is one undo step.
+One change the tester made on one page, which Undo takes back and Redo brings back whole. Typing in one field until the tester leaves it is one undo step. A paste is its own undo step.
 _Avoid_: history entry, undo action, undo entry
 
 **Issue**:

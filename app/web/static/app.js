@@ -989,6 +989,31 @@
       }
       return attachSetupMessage([control], message => label.after(message));
     };
+    const isSetupTextBox = control => page === "setup" && (control instanceof HTMLTextAreaElement || control instanceof HTMLInputElement && control.type === "text");
+    // A paste drops the blanks it brings to the start or end of a line; a blank it puts between words stays.
+    const setupPasteText = (control, pasted) => {
+      const {value, selectionStart, selectionEnd} = control;
+      const lineStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
+      const lineEnd = value.indexOf("\n", selectionEnd);
+      let text = pasted.replace(/\r\n?/g, "\n");
+      if (!window.vrRules.strip(value.slice(lineStart, selectionStart))) text = window.vrRules.stripStart(text);
+      if (!window.vrRules.strip(value.slice(selectionEnd, lineEnd < 0 ? value.length : lineEnd))) text = window.vrRules.stripEnd(text);
+      const lines = text.split("\n");
+      return lines.map((line, index) => {
+        const started = index ? window.vrRules.stripStart(line) : line;
+        return index < lines.length - 1 ? window.vrRules.stripEnd(started) : started;
+      }).join("\n");
+    };
+    root.addEventListener("paste", event => {
+      const control = event.target;
+      const pasted = event.clipboardData?.getData("text/plain");
+      if (!pasted || !isSetupTextBox(control)) return;
+      event.preventDefault();
+      // Its own undo step, as a list paste on Content is. insertText keeps maxlength and the box's own undo.
+      finalizeTextTransaction();
+      document.execCommand("insertText", false, setupPasteText(control, pasted));
+      finalizeTextTransaction();
+    });
     const attachSetupCharacterLimit = (control, maximum, label) => {
       if (!Number.isInteger(maximum)) return;
       const messageController = setupMessageControllers.get(control);
@@ -1017,7 +1042,8 @@
         if (control.value.length <= maximum && event.data.length > remainingLength()) showLimitNote(false);
       });
       control.addEventListener("paste", event => {
-        const pasted = event.clipboardData?.getData("text/plain") ?? event.clipboardData?.getData("text");
+        const clipboardText = event.clipboardData?.getData("text/plain") ?? event.clipboardData?.getData("text");
+        const pasted = clipboardText != null && isSetupTextBox(control) ? setupPasteText(control, clipboardText) : clipboardText;
         if (pasted == null || control.value.length > maximum || pasted.length <= remainingLength()) return;
         showLimitNote(true);
         skipPasteInput = true;

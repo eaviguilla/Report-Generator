@@ -613,14 +613,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         tester = page.get_by_label("Tester", exact=True)
         tester.fill("T" * (maximum - 2))
 
-        tester.evaluate("""(element, pasted) => {
-            const clipboard = new DataTransfer();
-            clipboard.setData("text/plain", pasted);
-            element.focus();
-            element.setSelectionRange(element.value.length, element.value.length);
-            element.dispatchEvent(new ClipboardEvent("paste", {bubbles:true, cancelable:true, clipboardData:clipboard}));
-            document.execCommand("insertText", false, pasted);
-        }""", "XYZ")
+        self._paste_text(tester, "XYZ")
 
         self.assertEqual(tester.input_value(), "T" * (maximum - 2) + "XY")
         described_by = tester.get_attribute("aria-describedby")
@@ -628,6 +621,65 @@ class BrowserWorkflowTests(unittest.TestCase):
         note = page.locator(f"#{described_by}")
         expect(note).to_have_text(f"Tester holds up to {maximum} characters, so the paste was cut to fit.")
         self.assertIsNone(tester.get_attribute("aria-invalid"))
+
+    def _paste_text(self, field, text: str, selection: tuple[int, int] | None = None) -> None:
+        """Paste as a browser does: the page's paste handlers, then the default insert unless one cancelled it."""
+        field.evaluate("""(element, [pasted, selection]) => {
+            element.focus();
+            const [start, end] = selection || [element.value.length, element.value.length];
+            element.setSelectionRange(start, end);
+            const clipboard = new DataTransfer();
+            clipboard.setData("text/plain", pasted);
+            if (element.dispatchEvent(new ClipboardEvent("paste", {bubbles:true, cancelable:true, clipboardData:clipboard}))) {
+                document.execCommand("insertText", false, pasted);
+            }
+        }""", [text, list(selection) if selection else None])
+
+    def test_a_setup_paste_drops_the_blanks_it_brings_to_the_start_or_end_of_a_line(self) -> None:
+        """A copied value often carries a space, a tab, a non-breaking space or Excel's line break at an end.
+        A blank the paste puts between words stays, or pasting into the middle of a name would join two words."""
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        rows = [
+            ("Application Name", "", None, "\u00a0 Acme Portal \t", "Acme Portal"),
+            ("Application Name", "Acme", None, " Portal  ", "Acme Portal"),
+            ("Application Name", "My Corp", (2, 2), " App", "My App Corp"),
+            ("User role 1", "", None, " Admin ", "Admin"),
+            ("Limitations", "", None, "\n  First limit  \n\tSecond limit \r\n", "First limit\nSecond limit"),
+        ]
+        for label, before, selection, pasted, expected in rows:
+            with self.subTest(label=label, pasted=pasted):
+                field = page.get_by_label(label, exact=True)
+                field.fill(before)
+                self._paste_text(field, pasted, selection)
+                self.assertEqual(field.input_value(), expected)
+
+    def test_a_setup_paste_is_its_own_undo_step(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        name = page.get_by_label("Application Name", exact=True)
+        name.fill("Acme")
+        self._paste_text(name, " Portal")
+        self.assertEqual(name.input_value(), "Acme Portal")
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        expect(page.get_by_label("Application Name", exact=True)).to_have_value("Acme")
+
+    def test_the_setup_character_limit_measures_a_paste_without_its_end_blanks(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/new")
+        vocabulary = json.loads(page.locator("#vocabulary").text_content())
+        maximum = vocabulary["character_rules"]["tester"]["max_length"]
+        tester = page.get_by_label("Tester", exact=True)
+        tester.fill("T" * (maximum - 2))
+
+        self._paste_text(tester, "XY  ")
+
+        self.assertEqual(tester.input_value(), "T" * (maximum - 2) + "XY")
+        self.assertIsNone(tester.get_attribute("aria-describedby"), "the paste fit once its blanks were dropped, so nothing was cut")
 
     def test_over_limit_draft_stays_invalid_while_shortening_without_limit_note(self) -> None:
         page = self.page

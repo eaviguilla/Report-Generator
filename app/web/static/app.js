@@ -365,7 +365,7 @@
       window.vrDialog.whenClosed().then(() => window.vrDialog.ask({
         title: "Your Word report is ready",
         message: `Look for "${generated.filename}" inside the app's "generated" folder.`,
-        copy: {text: generated.path, label: "Copy path"},
+        copy: {text: generated.folder, label: "Copy path"},
         actions: [{key: "ok", label: "OK", tone: "primary"}],
       }));
     } catch (error) {

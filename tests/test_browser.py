@@ -6579,7 +6579,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(button).to_have_text("Generate Report")
         self.assertEqual(button.bounding_box(), idle, "the button moved once the report was generated")
 
-    def test_word_report_popup_copies_its_path_or_selects_it_when_the_browser_refuses(self) -> None:
+    def test_word_report_popup_copies_its_folder_or_selects_it_when_the_browser_refuses(self) -> None:
         report_id = self._generatable_report()
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -6593,11 +6593,11 @@ class BrowserWorkflowTests(unittest.TestCase):
                 page.evaluate(f"() => {{ navigator.clipboard.writeText = {write_text}; }}")
                 with self._expect_generated() as generated:
                     page.get_by_role("button", name="Generate Report").click()
-                path = generated.value.json()["path"]
+                folder = str(Path(generated.value.json()["path"]).parent)
                 popup = page.get_by_role("dialog", name="Your Word report is ready")
                 popup.get_by_role("button", name="Copy path").click()
                 expect(popup.get_by_role("button", name=label)).to_be_visible()
-                self.assertEqual(page.evaluate(read_back), path)
+                self.assertEqual(page.evaluate(read_back), folder)
                 popup.get_by_role("button", name="OK").click()
                 expect(popup).to_be_hidden()
 
@@ -6692,7 +6692,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         output_path = main.GENERATED / "JH - Browser QA - Annual Pentest 2026.docx"
         popup_text = popup.inner_text()
         self.assertIn(f'"{output_path.name}"', popup_text)
-        self.assertIn(str(output_path), popup_text)
+        self.assertIn(str(output_path.parent), popup_text)
         rendered = Document(output_path)
         text = "\n".join([*(paragraph.text for paragraph in rendered.paragraphs), *(cell.text for table in rendered.tables for row in table.rows for cell in row.cells)])
         self.assertIn("Browser finding", text)

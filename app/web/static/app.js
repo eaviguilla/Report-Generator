@@ -1007,7 +1007,8 @@
     root.addEventListener("paste", event => {
       const control = event.target;
       const pasted = event.clipboardData?.getData("text/plain");
-      if (!pasted || !isSetupTextBox(control)) return;
+      // insertText writes at the focused box, which a paste event fired elsewhere would not be.
+      if (!pasted || !isSetupTextBox(control) || control !== document.activeElement) return;
       event.preventDefault();
       // Its own undo step, as a list paste on Content is. insertText keeps maxlength and the box's own undo.
       finalizeTextTransaction();

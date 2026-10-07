@@ -645,6 +645,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             ("Application Name", "", None, "\u00a0 Acme Portal \t", "Acme Portal"),
             ("Application Name", "Acme", None, " Portal  ", "Acme Portal"),
             ("Application Name", "My Corp", (2, 2), " App", "My App Corp"),
+            ("Application Name", "My Corp", (0, 7), "  NewCo  ", "NewCo"),
             ("User role 1", "", None, " Admin ", "Admin"),
             ("Limitations", "", None, "\n  First limit  \n\tSecond limit \r\n", "First limit\nSecond limit"),
         ]
@@ -656,17 +657,26 @@ class BrowserWorkflowTests(unittest.TestCase):
                 self.assertEqual(field.input_value(), expected)
 
     def test_a_setup_paste_is_its_own_undo_step(self) -> None:
+        """Typing straight before the paste, with no blur between, stays a step of its own."""
         report_id = self.ready_report()
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
         name = page.get_by_label("Application Name", exact=True)
-        name.fill("Acme")
+        original = name.input_value()
+        name.fill("")
+        name.click()
+        name.press_sequentially("Acme")
         self._paste_text(name, " Portal")
         self.assertEqual(name.input_value(), "Acme Portal")
 
         with page.expect_navigation():
             page.locator("#undo-button").click()
         expect(page.get_by_label("Application Name", exact=True)).to_have_value("Acme")
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        expect(page.get_by_label("Application Name", exact=True)).to_have_value(original)
+        expect(page.locator("#undo-button")).to_be_disabled()
 
     def test_the_setup_character_limit_measures_a_paste_without_its_end_blanks(self) -> None:
         page = self.page
@@ -680,6 +690,60 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         self.assertEqual(tester.input_value(), "T" * (maximum - 2) + "XY")
         self.assertIsNone(tester.get_attribute("aria-describedby"), "the paste fit once its blanks were dropped, so nothing was cut")
+
+    def test_a_paste_aimed_at_an_unfocused_setup_box_changes_no_field(self) -> None:
+        """insertText writes at the focused box, so a paste event fired at another box must be left alone."""
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+
+        page.get_by_label("Non-Production", exact=True).check()
+        page.get_by_label("Non-Production name", exact=True).select_option("OTHERS")
+        custom_name = page.get_by_label("Non-Production name, typed", exact=True)
+        custom_name.fill("Stage")
+        page.get_by_label("Non-Production", exact=True).uncheck()
+        self.assertTrue(custom_name.is_disabled(), "the box must be disabled for this to be an attack on a non-focused target")
+
+        app_name = page.get_by_label("Application Name", exact=True)
+        app_name.click()
+        before = app_name.input_value()
+
+        # Only the page's handler is under test: a disabled box gets no native paste to simulate.
+        custom_name.evaluate("""element => {
+            const clipboard = new DataTransfer();
+            clipboard.setData("text/plain", " leaked text ");
+            element.dispatchEvent(new ClipboardEvent("paste", {bubbles:true, cancelable:true, clipboardData:clipboard}));
+        }""")
+
+        self.assertEqual(app_name.input_value(), before, "a paste at a disabled box must not land in the field that actually has focus")
+        self.assertEqual(custom_name.input_value(), "Stage", "a disabled box accepts no paste at all")
+
+    def test_a_setup_paste_with_no_plain_text_is_not_intercepted(self) -> None:
+        """An image-only or HTML-only clipboard keeps the browser's own paste."""
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        name = page.get_by_label("Application Name", exact=True)
+        name.fill("Acme")
+        not_cancelled = name.evaluate("""element => {
+            element.focus();
+            element.setSelectionRange(element.value.length, element.value.length);
+            const clipboard = new DataTransfer();
+            clipboard.setData("text/html", "<b>hi</b>");
+            return element.dispatchEvent(new ClipboardEvent("paste", {bubbles:true, cancelable:true, clipboardData:clipboard}));
+        }""")
+        self.assertTrue(not_cancelled, "a paste with no plain text must not be intercepted")
+
+    def test_a_findings_page_paste_keeps_its_blanks(self) -> None:
+        """setup() also runs the Findings page, where pastes are not cleaned."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_role("button", name="Edit finding name").click()
+        title = page.locator(".finding-title-cell input")
+        title.fill("Acme")
+        self._paste_text(title, " Corp  ")
+        self.assertEqual(title.input_value(), "Acme Corp  ")
 
     def test_over_limit_draft_stays_invalid_while_shortening_without_limit_note(self) -> None:
         page = self.page

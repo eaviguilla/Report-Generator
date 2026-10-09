@@ -79,6 +79,18 @@ _Avoid_: environment-irrelevant image, stale image, orphaned image, out-of-scope
 The Word document the app builds from a report.
 _Avoid_: Word document report, generated report, docx, output file
 
+**Editable copy**:
+A new report the app builds from a Word report so that it reads the same: every finding, status, printed section and engagement detail. What the Word report does not print starts fresh.
+_Avoid_: editable draft, editable import, restored report
+
+**Retest import**:
+Importing a Word report to start the next test of the same application from its open findings, each with its proof of concept moved to Previous Proof of Concept. It leaves the report type for the tester, because the next test may be an annual pentest rather than a retest.
+_Avoid_: retest draft, retest type
+
+**Export**:
+The ZIP the app downloads for one report, holding the report and its evidence images. Import takes it back unchanged.
+_Avoid_: bundle, ZIP bundle, backup
+
 **App window**:
 The window the app opens in when it is started from Burp. It has no address bar and no tabs, and it is not Burp's browser.
 _Avoid_: Burp browser, node app, popup

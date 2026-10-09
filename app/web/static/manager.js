@@ -157,79 +157,209 @@
     importedRow.scrollIntoView({block:"center"});
     importedRow.querySelector(".report-name").focus();
   };
-  importInput.onchange = async () => {
-    const file = importInput.files?.[0];
-    if (!file) return;
-    setStatus("Checking import...");
-    try {
-      let result = await uploadImport(file, "prompt");
-      if (result.mode_required) {
-        const mode = await window.vrDialog.ask({
-          title: "Import report DOCX",
-          message: "Choose whether to restore the visible report as an editable copy or start a retest from its open findings.",
-          actions: [
-            {key:"editable", label:"Import as editable draft", tone:"primary"},
-            {key:"retest", label:"Import as retest draft", tone:"subtle"},
-            {key:"cancel", label:"Cancel", cancel:true},
-          ],
-        });
-        if (mode === "cancel") {
-          setStatus("Import cancelled.");
+  const importSummary = result => {
+    const summary = result.summary || {};
+    const notices = [];
+    const labels = Object.fromEntries(vocabulary.statuses);
+    if (result.mode === "retest") {
+      const rewritten = summary.statuses_rewritten || [];
+      const dropped = summary.dropped_resolved || [];
+      if (rewritten.length) {
+        notices.push(`${rewritten.length} ${labels.open_new} finding${rewritten.length === 1 ? " was" : "s were"} changed to ${labels.open_previously_discovered} for retesting: ${rewritten.join(", ")}.`);
+      }
+      if (dropped.length) {
+        notices.push(`${dropped.length} ${labels.resolved} or ${labels.closed} finding${dropped.length === 1 ? " was" : "s were"} not included: ${dropped.join(", ")}.`);
+      }
+    }
+    notices.push(...(summary.warnings || []), ...(summary.normalizations || []));
+    const findingCount = summary.retained ?? 0;
+    const statusCounts = Object.entries(summary.status_counts || {})
+      .filter(([, count]) => count)
+      .map(([key, count]) => `${count} ${labels[key] || key}`)
+      .join(", ");
+    const details = [
+      `${findingCount} finding${findingCount === 1 ? "" : "s"}`,
+      statusCounts,
+      summary.evidence_imported != null ? `${summary.evidence_imported} evidence image${summary.evidence_imported === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" · ");
+    return {details, notices};
+  };
+  // The name picks the buttons; the server still sorts the file by its bytes.
+  const importKind = name => [[".docx", "docx"], [".zip", "bundle"], [".json", "bundle"]].find(([ending]) => name.toLowerCase().endsWith(ending))?.[1];
+  const IMPORT_FOCUSABLE = 'button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  let importDialog = null;
+  const openImportDialog = () => {
+    if (importDialog) return;
+    const backdrop = document.createElement("div");
+    backdrop.className = "vr-dialog-backdrop";
+    backdrop.dataset.dialog = "";
+    backdrop.innerHTML = `<div class="vr-dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title">
+      <div class="import-dialog-head"><h2 id="import-dialog-title">Import a report</h2><button type="button" class="subtle" data-import="close">Close</button></div>
+      <div class="import-drop" role="button" tabindex="0">Click to choose, or drag a file here</div>
+      <p class="import-file" hidden></p>
+      <p class="import-note" hidden>This file is a Word report. Choose how to import it.</p>
+      <div class="import-live" aria-live="polite"></div>
+      <div class="import-result" hidden><p></p><ul></ul></div>
+      <div class="vr-dialog-actions import-choices" data-for="docx">
+        <div class="import-choice"><button type="button" data-import="retest" aria-describedby="import-retest-line">Retest</button><small id="import-retest-line">Starts the next test from the open findings. Each one's proof of concept becomes its previous proof of concept.</small></div>
+        <div class="import-choice"><button type="button" data-import="editable" aria-describedby="import-editable-line">Editable copy</button><small id="import-editable-line">Brings the report back as it reads, so you can change it and build it again.</small></div>
+      </div>
+      <div class="vr-dialog-actions" data-for="bundle" hidden><button type="button" class="primary" data-import="bundle">Import</button></div>
+      <div class="vr-dialog-actions" data-for="result" hidden><button type="button" class="subtle" data-import="stay">Stay on reports</button><button type="button" class="primary" data-import="open">Open Setup</button></div>
+    </div>`;
+    const panel = backdrop.firstElementChild;
+    const find = selector => panel.querySelector(selector);
+    const button = key => find(`[data-import="${key}"]`);
+    const heading = find("h2");
+    const drop = find(".import-drop");
+    const fileLine = find(".import-file");
+    const live = find(".import-live");
+    const state = {file: null, kind: null, asked: false, busy: false, result: null};
+    const render = () => {
+      const {file, kind, asked, busy, result} = state;
+      drop.hidden = live.hidden = Boolean(result);
+      drop.setAttribute("aria-disabled", String(busy));
+      fileLine.hidden = !file || Boolean(result);
+      fileLine.textContent = file?.name || "";
+      find(".import-note").hidden = !asked || Boolean(result);
+      find(".import-result").hidden = !result;
+      find('[data-for="docx"]').hidden = Boolean(result) || kind === "bundle";
+      find('[data-for="bundle"]').hidden = Boolean(result) || kind !== "bundle";
+      find('[data-for="result"]').hidden = !result;
+      button("retest").disabled = button("editable").disabled = busy || kind !== "docx";
+      button("bundle").disabled = button("close").disabled = busy;
+    };
+    const say = (text, failed = false) => {
+      live.replaceChildren(...(text ? [Object.assign(document.createElement("p"), {className: failed ? "import-error" : "", textContent: text})] : []));
+    };
+    const fail = error => {
+      const {diagnostic} = diagnostics.normalize(error, "import_report", "Import failed");
+      const code = document.createElement("div");
+      code.className = "diagnostic-code";
+      code.append(
+        Object.assign(document.createElement("span"), {textContent: "Code"}),
+        Object.assign(document.createElement("code"), {textContent: [diagnostic.operation, diagnostic.status, diagnostic.code, diagnostic.reference].filter(Boolean).join(" / ")}),
+      );
+      say(diagnostic.message, true);
+      live.append(code);
+    };
+    const take = files => {
+      if (state.busy || state.result || !files.length) return;
+      if (files.length > 1) return say("Drop one file at a time.", true);
+      const kind = importKind(files[0].name);
+      if (!kind) return say("Import takes a Word report (.docx), an export (.zip), or a report's draft.json.", true);
+      Object.assign(state, {file: files[0], kind, asked: false});
+      say("");
+      render();
+    };
+    const showResult = result => {
+      const {details, notices} = importSummary(result);
+      state.result = result;
+      heading.textContent = result.mode === "editable" ? "Imported as an editable copy" : "Imported as a retest";
+      find(".import-result p").textContent = `${details}. Review the report in Setup before continuing.`;
+      const list = find(".import-result ul");
+      list.replaceChildren(...notices.map(text => Object.assign(document.createElement("li"), {textContent: text})));
+      list.hidden = !notices.length;
+      render();
+      button("open").focus();
+    };
+    const run = async choice => {
+      state.busy = true;
+      say("Importing...");
+      render();
+      try {
+        const result = await uploadImport(state.file, choice === "bundle" ? "prompt" : choice);
+        diagnostics.clear();
+        if (!result.mode_required && result.source !== "docx") {
+          location.href = `/reports/${result.report_id}/setup`;
           return;
         }
-        setStatus("Importing...");
-        result = await uploadImport(file, mode);
+        state.busy = false;
+        if (!result.mode_required) return showResult(result);
+        Object.assign(state, {kind: "docx", asked: true});
+        say("");
+        render();
+        drop.focus();
+      } catch (error) {
+        state.busy = false;
+        render();
+        fail(error);
+        button(choice).focus();
       }
-      diagnostics.clear();
-      if (result.source !== "docx") {
-        location.href = `/reports/${result.report_id}/setup`;
+    };
+    const close = async () => {
+      if (state.busy) return;
+      importDialog = null;
+      document.removeEventListener("keydown", onKeydown, true);
+      backdrop.remove();
+      if (!state.result) {
+        importCommand.focus();
         return;
       }
-      const summary = result.summary || {};
-      const notices = [];
-      const labels = Object.fromEntries(vocabulary.statuses);
-      if (result.mode === "retest") {
-        const rewritten = summary.statuses_rewritten || [];
-        const dropped = summary.dropped_resolved || [];
-        if (rewritten.length) {
-          notices.push(`${rewritten.length} ${labels.open_new} finding${rewritten.length === 1 ? " was" : "s were"} changed to ${labels.open_previously_discovered} for retesting: ${rewritten.join(", ")}.`);
-        }
-        if (dropped.length) {
-          notices.push(`${dropped.length} ${labels.resolved} or ${labels.closed} finding${dropped.length === 1 ? " was" : "s were"} not included: ${dropped.join(", ")}.`);
-        }
-      }
-      notices.push(...(summary.warnings || []), ...(summary.normalizations || []));
-      const findingCount = summary.retained ?? 0;
-      const statusCounts = Object.entries(summary.status_counts || {})
-        .filter(([, count]) => count)
-        .map(([key, count]) => `${count} ${labels[key] || key}`)
-        .join(", ");
-      const details = [
-        `${findingCount} finding${findingCount === 1 ? "" : "s"}`,
-        statusCounts,
-        summary.evidence_imported != null ? `${summary.evidence_imported} evidence image${summary.evidence_imported === 1 ? "" : "s"}` : "",
-      ].filter(Boolean).join(" · ");
-      const action = await window.vrDialog.ask({
-        title: `Imported as ${result.mode === "editable" ? "editable" : "retest"} draft`,
-        message: `${details}. Review the draft in Setup before continuing.`,
-        list: notices,
-        actions: [
-          {key:"open", label:"Open Setup", tone:"primary"},
-          {key:"stay", label:"Stay on reports", cancel:true},
-        ],
-      });
-      if (action === "open") {
-        location.href = `/reports/${result.report_id}/setup`;
-      } else {
-        await revealImportedReport(result.report_id);
+      try {
+        await revealImportedReport(state.result.report_id);
         setStatus("Report imported.");
+      } catch (error) {
+        showError(error, "load_report_manager", "Unable to load reports");
       }
-    } catch (error) {
-      showError(error, "import_report", "Select a valid VulnReport ZIP or JSON export, or a report DOCX");
+    };
+    function onKeydown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const stops = [...panel.querySelectorAll(IMPORT_FOCUSABLE)].filter(element => element.getClientRects().length);
+      if (!stops.length) return;
+      const edge = event.shiftKey ? stops[0] : stops[stops.length - 1];
+      if (document.activeElement === edge || !panel.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? stops[stops.length - 1] : stops[0]).focus();
+      }
     }
-    finally { importInput.value = ""; }
+    drop.onclick = () => { if (!state.busy) importInput.click(); };
+    drop.onkeydown = event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      drop.click();
+    };
+    ["retest", "editable", "bundle"].forEach(choice => { button(choice).onclick = () => run(choice); });
+    button("close").onclick = close;
+    button("stay").onclick = close;
+    button("open").onclick = () => { location.href = `/reports/${state.result.report_id}/setup`; };
+    backdrop.onmousedown = event => {
+      if (event.target !== backdrop) return;
+      // Otherwise the press itself moves focus off the Import button once the dialog is gone.
+      event.preventDefault();
+      close();
+    };
+    document.addEventListener("keydown", onKeydown, true);
+    document.body.append(backdrop);
+    importDialog = {take, mark: on => drop.classList.toggle("is-drop-target", on && !state.busy && !state.result)};
+    render();
+    drop.focus();
   };
-  importCommand.onclick = () => importInput.click();
+  const carriesFiles = event => [...(event.dataTransfer?.types || [])].includes("Files");
+  // A file dropped anywhere goes to the open dialog and never to the browser, which would open it and leave the app.
+  window.addEventListener("dragover", event => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = importDialog ? "copy" : "none";
+    importDialog?.mark(true);
+  });
+  window.addEventListener("dragleave", event => { if (!event.relatedTarget) importDialog?.mark(false); });
+  window.addEventListener("drop", event => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    importDialog?.mark(false);
+    importDialog?.take(event.dataTransfer.files);
+  });
+  importInput.onchange = () => {
+    importDialog?.take(importInput.files);
+    importInput.value = "";
+  };
+  importCommand.onclick = openImportDialog;
   appSearch.oninput = filterApps;
   load().catch(error => showError(error, "load_report_manager", "Unable to load reports"));
 })();

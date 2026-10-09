@@ -627,6 +627,7 @@ def open_report(report_id: str):
 @app.post("/reports/import")
 async def import_report(file: UploadFile = File(...), docx_mode: str | None = Form(None)):
     """Validate a JSON draft, a ZIP bundle, or a report this app generated, and save it separately."""
+    is_docx = False
     try:
         if docx_mode is not None and docx_mode not in DOCX_IMPORT_MODES:
             raise HTTPException(422, "Unknown DOCX import mode")
@@ -660,7 +661,8 @@ async def import_report(file: UploadFile = File(...), docx_mode: str | None = Fo
     except ReportImportLimitError as error:
         raise HTTPException(413, str(error)) from error
     except (UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile, UnidentifiedImageError, OSError, ValidationError, ValueError) as error:
-        raise HTTPException(422, f"Select a valid VulnReport export: {error}") from error
+        prefix = "This Word report can't be imported" if is_docx else "Select a valid VulnReport export"
+        raise HTTPException(422, f"{prefix}: {error}") from error
     return {"report_id": report.report_id, "source": "bundle"}
 
 

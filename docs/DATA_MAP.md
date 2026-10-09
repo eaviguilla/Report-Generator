@@ -293,8 +293,9 @@ The server, not the browser, owns all of these.
 | `parse_report_docx` | `import_report`, when byte inspection identifies a generated DOCX | `retest` (also the omitted-mode default) rewrites retained findings and promotes source PoC; `editable` preserves every known status and printed section, restores supported visible engagement/scope values, and rejects unrepresentable content instead of dropping it |
 
 DOCX mode is request state, not report state.
-The manager first posts `docx_mode=prompt`; DOCX bytes return `mode_required` without a write, while ZIP/JSON bytes import immediately.
-A chosen `editable` or `retest` mode is then posted with the same file.
+The Reports page's import dialog posts a Word report (`.docx` name) once, with the `editable` or `retest` mode of the button clicked.
+It posts an export or a draft.json (`.zip` or `.json` name) with `docx_mode=prompt`: ZIP/JSON bytes import immediately, while DOCX bytes return `mode_required` without a write.
+The dialog then asks for the mode, and the button clicked posts the same file again.
 Retest keeps its established `retained`, `dropped_resolved`, and `statuses_rewritten` summary, adding warnings only for shared recovery assumptions.
 Editable adds status/evidence counts, restored categories, normalizations, and warnings.
 Both modes mint new identities and retain only visible document state; neither restores hidden source-draft state.

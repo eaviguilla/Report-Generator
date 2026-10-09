@@ -42,4 +42,18 @@
 .report-actions a:hover, .report-actions button:hover { border-color: var(--line-strong); background: var(--surface-raised); }
 .report-actions .report-delete:hover { border-color: var(--danger); background: var(--danger-soft); }
 .empty-reports { text-align: center; }
+/* The dialog swaps whole button rows, and its buttons set their own display. */
+.import-dialog [hidden] { display: none !important; }
+.import-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.vr-dialog .import-dialog-head h2 { margin: 0; }
+.import-drop { display: grid; min-height: 92px; place-items: center; padding: 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--ink-soft); cursor: pointer; font-size: 11px; text-align: center; }
+.import-drop:hover, .import-drop.is-drop-target { border-color: var(--accent); background: var(--accent-soft); }
+.import-drop[aria-disabled="true"] { cursor: default; opacity: .6; }
+.vr-dialog .import-file { margin: 10px 0 0; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.vr-dialog .import-note { margin: 6px 0 0; }
+.import-live:not(:empty) { margin-top: 10px; }
+.vr-dialog .import-error { color: var(--danger); }
+.import-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.import-choice { display: grid; align-content: start; gap: 5px; }
+.import-choice small { color: var(--muted); font-size: 10px; line-height: 1.45; }
 @media (max-width: 680px) { #report-manager { padding: 20px 16px 64px; } .manager-search { flex-wrap: wrap; } .manager-search input { flex: 1; max-width: none; } .manager-search-actions { flex: 1 0 100%; margin-left: 0; } .manager-search-actions .primary, .manager-search-actions .icon-command { flex: 1; justify-content: center; } .app-group-columns { display: none; } .report-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; } .report-row time, .report-row > span { display: none; } .report-actions { align-self: center; } }

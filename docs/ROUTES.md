@@ -83,13 +83,20 @@ import immediately. Omitting the field preserves the legacy retest behavior.
 Supplying `editable` or `retest` for non-DOCX bytes, or any unknown token,
 returns `422`.
 
+The Reports page's import dialog sends nothing until the tester clicks a button.
+It sorts the file by the end of its name: a `.docx` goes up once with the
+`editable` or `retest` mode of the button clicked; a `.zip` or `.json` goes up
+with `prompt`, and a `mode_required` answer makes the dialog ask for the mode.
+
 Retest rewrites retained findings to Previously Discovered, promotes the source
 Proof of Concept to Previous Proof of Concept, seeds a fresh proof, and reports
 rewritten/dropped findings. Editable retains all known statuses and printed
 sections. Before its one `Workspace.import_report` call, the route validates the
 parsed report, seeds Setup scope from its targets, runs it through acceptance in
 memory, and proves a second provision pass is stable. Parser resource-limit failures
-return `413`; malformed or lossy imports return `422` before persistence.
+return `413`; malformed or lossy imports return `422` before persistence. The
+`422` message starts "This Word report can't be imported: " when the bytes are a
+generated DOCX, and "Select a valid VulnReport export: " otherwise.
 
 Successful DOCX responses add `source: "docx"`, the selected `mode`, and a
 mode-specific `summary`; bundle responses retain `{report_id, source:

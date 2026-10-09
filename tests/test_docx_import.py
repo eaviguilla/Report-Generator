@@ -1379,6 +1379,24 @@ class ImportRouteTests(unittest.TestCase):
         self.assertIn("invalid Limitations row", response.json()["detail"])
         self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
+    def test_a_word_report_that_fails_names_a_word_report(self) -> None:
+        document = Document(BytesIO(self._docx()))
+        limitations = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Limitations")
+        limitations.rows[1]._tr.remove(limitations.rows[1].cells[0]._tc)
+        output = BytesIO()
+        document.save(output)
+
+        response = self._import("report.zip", output.getvalue(), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertRegex(response.json()["detail"], r"^This Word report can't be imported: .*invalid Limitations row")
+
+    def test_an_export_that_fails_names_an_export(self) -> None:
+        response = self._import("report.docx", b"not valid JSON", "prompt")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertRegex(response.json()["detail"], r"^Select a valid VulnReport export: ")
+
     def test_empty_scope_row_is_rejected_without_writing(self) -> None:
         document = Document(BytesIO(self._docx()))
         scope = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "URL(s) in Scope")

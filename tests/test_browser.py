@@ -188,6 +188,29 @@ class BrowserWorkflowTests(unittest.TestCase):
             allow_incomplete=True,
         )
 
+    def import_through_dialog(self, name: str, buffer: bytes, button: str | None = None):
+        """Open Import, give its dialog one file through the file picker, and click `button` when named."""
+        self.page.locator("#import-command").click()
+        dialog = self.page.get_by_role("dialog")
+        self.page.locator("#import-report").set_input_files({"name": name, "mimeType": "application/octet-stream", "buffer": buffer})
+        dialog.get_by_text(name, exact=True).wait_for()
+        if button:
+            dialog.get_by_role("button", name=button, exact=True).click()
+        return dialog
+
+    def drop_files(self, target, files: list[tuple[str, bytes]]) -> None:
+        """Fire dragover and drop carrying `files` on `target`, as a drag from a folder window does."""
+        transfer = self.page.evaluate_handle(
+            """files => {
+                const transfer = new DataTransfer();
+                for (const [name, data] of files) transfer.items.add(new File([Uint8Array.from(atob(data), c => c.charCodeAt(0))], name));
+                return transfer;
+            }""",
+            [[name, base64.b64encode(data).decode()] for name, data in files],
+        )
+        target.dispatch_event("dragover", {"dataTransfer": transfer})
+        target.dispatch_event("drop", {"dataTransfer": transfer})
+
     def test_setup_inputs_report_character_and_date_errors_before_save(self) -> None:
         page = self.page
         page.goto(f"{self.base_url}/new")
@@ -3428,14 +3451,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         two tabs on a hand-built report do."""
         document = self.importable_docx()
         self.page.goto(f"{self.base_url}/")
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        self.page.get_by_role("dialog").get_by_role("button", name="Import as editable draft").click()
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as editable draft").wait_for()
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         report_id = self.page.url.split("/reports/")[1].split("/")[0]
@@ -3463,14 +3480,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         ready side of the same agreement."""
         document = self.importable_docx()
         self.page.goto(f"{self.base_url}/")
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        self.page.get_by_role("dialog").get_by_role("button", name="Import as editable draft").click()
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as editable draft").wait_for()
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
@@ -3505,14 +3516,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
         self.page.goto(f"{self.base_url}/")
-        self.page.locator("#import-report").set_input_files({
-            "name": "lower-region.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("button", name="Import as editable draft").click()
-        result.get_by_role("heading", name="Imported as editable draft").wait_for()
+        result = self.import_through_dialog("lower-region.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
@@ -6858,15 +6863,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(generated_path.is_file())
 
         page.goto(f"{self.base_url}/")
-        page.locator("#import-report").set_input_files({
-            "name": generated_path.name,
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": generated_path.read_bytes(),
-        })
-        dialog = page.get_by_role("dialog")
-        dialog.get_by_role("button", name="Import as editable draft").click()
-        result = page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as editable draft").wait_for(timeout=15_000)
+        result = self.import_through_dialog(generated_path.name, generated_path.read_bytes(), "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for(timeout=15_000)
         result.get_by_role("button", name="Open Setup").click()
         page.wait_for_url("**/reports/*/setup")
         imported_id = page.url.split("/reports/")[1].split("/")[0]
@@ -6994,7 +6992,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertNotEqual(duplicate_id, report_id)
 
         page.goto(f"{self.base_url}/")
-        page.locator("#import-report").set_input_files(download.path())
+        self.import_through_dialog(download.suggested_filename, Path(download.path()).read_bytes(), "Import")
         page.wait_for_url("**/setup")
         imported_id = page.url.split("/reports/")[1].split("/")[0]
         self.assertNotIn(imported_id, {report_id, duplicate_id})
@@ -7007,117 +7005,64 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_text("Report deleted.").wait_for()
         page.locator(".report-row").filter(has_text=report_id).wait_for(state="detached")
 
-    def test_docx_import_offers_both_modes_and_backing_out_sends_no_second_request(self) -> None:
-        """Cancel and Escape both back out after the one classifying request: nothing is imported and
-        the file input is cleared. The .zip name on a Word file shows the dialog follows the bytes."""
+    def test_closing_the_import_dialog_sends_nothing_and_forgets_the_file(self) -> None:
+        """Close, Escape and a click outside each back out with nothing sent, and the dialog opens
+        empty again. Giving it the same file each time shows the file picker takes it again."""
         document = self.importable_docx()
-        cases = [
-            ("Cancel button", "report.zip", "application/zip", lambda dialog: dialog.get_by_role("button", name="Cancel").click()),
-            ("Escape key", "report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", lambda dialog: self.page.keyboard.press("Escape")),
+        before = set(self.root.glob("apps/**/draft.json"))
+        requests = []
+        self.page.on("request", lambda request: requests.append(request) if request.url.endswith("/reports/import") else None)
+        self.page.goto(f"{self.base_url}/")
+        ways = [
+            ("Close", lambda dialog: dialog.get_by_role("button", name="Close", exact=True).click()),
+            ("Escape", lambda dialog: self.page.keyboard.press("Escape")),
+            ("click outside", lambda dialog: self.page.mouse.click(5, 5)),
         ]
-        for way, name, mime, back_out in cases:
+        for way, close in ways:
             with self.subTest(way=way):
-                before = set(self.root.glob("apps/**/draft.json"))
-                requests = []
-                watcher = lambda request: requests.append(request) if request.method == "POST" and request.url.endswith("/reports/import") else None
-                self.page.on("request", watcher)
-                self.page.goto(f"{self.base_url}/")
-                self.page.locator("#import-report").set_input_files({"name": name, "mimeType": mime, "buffer": document})
+                close(self.import_through_dialog("report.docx", document))
+                expect(self.page.get_by_role("dialog")).to_have_count(0)
+                expect(self.page.locator("#import-command")).to_be_focused()
 
-                dialog = self.page.get_by_role("dialog")
-                dialog.get_by_role("heading", name="Import report DOCX").wait_for()
-                self.assertTrue(dialog.get_by_role("button", name="Import as editable draft").is_visible())
-                self.assertTrue(dialog.get_by_role("button", name="Import as retest draft").is_visible())
-                back_out(dialog)
-                self.page.get_by_text("Import cancelled.").wait_for()
-                self.page.remove_listener("request", watcher)
-                self.assertEqual(len(requests), 1)
-                self.assertEqual(set(self.root.glob("apps/**/draft.json")), before)
-                self.assertEqual(self.page.locator("#import-report").input_value(), "")
+        self.page.locator("#import-command").click()
+        dialog = self.page.get_by_role("dialog")
+        expect(dialog.get_by_role("button", name="Retest", exact=True)).to_be_disabled()
+        expect(dialog.get_by_text("report.docx", exact=True)).to_have_count(0)
+        self.assertEqual(requests, [])
+        self.assertEqual(set(self.root.glob("apps/**/draft.json")), before)
 
-    def test_a_failed_second_import_request_after_mode_choice_can_be_retried(self) -> None:
-        """The first /reports/import call only classifies the file; the mode choice fires a second
-        call. If that second call fails (a dropped connection, a server error), the tester must see
-        the failure and be able to retry without reloading or re-picking a mode from scratch."""
+    def test_a_failed_import_request_can_be_retried_with_the_file_still_held(self) -> None:
+        """A dropped connection fails inside the dialog and leaves the file there, so the same
+        button works again without finding the file."""
         document = self.importable_docx()
         before = set(self.root.glob("apps/**/draft.json"))
-        attempt = {"count": 0}
-
-        def flaky_second_call(route) -> None:
-            attempt["count"] += 1
-            if attempt["count"] == 1:
-                route.continue_()
-            else:
-                route.abort()
-
-        self.page.route("**/reports/import", flaky_second_call)
+        abort = lambda route: route.abort()
+        self.page.route("**/reports/import", abort)
         self.page.goto(f"{self.base_url}/")
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        dialog = self.page.get_by_role("dialog")
-        dialog.get_by_role("heading", name="Import report DOCX").wait_for()
-        dialog.get_by_role("button", name="Import as editable draft").click()
+        dialog = self.import_through_dialog("report.docx", document, "Editable copy")
 
-        diagnostic = self.page.locator("#app-diagnostics")
-        diagnostic.get_by_role("heading", name="Operation failed").wait_for()
-        self.assertEqual(set(self.root.glob("apps/**/draft.json")), before, "a failed second call must not leave a partial report on disk")
-        self.assertEqual(self.page.locator("#import-report").input_value(), "", "the file input clears so the same file can be re-picked")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        expect(self.page.locator("#app-diagnostics")).to_have_count(0)
+        self.assertEqual(set(self.root.glob("apps/**/draft.json")), before)
 
-        self.page.unroute("**/reports/import", flaky_second_call)
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        dialog = self.page.get_by_role("dialog")
-        dialog.get_by_role("heading", name="Import report DOCX").wait_for()
-        dialog.get_by_role("button", name="Import as editable draft").click()
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as editable draft").wait_for()
-        after = set(self.root.glob("apps/**/draft.json"))
-        self.assertEqual(len(after - before), 1, "the retry must succeed and write exactly one report")
+        self.page.unroute("**/reports/import", abort)
+        dialog.get_by_role("button", name="Editable copy", exact=True).click()
+        dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
 
-    def test_reselecting_a_file_while_the_mode_dialog_is_open_replaces_it_cleanly(self) -> None:
-        """The mode-choice dialog is a JS singleton: opening a second one settles whatever is
-        already open as "cancel". Re-picking the file input while dialog A is still awaiting an
-        answer fires a second onchange concurrently with the first still suspended mid-await, so
-        this proves the abandoned first import never completes and exactly one report is written."""
-        first_document = self.importable_docx()
-        second_document = self.importable_docx()
+    def test_a_second_file_replaces_the_first(self) -> None:
+        document = self.importable_docx()
         before = set(self.root.glob("apps/**/draft.json"))
         self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("first.zip", b"not an export")
 
-        self.page.locator("#import-report").set_input_files({
-            "name": "first.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": first_document,
-        })
-        self.page.get_by_role("dialog").get_by_role("heading", name="Import report DOCX").wait_for()
-
-        # Re-select before answering dialog A; this fires a second onchange while the first is
-        # still suspended awaiting the user's mode choice.
-        self.page.locator("#import-report").set_input_files({
-            "name": "second.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": second_document,
-        })
-        dialog = self.page.get_by_role("dialog")
-        dialog.get_by_role("heading", name="Import report DOCX").wait_for()
-        self.assertEqual(dialog.count(), 1, "the abandoned first dialog must not linger alongside a second")
-        dialog.get_by_role("button", name="Import as editable draft").click()
-
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as editable draft").wait_for()
-        result.get_by_role("button", name="Stay on reports").click()
-        self.page.get_by_text("Report imported.").wait_for()
-
-        self.assertEqual(self.page.get_by_role("dialog").count(), 0, "no stray dialog is left open")
-        self.assertEqual(self.page.locator("#import-report").input_value(), "")
-        after = set(self.root.glob("apps/**/draft.json"))
-        self.assertEqual(len(after - before), 1, "the abandoned first selection must not also import")
+        self.page.locator("#import-report").set_input_files({"name": "second.docx", "mimeType": "application/octet-stream", "buffer": document})
+        dialog.get_by_text("second.docx", exact=True).wait_for()
+        expect(dialog.get_by_text("first.zip", exact=True)).to_have_count(0)
+        expect(dialog.get_by_role("button", name="Import", exact=True)).to_have_count(0)
+        dialog.get_by_role("button", name="Editable copy", exact=True).click()
+        dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
 
     def test_editable_import_of_an_asia_cvss_finding_reaches_ready_state(self) -> None:
         """The Section/CVSS table round trip is parser-tested in isolation, and the Asia CVSS
@@ -7142,14 +7087,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
         self.page.goto(f"{self.base_url}/")
-        self.page.locator("#import-report").set_input_files({
-            "name": "asia.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        self.page.get_by_role("dialog").get_by_role("button", name="Import as editable draft").click()
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as editable draft").wait_for()
+        result = self.import_through_dialog("asia.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
         imported_id = self.page.url.split("/reports/")[1].split("/")[0]
@@ -7163,15 +7102,8 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_retest_docx_import_discloses_rewrites_and_opens_setup(self) -> None:
         document = self.importable_docx()
         self.page.goto(f"{self.base_url}/")
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        self.page.get_by_role("dialog").get_by_role("button", name="Import as retest draft").click()
-
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as retest draft").wait_for()
+        result = self.import_through_dialog("report.docx", document, "Retest")
+        result.get_by_role("heading", name="Imported as a retest").wait_for()
         self.assertIn(
             f"1 {STATUS_LABELS['open_new']} finding was changed to {STATUS_LABELS['open_previously_discovered']} for retesting: Browser finding.",
             result.text_content(),
@@ -7208,14 +7140,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
         self.page.goto(f"{self.base_url}/")
-        self.page.locator("#import-report").set_input_files({
-            "name": "mixed-status.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        self.page.get_by_role("dialog").get_by_role("button", name="Import as retest draft").click()
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as retest draft").wait_for()
+        result = self.import_through_dialog("mixed-status.docx", document, "Retest")
+        result.get_by_role("heading", name="Imported as a retest").wait_for()
         self.assertIn("1 Resolved or Closed finding was not included: Closed browser finding.", result.text_content())
         result.get_by_role("button", name="Open Setup").click()
         self.page.wait_for_url("**/reports/*/setup")
@@ -7225,30 +7151,19 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(imported.vulnerabilities[0].status, "open_previously_discovered")
 
     def test_docx_import_warning_text_is_rendered_safely(self) -> None:
-        responses = [
-            {"source": "docx", "mode_required": True},
-            {
-                "report_id": "r_safe_warning", "source": "docx", "mode": "retest",
-                "summary": {
-                    "retained": 0, "dropped_resolved": ["Fixed issue"], "statuses_rewritten": [],
-                    "warnings": ['<img src=x onerror="window.__warningExecuted=true">'],
-                },
+        imported = {
+            "report_id": "r_safe_warning", "source": "docx", "mode": "retest",
+            "summary": {
+                "retained": 0, "dropped_resolved": ["Fixed issue"], "statuses_rewritten": [],
+                "warnings": ['<img src=x onerror="window.__warningExecuted=true">'],
             },
-        ]
-
-        def respond(route) -> None:
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(responses.pop(0)))
-
-        self.page.route("**/reports/import", respond)
+        }
+        self.page.route("**/reports/import", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(imported)))
         self.page.goto(f"{self.base_url}/")
         self.page.evaluate("window.__warningExecuted = false")
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx", "mimeType": "application/octet-stream", "buffer": b"classified by server",
-        })
-        self.page.get_by_role("dialog").get_by_role("button", name="Import as retest draft").click()
+        result = self.import_through_dialog("report.docx", b"classified by server", "Retest")
 
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as retest draft").wait_for()
+        result.get_by_role("heading", name="Imported as a retest").wait_for()
         self.assertIn("1 Resolved or Closed finding was not included: Fixed issue.", result.text_content())
         self.assertIn('<img src=x onerror="window.__warningExecuted=true">', result.text_content())
         self.assertEqual(result.locator("img").count(), 0)
@@ -7259,15 +7174,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         before = {path.parent.name for path in self.root.glob("apps/**/draft.json")}
         self.page.goto(f"{self.base_url}/")
         self.page.locator("#app-search").fill("No matching application")
-        self.page.locator("#import-report").set_input_files({
-            "name": "report.docx",
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "buffer": document,
-        })
-        self.page.get_by_role("dialog").get_by_role("button", name="Import as editable draft").click()
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
 
-        result = self.page.get_by_role("dialog")
-        result.get_by_role("heading", name="Imported as editable draft").wait_for()
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
         self.assertIn("rendered Word copies", result.text_content())
         after = {path.parent.name for path in self.root.glob("apps/**/draft.json")}
         imported_folder = (after - before).pop()
@@ -7280,23 +7189,154 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(row.evaluate("element => element.closest('details').open"))
         self.assertTrue(row.locator(".report-name").evaluate("element => document.activeElement === element"))
 
-    def test_manager_import_error_shows_structured_diagnostics(self) -> None:
-        page = self.page
-        page.goto(f"{self.base_url}/")
-        page.locator("#import-report").set_input_files({
-            "name": "invalid-report.json",
-            "mimeType": "application/json",
-            "buffer": b"not valid JSON",
-        })
+    def test_an_export_that_fails_shows_its_message_and_code_in_the_dialog(self) -> None:
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("invalid-report.json", b"not valid JSON", "Import")
 
-        diagnostic = page.locator("#app-diagnostics")
-        diagnostic.get_by_role("heading", name="Operation failed").wait_for()
-        text = diagnostic.text_content()
-        self.assertIn("import_report", text)
-        self.assertIn("422", text)
-        self.assertIn("Code", text)
-        self.assertRegex(text, r"[0-9a-f]{12}")
-        self.assertTrue(page.get_by_text("Select a valid VulnReport ZIP or JSON export, or a report DOCX").is_visible())
+        dialog.get_by_text("Select a valid VulnReport export:", exact=False).wait_for()
+        expect(dialog).to_contain_text("import_report / 422")
+        expect(dialog.get_by_text("invalid-report.json", exact=True)).to_be_visible()
+        expect(self.page.locator("#app-diagnostics")).to_have_count(0)
+
+    def test_a_word_report_that_fails_keeps_the_file_for_the_other_button(self) -> None:
+        """An editable copy refuses a Word report whose Limitations row lost its cell; a retest does
+        not read that table, so the same file still starts the next test."""
+        document = Document(BytesIO(self.importable_docx()))
+        limitations = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Limitations")
+        limitations.rows[1]._tr.remove(limitations.rows[1].cells[0]._tc)
+        broken = BytesIO()
+        document.save(broken)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", broken.getvalue(), "Editable copy")
+
+        dialog.get_by_text("This Word report can't be imported:", exact=False).wait_for()
+        expect(dialog).to_contain_text("import_report / 422")
+        expect(self.page.locator("#app-diagnostics")).to_have_count(0)
+        dialog.get_by_role("button", name="Retest", exact=True).click()
+        dialog.get_by_role("heading", name="Imported as a retest").wait_for()
+
+    def test_import_opens_an_empty_dialog_with_both_choices_disabled(self) -> None:
+        self.page.goto(f"{self.base_url}/")
+        self.page.locator("#import-command").click()
+
+        dialog = self.page.get_by_role("dialog", name="Import a report")
+        expect(dialog.get_by_role("button", name="Click to choose, or drag a file here")).to_be_focused()
+        expect(dialog.get_by_role("button", name="Retest", exact=True)).to_be_disabled()
+        expect(dialog.get_by_role("button", name="Editable copy", exact=True)).to_be_disabled()
+        expect(dialog.get_by_role("button", name="Import", exact=True)).to_have_count(0)
+        expect(dialog).to_contain_text("Starts the next test from the open findings. Each one's proof of concept becomes its previous proof of concept.")
+        expect(dialog).to_contain_text("Brings the report back as it reads, so you can change it and build it again.")
+
+    def test_a_dropped_word_report_imports_the_way_its_button_says(self) -> None:
+        cases = [
+            ("Retest", "Imported as a retest", "open_previously_discovered", None),
+            ("Editable copy", "Imported as an editable copy", "open_new", "annual_pentest"),
+        ]
+        for button, heading, status, report_type in cases:
+            with self.subTest(button=button):
+                document = self.importable_docx()
+                self.page.goto(f"{self.base_url}/")
+                self.page.locator("#import-command").click()
+                dialog = self.page.get_by_role("dialog")
+                self.drop_files(dialog.get_by_role("button", name="Click to choose, or drag a file here"), [("last-year.docx", document)])
+                dialog.get_by_text("last-year.docx", exact=True).wait_for()
+                dialog.get_by_role("button", name=button, exact=True).click()
+                dialog.get_by_role("heading", name=heading).wait_for()
+                dialog.get_by_role("button", name="Open Setup").click()
+                self.page.wait_for_url("**/reports/*/setup")
+                imported = main.workspace.load(self.page.url.split("/reports/")[1].split("/")[0])
+                self.assertEqual(imported.vulnerabilities[0].status, status)
+                self.assertEqual(imported.engagement.report_type, report_type)
+
+    def test_an_export_or_a_draft_json_imports_with_one_button_and_opens_setup(self) -> None:
+        source_id = self.ready_report()
+        export = self.page.request.get(f"{self.base_url}/reports/{source_id}/export").body()
+        draft = main.workspace.find_path(source_id).read_bytes()
+        for name, data in (("export.zip", export), ("draft.json", draft)):
+            with self.subTest(name=name):
+                self.page.goto(f"{self.base_url}/")
+                dialog = self.import_through_dialog(name, data)
+                expect(dialog.get_by_role("button", name="Retest", exact=True)).to_have_count(0)
+                expect(dialog.get_by_role("button", name="Editable copy", exact=True)).to_have_count(0)
+                dialog.get_by_role("button", name="Import", exact=True).click()
+                self.page.wait_for_url("**/reports/*/setup")
+                self.assertNotEqual(self.page.url.split("/reports/")[1].split("/")[0], source_id)
+
+    def test_a_wrong_file_or_several_files_are_turned_away_and_the_held_file_stays(self) -> None:
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", b"held")
+        drop_area = dialog.get_by_role("button", name="Click to choose, or drag a file here")
+        cases = [
+            ("a wrong file type", [("notes.pdf", b"%PDF-1.4")], "Import takes a Word report (.docx), an export (.zip), or a report's draft.json."),
+            ("several files", [("a.docx", b"a"), ("b.docx", b"b")], "Drop one file at a time."),
+        ]
+        for case, files, message in cases:
+            with self.subTest(case=case):
+                self.drop_files(drop_area, files)
+                expect(dialog).to_contain_text(message)
+                expect(dialog.get_by_text("report.docx", exact=True)).to_be_visible()
+                expect(dialog.get_by_role("button", name="Retest", exact=True)).to_be_enabled()
+
+    def test_a_word_report_named_zip_is_asked_about_before_anything_is_written(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.zip", document, "Import")
+
+        dialog.get_by_text("This file is a Word report. Choose how to import it.").wait_for()
+        expect(dialog.get_by_role("button", name="Import", exact=True)).to_have_count(0)
+        self.assertEqual(set(self.root.glob("apps/**/draft.json")), before)
+        dialog.get_by_role("button", name="Editable copy", exact=True).click()
+        dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+    def test_nothing_can_be_clicked_or_closed_while_a_file_imports(self) -> None:
+        document = self.importable_docx()
+        held = []
+        self.page.route("**/reports/import", lambda route: held.append(route))
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", document, "Retest")
+
+        dialog.get_by_text("Importing...").wait_for()
+        for name in ("Retest", "Editable copy", "Close"):
+            expect(dialog.get_by_role("button", name=name, exact=True)).to_be_disabled()
+        self.page.keyboard.press("Escape")
+        self.page.mouse.click(5, 5)
+        expect(dialog.get_by_role("heading", name="Import a report")).to_be_visible()
+        self.assertEqual(len(held), 1)
+        held[0].continue_()
+        dialog.get_by_role("heading", name="Imported as a retest").wait_for()
+
+    def test_a_file_dropped_on_the_closed_reports_page_does_nothing(self) -> None:
+        self.page.goto(f"{self.base_url}/")
+        self.page.evaluate("() => { window.dropPrevented = null; window.addEventListener('drop', event => { window.dropPrevented = event.defaultPrevented; }); }")
+
+        self.drop_files(self.page.locator("#report-rows"), [("report.docx", b"bytes")])
+
+        self.assertIs(self.page.evaluate("window.dropPrevented"), True, "the browser would open the file and leave the app")
+        expect(self.page.get_by_role("dialog")).to_have_count(0)
+
+    def test_a_drop_outside_the_drop_area_lands_in_the_open_dialog(self) -> None:
+        self.page.goto(f"{self.base_url}/")
+        self.page.locator("#import-command").click()
+        dialog = self.page.get_by_role("dialog")
+
+        self.drop_files(self.page.locator("#report-rows"), [("report.docx", b"bytes")])
+
+        dialog.get_by_text("report.docx", exact=True).wait_for()
+        expect(dialog.get_by_role("button", name="Retest", exact=True)).to_be_enabled()
+
+    def test_enter_or_space_on_the_drop_area_opens_the_file_picker(self) -> None:
+        self.page.goto(f"{self.base_url}/")
+        self.page.locator("#import-command").click()
+        dialog = self.page.get_by_role("dialog")
+        drop_area = dialog.get_by_role("button", name="Click to choose, or drag a file here")
+        for key in ("Enter", "Space"):
+            with self.subTest(key=key):
+                with self.page.expect_file_chooser() as chooser:
+                    drop_area.press(key)
+                chooser.value.set_files({"name": f"{key}.docx", "mimeType": "application/octet-stream", "buffer": b"bytes"})
+                dialog.get_by_text(f"{key}.docx", exact=True).wait_for()
 
 
 if __name__ == "__main__":

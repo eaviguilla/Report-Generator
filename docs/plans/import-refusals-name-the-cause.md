@@ -1,6 +1,8 @@
 # Import refusals name the cause
 
 > **Status:** done · 2026-10-14 · `ab1a7ab`
+>
+> **Superseded in part, 2026-10-14.** The refusals for a heading and a finding row with different titles, for a title listed more often than it has headings, and for a finding table that disagrees with the finding row no longer hold, and neither does the answer that titles pair by a collapsed copy. A finding now takes its title, severity, ID and status from its finding row. A heading pairs with a row by equal title, then by title ignoring capitals and spaces, then by position ([Import takes a finding's identity from its finding row](import-uses-the-finding-row-as-the-reference.md)). Still true: a leftover refuses and is named, a list shows at most eight titles, and a finding keeps its title as printed, now the row's.
 
 ## Request
 

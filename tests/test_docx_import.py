@@ -85,6 +85,16 @@ def conclusion_render(runs: list[Run], status: str = "open_previously_discovered
         return render_report_docx(report, TEMPLATE, folder)
 
 
+def _twin(finding: Vulnerability, uid: str, display_id: str, title: str) -> Vulnerability:
+    """A copy of ``finding`` under another identity, with its fragment IDs made unique."""
+    twin = copy.deepcopy(finding)
+    twin.uid, twin.display_id, twin.title = uid, display_id, title
+    for content in twin.contents:
+        for fragment in content.fragments:
+            fragment.frag_id += f"_{uid}"
+    return twin
+
+
 @functools.cache
 def two_findings_render() -> bytes:
     """Two previously discovered findings in different severity groups, so each heading sits under its
@@ -94,13 +104,37 @@ def two_findings_render() -> bytes:
         report = FragmentRecognitionTests._report(folder)
         first = report.vulnerabilities[0]
         retest_shaped(first, [Run(text="Still reachable on retest.")])
-        second = copy.deepcopy(first)
-        second.uid, second.display_id, second.title, second.severity = "v_second", "002", "Second finding", "medium"
-        for content in second.contents:
-            for fragment in content.fragments:
-                fragment.frag_id += "_second"
+        second = _twin(first, "v_second", "002", "Second finding")
+        second.severity = "medium"
         report.vulnerabilities.append(second)
         return render_report_docx(report, TEMPLATE, folder)
+
+
+@functools.cache
+def lettered_findings_render(letters: str) -> bytes:
+    """The shared finding plus one more for each letter, titled "Finding B" and so on, all High and Open (New)."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        folder = Path(temporary_directory)
+        report = FragmentRecognitionTests._report(folder)
+        first = report.vulnerabilities[0]
+        for number, letter in enumerate(letters, start=2):
+            report.vulnerabilities.append(_twin(first, f"v_{letter}", f"{number:03d}", f"Finding {letter}"))
+        return render_report_docx(report, TEMPLATE, folder)
+
+
+@functools.cache
+def asia_findings_render() -> bytes:
+    """Two findings on the Asia template, the one that has a CVSS table."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        folder = Path(temporary_directory)
+        report = FragmentRecognitionTests._report(folder)
+        report.engagement.segment = "Asia"
+        first = report.vulnerabilities[0]
+        first.cvss_score, first.cvss_vector = "8.1", "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+        second = _twin(first, "v_second", "002", "Second finding")
+        second.cvss_score, second.cvss_vector = "3.1", "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"
+        report.vulnerabilities.append(second)
+        return render_report_docx(report, main_template_path(report, Path(__file__).resolve().parent.parent / "resources"), folder)
 
 
 def _heading(document, text: str):
@@ -686,8 +720,6 @@ class FragmentRecognitionTests(unittest.TestCase):
                 if field == "display_id":
                     summary = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Findings")
                     summary.rows[1].cells[4].text = "ABC"
-                    detail = next(table for table in document.tables if any(row.cells[0].text.strip() == "Location" for row in table.rows))
-                    next(row for row in detail.rows if row.cells[0].text.strip() == "ID").cells[1].text = "ABC"
                 elif field == "cvss_score":
                     cvss = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Section")
                     cvss.rows[1].cells[3].text = "8.1?"
@@ -1146,6 +1178,252 @@ class FragmentRecognitionTests(unittest.TestCase):
             parse_report_docx(b"not a document")
 
 
+class FindingRowTests(unittest.TestCase):
+    """A finding takes its title, severity, ID and status from its finding row. A finding heading finds its
+    row by equal title, then by title ignoring capitals and extra spaces, then by position."""
+
+    @staticmethod
+    def _parse(data: bytes, mode: str) -> tuple[dict, list[str]]:
+        payload, _evidence, summary = parse_report_docx(data, mode=mode)
+        return payload, summary.get("warnings", [])
+
+    def _assert_pairs(self, data: bytes, titles: list[str], position_warnings: list[str]) -> None:
+        """Both modes import the findings under ``titles`` and warn about pairs made by position as given."""
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, warnings = self._parse(data, mode)
+                self.assertEqual([finding["title"] for finding in payload["vulnerabilities"]], titles)
+                self.assertEqual([warning for warning in warnings if "by position" in warning], position_warnings)
+
+    def test_a_heading_that_differs_from_its_finding_row_only_in_capitals_pairs_without_a_warning(self) -> None:
+        data = _edited(two_findings_render(), lambda document: _set_text(_heading(document, "Second finding"), "SECOND Finding"))
+
+        self._assert_pairs(data, ["Authorization bypass", "Second finding"], [])
+
+    def test_a_heading_in_other_words_pairs_with_its_finding_row_by_position_and_warns(self) -> None:
+        data = _edited(two_findings_render(), lambda document: _set_text(_heading(document, "Second finding"), "Totally different words"))
+
+        self._assert_pairs(data, ["Authorization bypass", "Second finding"], [
+            'The finding heading "Totally different words" was paired with the finding row "Second finding" by position. The finding uses the row\'s title.',
+        ])
+
+    def test_a_finding_row_in_other_words_pairs_with_its_heading_by_position_and_gives_its_title(self) -> None:
+        def rename_row(document):
+            _set_text(_table_starting(document, "Findings").rows[2].cells[0].paragraphs[0], "Renamed finding")
+
+        self._assert_pairs(_edited(two_findings_render(), rename_row), ["Authorization bypass", "Renamed finding"], [
+            'The finding heading "Second finding" was paired with the finding row "Renamed finding" by position. The finding uses the row\'s title.',
+        ])
+
+    def test_two_retitled_headings_pair_with_their_finding_rows_in_order(self) -> None:
+        def retitle(document):
+            _set_text(_heading(document, "Authorization bypass"), "First, retitled")
+            _set_text(_heading(document, "Second finding"), "Second, retitled")
+
+        self._assert_pairs(_edited(two_findings_render(), retitle), ["Authorization bypass", "Second finding"], [
+            'The finding heading "First, retitled" was paired with the finding row "Authorization bypass" by position. The finding uses the row\'s title.',
+            'The finding heading "Second, retitled" was paired with the finding row "Second finding" by position. The finding uses the row\'s title.',
+        ])
+
+    def test_a_heading_titled_like_another_pairs_with_the_remaining_row_by_position(self) -> None:
+        data = _edited(two_findings_render(), lambda document: _set_text(_heading(document, "Second finding"), "Authorization bypass"))
+
+        self._assert_pairs(data, ["Authorization bypass", "Second finding"], [
+            'The finding heading "Authorization bypass" was paired with the finding row "Second finding" by position. The finding uses the row\'s title.',
+        ])
+
+    def test_a_cvss_row_that_differs_from_its_finding_row_only_in_capitals_pairs_without_a_warning(self) -> None:
+        data = _edited(asia_findings_render(), lambda document: _set_text(_table_starting(document, "Section").rows[1].cells[1].paragraphs[0], "AUTHORIZATION BYPASS"))
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, warnings = self._parse(data, mode)
+                self.assertEqual(
+                    [(finding["title"], finding["cvss_score"]) for finding in payload["vulnerabilities"]],
+                    [("Authorization bypass", "8.1"), ("Second finding", "3.1")],
+                )
+                self.assertEqual([warning for warning in warnings if "by position" in warning], [])
+
+    def test_a_cvss_row_in_other_words_pairs_with_its_finding_row_by_position_and_warns(self) -> None:
+        data = _edited(asia_findings_render(), lambda document: _set_text(_table_starting(document, "Section").rows[2].cells[1].paragraphs[0], "Other finding"))
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, warnings = self._parse(data, mode)
+                self.assertEqual(
+                    [(finding["title"], finding["cvss_score"]) for finding in payload["vulnerabilities"]],
+                    [("Authorization bypass", "8.1"), ("Second finding", "3.1")],
+                )
+                self.assertIn('The CVSS row "Other finding" was paired with the finding row "Second finding" by position.', warnings)
+
+    def test_a_finding_row_with_no_cvss_row_imports_without_scores(self) -> None:
+        def remove_second(document):
+            row = _table_starting(document, "Section").rows[2]._tr
+            row.getparent().remove(row)
+
+        data = _edited(asia_findings_render(), remove_second)
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, _warnings = self._parse(data, mode)
+                self.assertEqual(
+                    [(finding["title"], finding["cvss_score"]) for finding in payload["vulnerabilities"]],
+                    [("Authorization bypass", "8.1"), ("Second finding", "")],
+                )
+
+    def test_a_finding_table_that_disagrees_with_its_finding_row_imports_with_the_rows_values_and_warns(self) -> None:
+        cases = (
+            (3, "Low", "severity", "low", 'Severity is "High" in the finding table and "Low" in the Findings Summary table.'),
+            (4, "009", "display_id", "009", 'ID is "001" in the finding table and "009" in the Findings Summary table.'),
+            (
+                5, "Open (Resolved on Non-Prod)", "status", "open_resolved_on_non_prod",
+                'Status is "Open (Previously Discovered)" in the finding table and "Open (Resolved on Non-Prod)" in the Findings Summary table.',
+            ),
+        )
+        for column, value, field, expected_value, sentence in cases:
+            def change(document, column=column, value=value):
+                _set_text(_table_starting(document, "Findings").rows[1].cells[column].paragraphs[0], value)
+
+            data = _edited(two_findings_render(), change)
+            for mode in ("retest", "editable"):
+                with self.subTest(column=column, mode=mode):
+                    payload, warnings = self._parse(data, mode)
+                    self.assertEqual(payload["vulnerabilities"][0][field], expected_value)
+                    self.assertIn(f'"Authorization bypass": {sentence} The import uses the Findings Summary table.', warnings)
+
+    def test_a_finding_table_value_that_differs_only_in_capitals_gives_no_warning(self) -> None:
+        def shout(document):
+            row = next(row for row in _table_after(document, "Authorization bypass").rows if row.cells[0].text.strip() == "Severity")
+            _set_text(row.cells[1].paragraphs[0], "HIGH")
+
+        data = _edited(two_findings_render(), shout)
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                _payload, warnings = self._parse(data, mode)
+                self.assertEqual([warning for warning in warnings if "in the finding table" in warning], [])
+
+    def test_a_resolved_finding_that_a_retest_drops_gives_no_finding_table_warning(self) -> None:
+        def resolve(document):
+            _set_text(_table_starting(document, "Findings").rows[1].cells[5].paragraphs[0], "Resolved")
+
+        _payload, _evidence, summary = parse_report_docx(_edited(two_findings_render(), resolve), mode="retest")
+
+        self.assertEqual(summary["dropped_resolved"], ["Authorization bypass"])
+        self.assertEqual([warning for warning in summary.get("warnings", []) if "in the finding table" in warning], [])
+
+    def test_a_resolved_finding_that_a_retest_drops_keeps_its_position_warning(self) -> None:
+        def edit(document):
+            _set_text(_heading(document, "Authorization bypass"), "Retitled")
+            _set_text(_table_starting(document, "Findings").rows[1].cells[5].paragraphs[0], "Resolved")
+
+        _payload, _evidence, summary = parse_report_docx(_edited(two_findings_render(), edit), mode="retest")
+
+        self.assertEqual(summary["dropped_resolved"], ["Authorization bypass"])
+        self.assertIn(
+            'The finding heading "Retitled" was paired with the finding row "Authorization bypass" by position. The finding uses the row\'s title.',
+            summary["warnings"],
+        )
+
+    def test_a_finding_table_status_in_other_capitals_is_still_compared_with_the_finding_row(self) -> None:
+        def set_status(document, text):
+            row = next(row for row in _table_after(document, "Authorization bypass").rows if row.cells[0].text.strip() == "Status")
+            _set_text(row.cells[1].paragraphs[0], text)
+
+        different = _edited(two_findings_render(), lambda document: set_status(document, "CLOSED"))
+        same = _edited(two_findings_render(), lambda document: set_status(document, "open (previously discovered)"))
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                _payload, warnings = self._parse(different, mode)
+                self.assertIn(
+                    '"Authorization bypass": Status is "CLOSED" in the finding table and "Open (Previously Discovered)" in the Findings Summary table. '
+                    "The import uses the Findings Summary table.",
+                    warnings,
+                )
+                _payload, warnings = self._parse(same, mode)
+                self.assertEqual([warning for warning in warnings if "in the finding table" in warning], [])
+
+    def test_an_unrecognised_status_in_either_place_adds_no_finding_table_warning(self) -> None:
+        def table_status(document):
+            return next(row for row in _table_after(document, "Authorization bypass").rows if row.cells[0].text.strip() == "Status")
+
+        def unrecognised_in_the_row(document):
+            _set_text(_table_starting(document, "Findings").rows[1].cells[5].paragraphs[0], "Pending")
+            _set_text(table_status(document).cells[1].paragraphs[0], "Closed")
+
+        def unrecognised_in_the_table(document):
+            _set_text(table_status(document).cells[1].paragraphs[0], "Pending")
+
+        for place, change in (("the finding row", unrecognised_in_the_row), ("the finding table", unrecognised_in_the_table)):
+            data = _edited(two_findings_render(), change)
+            for mode in ("retest", "editable"):
+                with self.subTest(place=place, mode=mode):
+                    _payload, warnings = self._parse(data, mode)
+                    self.assertEqual([warning for warning in warnings if "in the finding table" in warning], [])
+
+    def test_an_empty_finding_row_value_reads_empty_in_the_warning(self) -> None:
+        def clear_id(document):
+            _set_text(_table_starting(document, "Findings").rows[1].cells[4].paragraphs[0], "")
+
+        data = _edited(two_findings_render(), clear_id)
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, warnings = self._parse(data, mode)
+                self.assertIsNone(payload["vulnerabilities"][0]["display_id"])
+                self.assertIn(
+                    '"Authorization bypass": ID is "001" in the finding table and empty in the Findings Summary table. '
+                    "The import uses the Findings Summary table.",
+                    warnings,
+                )
+
+    def test_a_finding_table_that_disagrees_twice_gives_one_warning_with_both_values(self) -> None:
+        def change(document):
+            cells = _table_starting(document, "Findings").rows[1].cells
+            _set_text(cells[3].paragraphs[0], "Low")
+            _set_text(cells[4].paragraphs[0], "009")
+
+        data = _edited(two_findings_render(), change)
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                _payload, warnings = self._parse(data, mode)
+                self.assertEqual(
+                    [warning for warning in warnings if "in the finding table" in warning],
+                    [
+                        '"Authorization bypass": Severity is "High" in the finding table and "Low" in the Findings Summary table. '
+                        'ID is "001" in the finding table and "009" in the Findings Summary table. '
+                        "The import uses the Findings Summary table.",
+                    ],
+                )
+
+    def test_a_heading_pairs_with_the_finding_row_of_exactly_its_title_before_one_that_differs_in_capitals(self) -> None:
+        def swap_capitals(document):
+            rows = _table_starting(document, "Findings").rows
+            _set_text(rows[1].cells[0].paragraphs[0], "AUTHORIZATION BYPASS")
+            _set_text(rows[2].cells[0].paragraphs[0], "Authorization bypass")
+            _set_text(_heading(document, "Second finding"), "AUTHORIZATION BYPASS")
+
+        data = _edited(two_findings_render(), swap_capitals)
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, warnings = self._parse(data, mode)
+                self.assertEqual(
+                    [(finding["title"], finding["severity"], finding["display_id"]) for finding in payload["vulnerabilities"]],
+                    [("Authorization bypass", "medium", "002"), ("AUTHORIZATION BYPASS", "high", "001")],
+                )
+                self.assertEqual([warning for warning in warnings if "by position" in warning], [])
+
+    def test_a_cvss_row_with_no_title_pairs_by_position_and_is_named_as_untitled(self) -> None:
+        data = _edited(asia_findings_render(), lambda document: _set_text(_table_starting(document, "Section").rows[2].cells[1].paragraphs[0], ""))
+
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                _payload, warnings = self._parse(data, mode)
+                self.assertIn('The CVSS row "(no title)" was paired with the finding row "Second finding" by position.', warnings)
+
+
 class RefusalMessageTests(unittest.TestCase):
     """A refused Word report says which finding and which part of the report broke which rule, and what
     the importer expected and found, in the words the report itself uses (see GLOSSARY.md)."""
@@ -1165,21 +1443,60 @@ class RefusalMessageTests(unittest.TestCase):
 
         self.assertRefused(
             _edited(two_findings_render(), restyle),
-            'The Findings Summary table lists "Second finding", but no finding heading has that title.',
+            'The finding row "Second finding" has no finding heading left to pair with.',
+            "The importer pairs a finding heading with a finding row by title, ignoring capitals and extra spaces, "
+            "and then by position, but only when the same number of each is left over.",
             'Finding headings found: "Authorization bypass".',
-            "A finding heading is a Report Heading 2 paragraph after the table and before the Appendix, with the same title as its row.",
+            "A finding heading is a Report Heading 2 paragraph after the table and before the Appendix.",
             'Headings in other styles after the table: Heading2 ("Second finding").',
         )
 
-    def test_a_row_and_a_heading_with_different_titles_are_both_named(self) -> None:
-        def rename_row(document):
-            _set_text(_table_starting(document, "Findings").rows[2].cells[0].paragraphs[0], "Renamed finding")
+    def test_a_finding_heading_with_no_finding_row_is_named(self) -> None:
+        def add_heading(document):
+            original = _heading(document, "Second finding")
+            original._p.addnext(copy.deepcopy(original._p))
+            twin = [paragraph for paragraph in document.paragraphs if " ".join(paragraph.text.split()) == "Second finding"][1]
+            _set_text(twin, "Extra finding")
 
         self.assertRefused(
-            _edited(two_findings_render(), rename_row),
-            'The Findings Summary table lists "Renamed finding", but no finding heading has that title.',
-            'The finding heading "Second finding" is not in the Findings Summary table.',
-            'Finding headings found: "Authorization bypass", "Second finding".',
+            _edited(two_findings_render(), add_heading),
+            'The finding heading "Extra finding" has no finding row left to pair with.',
+            'Finding headings found: "Authorization bypass", "Second finding", "Extra finding".',
+        )
+
+    def test_headings_with_no_finding_row_are_named_together(self) -> None:
+        def drop_rows(document):
+            table = _table_starting(document, "Findings")
+            for _ in range(2):
+                row = table.rows[2]._tr
+                row.getparent().remove(row)
+
+        self.assertRefused(
+            _edited(lettered_findings_render("BC"), drop_rows),
+            'The finding headings "Finding B", "Finding C" have no finding rows left to pair with.',
+        )
+
+    def test_leftovers_that_differ_in_number_are_refused_without_pairing_any_by_position(self) -> None:
+        def damage(document):
+            heading = _heading(document, "Finding C")._p
+            heading.getparent().remove(heading)
+            _set_text(_heading(document, "Finding B"), "Retitled")
+
+        self.assertRefused(
+            _edited(lettered_findings_render("BC"), damage),
+            'The finding rows "Finding B", "Finding C" have no finding headings left to pair with.',
+            'The finding heading "Retitled" has no finding row left to pair with.',
+        )
+
+    def test_a_finding_row_that_lost_a_cell_is_counted_as_skipped(self) -> None:
+        def damage(document):
+            row = _table_starting(document, "Findings").rows[2]
+            row._tr.remove(row.cells[-1]._tc)
+
+        self.assertRefused(
+            _edited(two_findings_render(), damage),
+            'The finding heading "Second finding" has no finding row left to pair with.',
+            "The Findings Summary table also has 1 row with no title or fewer than six cells, which the importer skips.",
         )
 
     def test_a_report_without_a_findings_summary_table_says_what_it_looked_for(self) -> None:
@@ -1192,23 +1509,30 @@ class RefusalMessageTests(unittest.TestCase):
             'whose first header cell is "Findings"',
         )
 
-    def test_a_cvss_row_for_another_title_is_named(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            report = FragmentRecognitionTests._report(folder)
-            report.engagement.segment = "Asia"
-            finding = report.vulnerabilities[0]
-            finding.cvss_score = "8.1"
-            finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
-            data = render_report_docx(report, main_template_path(report, Path(__file__).resolve().parent.parent / "resources"), folder)
-
-        def rename_row(document):
-            _set_text(_table_starting(document, "Section").rows[1].cells[1].paragraphs[0], "Other finding")
+    def test_cvss_rows_that_no_finding_row_matches_are_refused_when_the_leftovers_differ_in_number(self) -> None:
+        def damage(document):
+            table = _table_starting(document, "Section")
+            first = table.rows[1]._tr
+            first.getparent().remove(first)
+            _set_text(table.rows[1].cells[1].paragraphs[0], "Other finding")
 
         self.assertRefused(
-            _edited(data, rename_row),
-            'The CVSS table lists "Other finding", but no finding heading has that title.',
-            'Finding headings found: "Authorization bypass".',
+            _edited(asia_findings_render(), damage),
+            'The CVSS table has a row for "Other finding" that no finding row matches.',
+            "The importer pairs a CVSS row with a finding row by title, ignoring capitals and extra spaces, "
+            "and then by position, but only when the same number of each is left over.",
+        )
+
+    def test_several_cvss_rows_that_no_finding_row_matches_are_named_together(self) -> None:
+        def add_rows(document):
+            table = _table_starting(document, "Section")
+            for title in ("Extra one", "Extra two"):
+                table._tbl.append(copy.deepcopy(table.rows[2]._tr))
+                _set_text(table.rows[-1].cells[1].paragraphs[0], title)
+
+        self.assertRefused(
+            _edited(asia_findings_render(), add_rows),
+            'The CVSS table has rows for "Extra one", "Extra two" that no finding row matches.',
         )
 
     def test_a_missing_section_lists_the_sections_expected_and_found(self) -> None:
@@ -1225,22 +1549,6 @@ class RefusalMessageTests(unittest.TestCase):
             _edited(two_findings_render(), lambda document: _set_text(_heading(document, "Recommended Remediation:"), "Description:")),
             '"Authorization bypass" has the Description section more than once.',
         )
-
-    def test_a_value_that_differs_between_the_findings_summary_table_and_the_finding_table_names_both(self) -> None:
-        cases = (
-            (3, "Low", 'says Severity is "Low", but the finding\'s table says "High".'),
-            (4, "009", 'says ID is "009", but the finding\'s table says "001".'),
-            (5, "Resolved", 'says Status is "Resolved", but the finding\'s table says "Open (Previously Discovered)".'),
-        )
-        for column, value, expected in cases:
-            with self.subTest(column=column):
-                def change(document, column=column, value=value):
-                    _set_text(_table_starting(document, "Findings").rows[1].cells[column].paragraphs[0], value)
-
-                self.assertRefused(
-                    _edited(two_findings_render(), change),
-                    '"Authorization bypass": the Findings Summary table ' + expected,
-                )
 
     def test_a_finding_without_its_table_is_named(self) -> None:
         def remove_table(document):
@@ -1306,7 +1614,7 @@ class RefusalMessageTests(unittest.TestCase):
             str(raised.exception),
         )
 
-    def test_a_title_listed_more_often_than_it_has_headings_is_counted(self) -> None:
+    def test_a_repeated_title_with_one_heading_left_names_the_finding_row(self) -> None:
         def share_a_title(document):
             _set_text(_heading(document, "Second finding"), "Authorization bypass")
             _set_text(_table_starting(document, "Findings").rows[2].cells[0].paragraphs[0], "Authorization bypass")
@@ -1315,41 +1623,19 @@ class RefusalMessageTests(unittest.TestCase):
 
         self.assertRefused(
             _edited(two_findings_render(), share_a_title),
-            'The Findings Summary table lists "Authorization bypass" 2 times, but only 1 finding heading has that title.',
+            'The finding row "Authorization bypass" has no finding heading left to pair with.',
         )
 
-    def test_a_title_with_more_headings_than_rows_is_counted(self) -> None:
-        def share_a_title(document):
-            _set_text(_heading(document, "Second finding"), "Authorization bypass")
-
-        self.assertRefused(
-            _edited(two_findings_render(), share_a_title),
-            'The report has 2 finding headings titled "Authorization bypass", but the Findings Summary table lists it once.',
-        )
-
-    def test_a_long_list_of_titles_with_no_heading_is_cut_after_eight(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            folder = Path(temporary_directory)
-            report = FragmentRecognitionTests._report(folder)
-            first = report.vulnerabilities[0]
-            for number, letter in enumerate("BCDEFGHIJ", start=2):
-                twin = copy.deepcopy(first)
-                twin.uid, twin.display_id, twin.title = f"v_{letter}", f"{number:03d}", f"Finding {letter}"
-                for content in twin.contents:
-                    for fragment in content.fragments:
-                        fragment.frag_id += f"_{letter}"
-                report.vulnerabilities.append(twin)
-            data = render_report_docx(report, TEMPLATE, folder)
-
+    def test_a_long_list_of_finding_rows_with_no_heading_is_cut_after_eight(self) -> None:
         def drop_headings(document):
             for letter in "BCDEFGHIJ":
                 heading = _heading(document, f"Finding {letter}")._p
                 heading.getparent().remove(heading)
 
         self.assertRefused(
-            _edited(data, drop_headings),
-            'lists "Finding B", "Finding C", "Finding D", "Finding E", "Finding F", "Finding G", "Finding H", "Finding I" and 1 more, '
-            "but no finding heading has those titles.",
+            _edited(lettered_findings_render("BCDEFGHIJ"), drop_headings),
+            'The finding rows "Finding B", "Finding C", "Finding D", "Finding E", "Finding F", "Finding G", "Finding H", "Finding I" and 1 more '
+            "have no finding headings left to pair with.",
         )
 
 
@@ -1419,6 +1705,15 @@ class FirstChangeTests(unittest.TestCase):
                 "something outside the findings",
                 self._report([]), {**self._report([]), "engagement": {"app_name": "Other"}},
                 "Importing would change the report's engagement.",
+            ),
+            (
+                "a changed conclusion sentence",
+                self._report([], contents=[{"type": "in_conclusion", "fragments": [paragraph(('The finding "A" is still Open.', {}))]}], status="open_previously_discovered"),
+                self._report([], contents=[{"type": "in_conclusion", "fragments": [paragraph(('The finding "B" is still Open.', {}))]}], status="open_previously_discovered"),
+                'Importing would change the In Conclusion section of "Authorization bypass". '
+                'The report has: "The finding "A" is still Open.". The app would store: "The finding "B" is still Open.". '
+                "The app writes the first sentence from the finding's title and status. "
+                'The title is "Authorization bypass", from the finding row, and the status is Open (Previously Discovered).',
             ),
             (
                 "nothing at all",
@@ -1898,8 +2193,8 @@ class ImportRouteTests(unittest.TestCase):
 
     def test_an_unrecognised_status_is_assumed_rather_than_refusing_the_document(self) -> None:
         """A report written by an older version, or edited by hand, must still import. Only the
-        summary cell is changed here, so the detail cell still reads the original label - which is
-        the case that has to stop being an inconsistency."""
+        Status in the Findings Summary table is changed here, so the finding table still reads the
+        original label. The importer assumes a status and names it in a warning."""
         document = Document(BytesIO(self._docx()))
         summary = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Findings")
         title = summary.rows[1].cells[0].text.strip()
@@ -2069,9 +2364,27 @@ class ImportRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertRegex(
             response.json()["detail"],
-            r'^This Word report can\'t be imported: The Findings Summary table lists "Second finding", but no finding heading has that title\.',
+            r'^This Word report can\'t be imported: The finding row "Second finding" has no finding heading left to pair with\.',
         )
         self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
+
+    def test_a_heading_in_other_words_imports_through_the_route_with_the_position_warning(self) -> None:
+        def retitle(document):
+            _set_text(_heading(document, "Second finding"), "Totally different words")
+
+        data = _edited(two_findings_render(), retitle)
+        warning = (
+            'The finding heading "Totally different words" was paired with the finding row "Second finding" by position. '
+            "The finding uses the row's title."
+        )
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                response = self._import("report.docx", data, mode)
+
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertIn(warning, response.json()["summary"]["warnings"])
+                report = main.workspace.load(response.json()["report_id"])
+                self.assertEqual([finding.title for finding in report.vulnerabilities], ["Authorization bypass", "Second finding"])
 
     def test_an_export_that_fails_names_an_export(self) -> None:
         response = self._import("report.docx", b"not valid JSON", "prompt")
@@ -2205,7 +2518,29 @@ class ImportRouteTests(unittest.TestCase):
             'Importing would change the In Conclusion section of "Authorization bypass".',
             'The report has: "The finding "Authorization bypass" is still Open. Retested on 5 October."',
             'The app would store: "The finding "Authorization bypass" is now CLOSED. Retested on 5 October."',
-            "The app writes the first sentence from the finding's status, Closed.",
+            "The app writes the first sentence from the finding's title and status. "
+            'The title is "Authorization bypass", from the finding row, and the status is Closed.',
+        ):
+            self.assertIn(expected, message)
+
+    def test_a_finding_row_title_that_differs_from_the_conclusion_sentence_is_refused_with_the_title_named(self) -> None:
+        runs = [Run(text='The finding "Authorization bypass" is still '), Run(text="Open", bold=True), Run(text=". Retested on 5 October.")]
+
+        def shout(document):
+            _set_text(_table_starting(document, "Findings").rows[1].cells[0].paragraphs[0], "AUTHORIZATION BYPASS")
+
+        payload, _evidence, _summary = parse_report_docx(_edited(conclusion_render(runs), shout), mode="editable")
+        self.assertEqual(payload["vulnerabilities"][0]["title"], "AUTHORIZATION BYPASS")
+
+        with self.assertRaises(ValueError) as raised:
+            main.finalize_editable_import(payload)
+
+        message = str(raised.exception)
+        for expected in (
+            'Importing would change the In Conclusion section of "AUTHORIZATION BYPASS".',
+            'The app would store: "The finding "AUTHORIZATION BYPASS" is still Open. Retested on 5 October."',
+            "The app writes the first sentence from the finding's title and status. "
+            'The title is "AUTHORIZATION BYPASS", from the finding row, and the status is Open (Previously Discovered).',
         ):
             self.assertIn(expected, message)
 

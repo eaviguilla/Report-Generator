@@ -2,6 +2,8 @@
 
 > **Status:** done · 2026-09-21 · `e998ab5`
 >
+> **Superseded in part, 2026-10-14.** Step D3 and the planner decision to keep refusing a document whose Status differs between its finding row and its finding table no longer hold. The finding row is the reference now, and a finding table that disagrees adds a warning ([Import takes a finding's identity from its finding row](import-uses-the-finding-row-as-the-reference.md)).
+>
 > All seventeen agreed steps landed. Four things deviated, and the first is the one worth reading.
 >
 > **Step D3 was wrong as written, and a failing test found it.** The plan said to normalise the

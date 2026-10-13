@@ -158,10 +158,13 @@ render. Requiring a value is `generation_issues`' job, and only when the segment
 is Asia (`app/docx_report.py` L112-L116) — a field the tester cannot see must
 never block their report.
 
-Reading a finished report back, `parse_report_docx` pairs this table with the finding
-headings by title **and occurrence order**, so duplicate titles retain distinct
-rows. Editable mode keeps Resolved and Closed rows; retest claims their rows
-before applying its intentional Resolved and Closed filter. A non-empty editable
+Reading a finished report back, `parse_report_docx` pairs this table's rows with the
+finding rows of the Findings Summary table by title, ignoring capitals and extra
+spaces, so duplicate titles pair in order. What is left pairs by position when as
+many CVSS rows as finding rows are left, and each position pair adds a warning. A
+finding row with no CVSS row imports without scores, and a CVSS row that no finding
+row matches refuses the import. Editable mode keeps Resolved and Closed rows; retest
+pairs their rows before applying its intentional Resolved and Closed filter. A non-empty editable
 score or vector must pass the same Unicode-aware character allowlist as an
 ordinary save or the entire import is refused; it is never silently erased.
 
@@ -196,21 +199,27 @@ Unmatched or ambiguous finding locations become selected, covered review
 targets, so their text remains visible on Setup and Findings rather than being
 discarded on the first save.
 
-A refused document says why. Before it reads any finding, the importer pairs the
-Findings Summary rows with the finding headings, which are `ReportHeading2`
-paragraphs between that table and the Appendix. Titles are compared with their
-spaces collapsed, but a finding keeps its title as printed, because the default
-In Conclusion sentence carries it that way. A title with no partner on either
-side is named with the headings the importer did find, and a title listed more
-often than it has headings is counted. A heading in one of Word's own heading
-styles (`Heading2`) is listed with its style.
+A refused document says why. A finding takes its title, severity, ID and status
+from its finding row in the Findings Summary table, so the importer pairs each
+finding heading, a `ReportHeading2` paragraph between that table and the Appendix,
+with a finding row before it reads any finding. A heading takes the row with
+exactly its title first, then a row whose title is equal ignoring capitals and
+extra spaces. What is left pairs by position when as many headings as finding
+rows are left, and each position pair adds a warning. Otherwise nothing pairs
+by position, and the refusal names the leftover finding rows and headings (the
+first eight of each, then a count), the headings it did find, and any rows it
+skipped for lacking a title or six cells. A heading in one of Word's own heading styles (`Heading2`) is
+listed with its style. A finding keeps its finding row's title as printed there,
+because the default In Conclusion sentence carries it that way.
 
 Each finding then needs a finding table (the labels Severity, ID, Status and
 Location in its first column, before its first section) and the sections its
-status prints, in order. A value that differs between the Findings Summary row
-and the finding table, a missing or repeated section, and an invalid ID, CVSS
-value or ticket are each named with the finding and what was found. A fragment
-that cannot be read is named with its section too. The wording is in
+status prints, in order. A finding table whose Severity, ID or Status differs from
+the finding row (ignoring capitals, and ignoring a Status the app does not know)
+never refuses the import: it keeps the finding row's values and adds one warning.
+A missing or repeated section, and an invalid
+ID, CVSS value or ticket, are each named with the finding and what was found. A
+fragment that cannot be read is named with its section too. The wording is in
 `app/docx_import.py`, pinned by tests in `tests/test_docx_import.py`. The checks
 in `finalize_editable_import` name the finding, the section and what the app
 would change (`first_change`).

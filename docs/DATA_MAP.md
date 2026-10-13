@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-14**, after the guard that builds an editable copy began comparing text rather than how provisioning splits it into runs, and import refusals began naming the finding, the section and what was found.
+> Last verified against source: **2026-10-14**, after an import began taking a finding's title, severity, ID and status from its finding row, and pairing finding headings and CVSS rows with finding rows by title and then by position.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -311,7 +311,11 @@ Both modes mint new identities and retain only visible document state; neither r
 **Editable mode is untouched and keeps Closed as Closed**, which is also the way back for anyone who needs a dropped finding, since a dropped finding takes its evidence and its typed work with it.
 The summary key carrying both is still named `dropped_resolved` and was deliberately not renamed: `manager.js` reads `summary.dropped_resolved || []`, so a half-landed rename fails **silently** — the dropped-findings notice simply stops appearing — and the accurate name buys nothing the comment beside the key does not.
 A status label this app does not recognise — a report from an older version, or a hand-edited cell — is **assumed** to be `open_previously_discovered` rather than refusing the document, and the assumption is named in `warnings`.
-The Status cells of the Findings Summary table and the finding table are compared only when **both** name a status this app knows, so a hand-edit to one cell is not an inconsistency; two known labels that disagree still are, and still refuse.
+A finding takes its title, severity, ID and status from its finding row in the Findings Summary table, with the title as printed there.
+A finding heading finds its finding row by equal title first, then by title ignoring capitals and extra spaces.
+What is left pairs by position when as many headings as finding rows are left, and each position pair adds a warning. Otherwise nothing pairs by position and the import refuses, naming the leftover rows and headings (the first eight of each).
+The CVSS table's rows pair with finding rows the same way, and a finding row with no CVSS row imports without scores.
+The finding table's Severity, ID and Status are compared with the finding row only to warn. When they differ, ignoring capitals and spaces, the import keeps the finding row's values and adds one warning for the finding. A Status counts only when both labels are known statuses.
 A finding that took the fallback may carry either section shape, and the editable path pads it to `content_types_for_status` before handing it over, because `finalize_editable_import` refuses an import whose sections differ in **order** from what provisioning would produce.
 
 Editable parsing creates covered review targets for ambiguous finding locations so their exact text remains visible on Setup and selected on Findings.
@@ -1021,7 +1025,7 @@ Recorded so they are not rediscovered as bugs.
 - **A hidden Additional Information field keeps its value, and nothing ever clears it.** Moving a report off Asia hides the CVSS pair; moving a finding back to Open (New) hides the tickets.
   In both cases the stored string is untouched and reappears intact, because nothing provisions these fields (§7).
   Two consequences to expect rather than fix: a JH report can carry CVSS values on every finding that no page shows and no document prints, and `finding_input_issues` still validates them on every save, so a hand-edited draft 422s on a field the tester cannot see.
-- **Retest and editable DOCX modes intentionally diverge on Resolved findings.** Retest drops a Resolved finding after claiming and validating its summary/detail/CVSS occurrence; editable keeps it, including valid Additional Information, and requires its generated remediation sentence to remain canonical.
+- **Retest and editable DOCX modes intentionally diverge on Resolved findings.** Retest drops a Resolved finding after pairing its finding heading and CVSS row with its finding row and checking its sections; editable keeps it, including valid Additional Information, and requires its generated remediation sentence to remain canonical.
   **A Closed finding now takes the same divergence** — retest drops it, editable keeps it as Closed — but only the drop is shared: the remediation check stays `resolved`-only, because the app never writes a Closed finding's remediation and so has nothing canonical to demand back (§8).
-  Duplicate titles pair with summary and Asia rows by occurrence, not by a title-only dictionary.
+  Findings that share a title pair with their own finding rows and CVSS rows in order, not through a dictionary keyed by title.
   A template with no `Section` table imports both CVSS values empty, which is normal for two of the four templates.

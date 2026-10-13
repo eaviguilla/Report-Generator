@@ -25,7 +25,7 @@ browser talks only to that. Nothing goes to the internet.
 | **Pydantic** | A data validation library. Data shapes are described as Python classes, and anything that doesn't fit is rejected. | • Defines what a valid report is<br>• Checks every report when saved and when opened<br>• Refuses corrupted or hand-edited files rather than half-loading them<br>• Upgrades reports written by older versions of the app |
 | **Jinja2** | A templating engine that fills placeholders in a page with real values. | • Builds the three screens before they are sent to the browser<br>• Passes the starting report data into the page |
 | **python-multipart** | A parser for the format browsers use when uploading files. | • Receives screenshot uploads<br>• Receives an imported report file |
-| **Pillow** | Python's main image-processing library. | • Converts uploaded screenshots to a consistent format<br>• Records image dimensions<br>• Rejects images crafted to be enormous when decompressed<br>• Resizes each screenshot and draws its border for the document |
+| **Pillow** | Python's main image-processing library. | • Converts uploaded screenshots to a consistent format<br>• Records image dimensions<br>• Rejects images crafted to be enormous when decompressed<br>• Resizes each screenshot and draws its border for the document, unless it already has one |
 | **python-docx** | A library for reading and writing Microsoft Word documents, which are really zip archives of XML. | • Opens the master template and the content building blocks<br>• Assembles the report document<br>• Turns image captions into real Word caption fields<br>• Reads a finished report back apart when importing |
 | **pywin32** | A package giving Python access to Windows' automation system, which lets one program control another. | • Opens a connection to Microsoft Word<br>• Drives the final layout pass<br>• Windows only |
 | **Microsoft Word** | The word processor itself, installed on the tester's machine. | • Lays out the finished document<br>• Repaginates and refreshes fields<br>• Builds the table of contents and the table of figures<br>• Nothing else can do this, because only Word knows where the pages break |
@@ -104,7 +104,8 @@ The result matches house style because the styling came from a real Word file a 
 from code imitating one.
 
 Screenshots go in at this stage too. **Pillow** prepares each image at the right size and draws its
-border, before **python-docx** places it in the document.
+border, before **python-docx** places it in the document. A picture that already has a border, such as
+one copied out of an earlier report, goes in as it is, so it never gets a second one.
 
 ### 3. Make the captions real
 

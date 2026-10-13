@@ -16,7 +16,7 @@ from docx.parts.hdrftr import FooterPart, HeaderPart
 from docx.shared import Mm, Pt, RGBColor
 from docx.table import Table, _Row
 from docx.text.paragraph import Paragraph
-from PIL import Image, ImageOps
+from PIL import Image, ImageChops, ImageOps
 
 from app.models import (
     CodeFragment,
@@ -89,6 +89,9 @@ FRAGMENT_COMPONENT_FILES = {
     "caption": ("caption_fragment.docx", "caption-fragment"),
 }
 IMAGE_BORDER_RASTER_DPI = 192
+# A line of pixels is border when this share of it is at most this dark (0-255 in every channel).
+IMAGE_BORDER_DARK_LEVEL = 64
+IMAGE_BORDER_DARK_SHARE = 0.98
 # Long endpoints are broken so they stay inside their column.
 SCOPE_WRAP_CHARACTERS = 84
 LOCATION_WRAP_CHARACTERS = 74
@@ -1434,6 +1437,26 @@ def _finding_locations(report: Report, finding: Vulnerability) -> dict[str, list
     return values
 
 
+def _line_is_dark(image: Image.Image, box: tuple[int, int, int, int]) -> bool:
+    red, green, blue = image.crop(box).split()
+    histogram = ImageChops.lighter(ImageChops.lighter(red, green), blue).histogram()
+    return sum(histogram[: IMAGE_BORDER_DARK_LEVEL + 1]) >= IMAGE_BORDER_DARK_SHARE * sum(histogram)
+
+
+def _has_border(image: Image.Image) -> bool:
+    """Whether all four outermost lines of pixels are dark, as the generator's own border is."""
+    width, height = image.size
+    edges = ((0, 0, width, 1), (0, height - 1, width, height), (0, 0, 1, height), (width - 1, 0, width, height))
+    return all(_line_is_dark(image, edge) for edge in edges)
+
+
+def _png_stream(image: Image.Image) -> BytesIO:
+    stream = BytesIO()
+    image.save(stream, format="PNG")
+    stream.seek(0)
+    return stream
+
+
 def _bordered_image_stream(path: Path, width_mm: float, template_path: Path) -> BytesIO:
     source_line, source_alignment = _cached_image_fragment_format(
         str(template_path.resolve()),
@@ -1444,6 +1467,9 @@ def _bordered_image_stream(path: Path, width_mm: float, template_path: Path) -> 
     display_width_inches = width_mm / 25.4
     with Image.open(path) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
+    # A picture copied out of an earlier report carries the border already; a second would double it.
+    if _has_border(image):
+        return _png_stream(image)
     minimum_width = round(display_width_inches * IMAGE_BORDER_RASTER_DPI)
     if image.width < minimum_width:
         image = image.resize(
@@ -1452,11 +1478,7 @@ def _bordered_image_stream(path: Path, width_mm: float, template_path: Path) -> 
         )
     border_fraction = border_width_inches / display_width_inches
     border_pixels = max(1, round(image.width * border_fraction / (1 - 2 * border_fraction)))
-    bordered = ImageOps.expand(image, border=border_pixels, fill="black")
-    stream = BytesIO()
-    bordered.save(stream, format="PNG")
-    stream.seek(0)
-    return stream
+    return _png_stream(ImageOps.expand(image, border=border_pixels, fill="black"))
 
 
 def _apply_image_fragment_format(picture, paragraph: Paragraph, template_path: Path) -> None:

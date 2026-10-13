@@ -201,8 +201,10 @@ its embedded PNG bytes exactly. ZIP member counts and expanded size, media byte
 size, selected evidence aggregate, PNG dimensions, and pixel count are bounded
 before persistence. Editable width comes only from one proportional, uncropped,
 unrotated inline drawing at or below 155 mm; unsupported geometry rejects.
-Because the embedded raster is Word-rendered, regeneration may resample it or
-add another canonical border, and the import result discloses that limitation.
+The embedded raster is the copy this renderer produced, so it already carries
+the canonical border in its pixels. Regeneration recognises that border and
+embeds the picture unchanged, and the editable import result says the images
+are rendered Word copies rather than the original files.
 
 ## Tag formatting
 
@@ -401,6 +403,18 @@ paragraph alignment from `resources/fragments/image_fragment.docx` and embed
 its effective 0.75 pt black border into an in-memory PNG copy so all four edges
 render consistently. Source evidence files and static template artwork remain
 unchanged.
+
+A picture that already carries a border gets no second one. `_has_border` in
+`app/docx_report.py` treats an image as bordered when, on all four sides, its
+outermost line of pixels is dark: at least 98% of the line at 64 or less out of
+255 in every colour channel (`IMAGE_BORDER_DARK_LEVEL`, `IMAGE_BORDER_DARK_SHARE`).
+Such a picture is embedded as it is, with no resizing and no new border. This
+covers pictures carried into Previous Proof of Concept by a retest import, images
+brought back by an editable import, and pictures copied out of an earlier report.
+A border shrunk to about 40% of its size is still found, blurred or not. The test
+cannot tell a border from a dark edge, so a dark-mode screenshot or a solid black
+image also goes in without one. A report generated before this check keeps any
+double border it already has.
 
 Images are inserted at their content position, and `caption_fragment.docx`
 supplies image, code, and table caption formatting. An environment may contain

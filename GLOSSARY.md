@@ -67,6 +67,10 @@ _Avoid_: instance heading, instance label
 The line above proof-of-concept images that names their environment: `PROD:`, or the non-production label in capitals, such as `UAT:`. The Word report prints one before the first image of each environment, and again after an instance title.
 _Avoid_: environment title, environment tag, image label
 
+**Image border**:
+The thin black line around an image in the Word report. An image that already has one when the tester adds it, such as a picture copied out of an earlier Word report, does not get a second.
+_Avoid_: frame, outline
+
 **Supporting image**:
 A proof-of-concept image for a tested environment the finding does not affect.
 _Avoid_: extra image, stale image

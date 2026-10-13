@@ -1,6 +1,6 @@
 # Import refusals name the cause
 
-> **Status:** in-progress
+> **Status:** done · 2026-10-14 · `ab1a7ab`
 
 ## Request
 
@@ -31,14 +31,10 @@ From a grilling session.
 - [x] 6. The editable import's checks name the finding, the section and what would change (`first_change`), and the stranded scope check names the findings.
 - [x] 7. Code review, then fixes with their tests: the finding keeps its title as printed; a title listed more often than it has headings is counted; a lost bold or italic names the words; the component refusal counts the markers it found; the CVSS Section row names its finding; the Location row check runs inside the finding's own check; every branch of `first_change` and the cap of eight titles have a test.
 - [x] 8. Docs: GLOSSARY.md (Refusal, Findings Summary table, Finding heading, Finding table, Section), `docs/DOCX_TEMPLATE.md`, `docs/ROUTES.md`, `docs/DATA_MAP.md`, and the Word pipeline instruction regenerated into `.claude/rules/`.
-- [ ] 9. Commit. The status stays in-progress until a commit contains this change.
+- [x] 9. Commits: `0253d51` (title spacing), `b1ec1c1` (conclusion guard) and `ab1a7ab` (the wording, the title kept as printed, docs).
 
 Tests: `RefusalMessageTests` and a route test in `tests/test_docx_import.py`, plus the existing tests that pinned the old phrases, now pinning the new ones.
 
 ## What deviated
 
 `first_change` lives in `app/docx_import.py`, not `app/main.py`, so `main.py` calls two public functions and imports nothing private. A finding keeps its title as printed, where the plan said collapsed (see Answers). The Location row check moved from the document-level scan into the finding's own check, so it always names the finding, and a short Location row in a table that is not a finding table is no longer refused. Left as they were: the Limitations, Component row and scope-row refusals and "a table in this report has no rows" (each fires on a table row that lost its cells, and tests pin their phrases), the other evidence-image refusals (they only gained the section prefix), and the check that provisioning reaches a stable state, which only fails when provisioning itself is wrong and could be reached in a test only by patching it. A Findings Summary row with fewer than six cells is still skipped without a word, as before, so a refusal about its heading does not say the row is damaged. The hint about other styles lists headings whose style id starts with "Heading", Word's built-in heading styles, rather than every paragraph that has a row's title.
-
-## Next steps
-
-1. `/diagnosing-bugs`: The report that started this request was not available. Import it and read the message: it now names the row or heading that did not pair up.

@@ -12,10 +12,9 @@ import hashlib
 import re
 import uuid
 import zipfile
-from collections import Counter
 from datetime import datetime
 from io import BytesIO
-from typing import get_args
+from typing import NamedTuple, get_args
 
 from docx import Document
 from docx.opc.exceptions import OpcError, PackageNotFoundError
@@ -55,10 +54,12 @@ BOILERPLATE = {
     SEVERITY_TICKET_LABEL,
 }
 STATUS_BY_LABEL = {label: status for status, label in STATUS_LABELS.items()}
+# Capitals do not make a status label unknown when the finding table is compared with its finding row.
+STATUS_BY_FOLDED_LABEL = {label.casefold(): status for label, status in STATUS_BY_LABEL.items()}
 # A label this app does not know falls back to this rather than refusing the document, so a report
 # written by an older version or edited by hand still imports.
 FALLBACK_STATUS = "open_previously_discovered"
-# The title of the one summary row a report with no findings prints. docx_report writes it.
+# The title of the one row a report with no findings prints in the Findings Summary table. docx_report writes it.
 NO_FINDINGS_TITLE = "(No vulnerability found)"
 IMPORT_MODES = {"editable", "retest"}
 REPORT_TYPE_BY_LABEL = {label: value for value, label in REPORT_TYPE_LABELS.items()}
@@ -94,6 +95,11 @@ def _clean(value: str) -> str:
     """Map the document's placeholder for "nothing here" back to nothing."""
     text = _collapsed(value)
     return "" if text == "N/A" else text
+
+
+def _title_key(title: str) -> str:
+    """What two titles are compared by: capitals and extra spaces do not count."""
+    return _collapsed(title).casefold()
 
 
 def _visible_value(value: str) -> str:
@@ -653,7 +659,8 @@ def _scope_rows(document, header: str, channel: str) -> list[dict]:
     return targets
 
 
-def _summary_rows(document) -> list[dict]:
+def _summary_rows(document) -> tuple[list[dict], int]:
+    """The finding rows, and how many rows were skipped for lacking a title or six cells."""
     table = _find_table(document, "Findings")
     if table is None:
         raise ReportImportError(
@@ -661,23 +668,23 @@ def _summary_rows(document) -> list[dict]:
         )
     printed = [[cell.text.strip() for cell in row.cells] for row in table.rows[1:]]
     if len(printed) == 1 and printed[0][:6] == [NO_FINDINGS_TITLE, *["N/A"] * 5]:
-        return []
-    rows = []
-    for cells in printed:
+        return [], 0
+    rows, skipped = [], 0
+    for table_row, cells in zip(table.rows[1:], printed):
         if len(cells) < 6 or not cells[0]:
+            skipped += 1
             continue
+        # As printed, because the conclusion sentence carries the title as typed.
+        title = re.sub(r"[\r\n\t]+", " ", table_row.cells[0].text)
         rows.append({
-            "title": _collapsed(cells[0]), "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
+            "title": title, "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
             "severity": cells[3].lower() or "informational", "display_id": cells[4],
             "status": STATUS_BY_LABEL.get(cells[5], FALLBACK_STATUS), "status_label": cells[5],
         })
-    return rows
+    return rows, skipped
 
 
-FINDING_HEADING_RULE = (
-    "A finding heading is a Report Heading 2 paragraph after the table and before the Appendix, "
-    "with the same title as its row."
-)
+FINDING_HEADING_RULE = "A finding heading is a Report Heading 2 paragraph after the table and before the Appendix."
 FINDING_TABLE_RULE = (
     "A finding table is a table under the finding heading, before its first section, "
     "with the labels Severity, ID, Status and Location in its first column."
@@ -688,15 +695,6 @@ def _quoted(values: list[str], limit: int = 8) -> str:
     """Values in quotes, the rest counted, so a long report cannot make the message unreadable."""
     shown = ", ".join(f'"{value}"' for value in values[:limit])
     return shown + (f" and {len(values) - limit} more" if len(values) > limit else "")
-
-
-def _times(count: int) -> str:
-    return "once" if count == 1 else f"{count} times"
-
-
-def _lists_without_heading(source: str, titles: list[str]) -> str:
-    those = "those titles" if len(titles) > 1 else "that title"
-    return f"{source} lists {_quoted(titles)}, but no finding heading has {those}."
 
 
 def _headings_found(titles: list[str]) -> str:
@@ -725,39 +723,85 @@ def _described(fragments: list[dict]) -> str:
     return ", ".join(parts) or "nothing"
 
 
-def _pairing_problem(row_titles: list[str], heading_titles: list[str], other_headings: dict[str, list[str]]) -> str:
-    """Why the Findings Summary rows and the finding headings do not pair up, or "" when they do."""
-    rows, headings = Counter(row_titles), Counter(heading_titles)
-    no_heading = list((rows - headings).elements())
-    no_row = list((headings - rows).elements())
-    if not no_heading and not no_row:
-        return ""
+class _Pairing(NamedTuple):
+    paired: dict[int, int]  # candidate index to finding row index
+    by_position: list[int]  # the candidates that were paired by position
+    left_rows: list[int]
+    left_candidates: list[int]
+
+
+def _pair_with_finding_rows(row_titles: list[str], titles: list[str]) -> _Pairing:
+    """Pair titles with finding rows by equal title, then ignoring capitals, then by position.
+
+    The position step needs as many titles as rows left over. With more or fewer, nothing says which goes with which.
+    """
+    free = list(range(len(row_titles)))
+    paired: dict[int, int] = {}
+    for key in (_collapsed, _title_key):
+        for candidate, title in enumerate(titles):
+            if candidate in paired:
+                continue
+            row = next((row for row in free if key(row_titles[row]) == key(title)), None)
+            if row is not None:
+                paired[candidate] = row
+                free.remove(row)
+    left = [candidate for candidate in range(len(titles)) if candidate not in paired]
+    by_position: list[int] = []
+    if left and len(left) == len(free):
+        paired.update(zip(left, free))
+        by_position, left, free = left, [], []
+    return _Pairing(paired, by_position, free, left)
+
+
+def _pairing_method(candidate: str) -> str:
+    return (
+        f"The importer pairs a {candidate} with a finding row by title, ignoring capitals and extra spaces, "
+        "and then by position, but only when the same number of each is left over."
+    )
+
+
+def _no_partner(kind: str, titles: list[str], partner: str) -> str:
+    if len(titles) == 1:
+        return f'The {kind} "{titles[0]}" has no {partner} left to pair with.'
+    return f"The {kind}s {_quoted(titles)} have no {partner}s left to pair with."
+
+
+def _unpaired_problem(
+    row_titles: list[str], heading_titles: list[str], pairs: _Pairing, skipped_rows: int, other_headings: dict[str, list[str]],
+) -> str:
+    """Why a finding row or a finding heading was left without a partner."""
     sentences = []
-    # A title that some heading has is counted rather than called absent, or the message contradicts itself.
-    for title in dict.fromkeys(title for title in no_heading if title in headings):
-        found = headings[title]
+    if pairs.left_rows:
+        sentences.append(_no_partner("finding row", [row_titles[row] for row in pairs.left_rows], "finding heading"))
+    if pairs.left_candidates:
+        sentences.append(_no_partner("finding heading", [heading_titles[heading] for heading in pairs.left_candidates], "finding row"))
+    sentences += [_pairing_method("finding heading"), _headings_found(heading_titles), FINDING_HEADING_RULE]
+    if skipped_rows:
         sentences.append(
-            f'The Findings Summary table lists "{title}" {_times(rows[title])}, '
-            f"but only {found} finding {'heading has' if found == 1 else 'headings have'} that title."
+            f"The Findings Summary table also has {_counted(skipped_rows, 'row')} with no title or fewer than six cells, "
+            "which the importer skips."
         )
-    if absent := [title for title in no_heading if title not in headings]:
-        sentences.append(_lists_without_heading("The Findings Summary table", absent))
-    for title in dict.fromkeys(title for title in no_row if title in rows):
-        sentences.append(
-            f'The report has {headings[title]} finding headings titled "{title}", '
-            f"but the Findings Summary table lists it {_times(rows[title])}."
-        )
-    if unlisted := [title for title in no_row if title not in rows]:
-        sentences.append(
-            f"The finding headings {_quoted(unlisted)} are not in the Findings Summary table."
-            if len(unlisted) > 1 else
-            f'The finding heading "{unlisted[0]}" is not in the Findings Summary table.'
-        )
-    sentences += [_headings_found(heading_titles), FINDING_HEADING_RULE]
-    if no_heading and other_headings:
+    if pairs.left_rows and other_headings:
         styles = ", ".join(f"{style} ({_quoted(titles, 3)})" for style, titles in other_headings.items())
         sentences.append(f"Headings in other styles after the table: {styles}.")
     return " ".join(sentences)
+
+
+def _cvss_title(row) -> str:
+    return _collapsed(row.cells[1].text) or "(no title)"
+
+
+def _position_warnings(noun: str, titles: list[str], pairs: _Pairing, row_titles: list[str], note: str = "") -> list[str]:
+    """One warning for each title that was paired with a finding row by position."""
+    return [
+        f'The {noun} "{titles[candidate]}" was paired with the finding row "{row_titles[pairs.paired[candidate]]}" by position.{note}'
+        for candidate in pairs.by_position
+    ]
+
+
+def _cvss_unpaired_problem(titles: list[str]) -> str:
+    rows = f'a row for "{titles[0]}"' if len(titles) == 1 else f"rows for {_quoted(titles)}"
+    return f"The CVSS table has {rows} that no finding row matches. {_pairing_method('CVSS row')}"
 
 
 def _is_finding_detail_table(table) -> bool:
@@ -885,9 +929,17 @@ def _section_fragments(title: str, content_type: str, *arguments) -> list[dict]:
         raise type(error)(f'In the {SECTION_LABELS[content_type]} section of "{title}": {error}') from error
 
 
+def _table_disagreement(title: str, differences: list[tuple[str, str, str]]) -> str:
+    said = " ".join(
+        f"{label} is {_value_text(in_table)} in the finding table and {_value_text(used)} in the Findings Summary table."
+        for label, in_table, used in differences
+    )
+    return f'"{title}": {said} The import uses the Findings Summary table.'
+
+
 def _findings(document, formats, targets, non_production_label, evidence, mode, warnings):
     """Walk each finding's body, from its heading to the next one."""
-    summary_rows = _summary_rows(document)
+    summary_rows, skipped_rows = _summary_rows(document)
     # Named rather than refused: the tester can see which findings were assumed and correct them.
     for row in summary_rows:
         if row["status_label"] not in STATUS_BY_LABEL:
@@ -899,26 +951,19 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
     summary_table = _find_table(document, "Findings")
     summary_index = body.index(summary_table._tbl)
     starts = []
-    typed_titles = {}
     other_headings: dict[str, list[str]] = {}
     for index, element in enumerate(body[summary_index + 1:], start=summary_index + 1):
         if element.tag != qn("w:p"):
             continue
         style_id = paragraph_style_id(element) or ""
-        printed = Paragraph(element, document).text
-        title = _collapsed(printed)
+        title = _collapsed(Paragraph(element, document).text)
         if style_id == GROUP_HEADING_STYLE and title.startswith("Appendix:"):
             break
         if style_id == FINDING_HEADING_STYLE:
             starts.append((index, title))
-            # The conclusion sentence carries the title as typed, so a finding keeps it that way.
-            typed_titles[index] = re.sub(r"[\r\n\t]+", " ", printed)
         elif title and style_id.lower().startswith("heading"):
             other_headings.setdefault(style_id, []).append(title)
 
-    # Nothing stops two findings sharing a title, so each heading claims the next unclaimed row of
-    # that name. Keying the summary by title instead would give both the same finding number.
-    unclaimed = list(summary_rows)
     # Absent from three of the four templates, so a missing table is normal and never an error.
     cvss_table = _find_table(document, "Section")
     short_row = next((row for row in cvss_table.rows[1:] if len(row.cells) < 5), None) if cvss_table is not None else None
@@ -926,15 +971,25 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         titled = _clean(short_row.cells[1].text) if len(short_row.cells) > 1 else ""
         which = f'the row for "{titled}"' if titled else "a row"
         raise ReportImportError(f"The CVSS table has an invalid Section row: {which} has {len(short_row.cells)} cells and needs 5.")
-    unclaimed_cvss = list(cvss_table.rows[1:]) if cvss_table is not None else []
-    # Beside the placeholder summary row, this row names no finding for a heading to claim.
-    if not summary_rows and [[cell.text.strip() for cell in row.cells][:5] for row in unclaimed_cvss] == [["N/A"] * 5]:
-        unclaimed_cvss = []
-    problem = _pairing_problem([row["title"] for row in summary_rows], [title for _, title in starts], other_headings)
-    if problem:
-        raise ReportImportError(problem)
+    # Nothing stops two findings sharing a title, so a heading takes the first free finding row that
+    # matches. Keying the summary by title instead would give both the same finding number.
+    row_titles = [row["title"] for row in summary_rows]
+    heading_titles = [title for _, title in starts]
+    heading_pairs = _pair_with_finding_rows(row_titles, heading_titles)
+    if heading_pairs.left_rows or heading_pairs.left_candidates:
+        raise ReportImportError(_unpaired_problem(row_titles, heading_titles, heading_pairs, skipped_rows, other_headings))
+    warnings.extend(_position_warnings(
+        "finding heading", heading_titles, heading_pairs, row_titles, " The finding uses the row's title.",
+    ))
+    cvss_rows = list(cvss_table.rows[1:]) if cvss_table is not None else []
+    # A report with no findings prints one N/A row here, and it names no finding.
+    if not summary_rows and [[cell.text.strip() for cell in row.cells][:5] for row in cvss_rows] == [["N/A"] * 5]:
+        cvss_rows = []
+    cvss_pairs = _pair_with_finding_rows(row_titles, [row.cells[1].text for row in cvss_rows])
+    cvss_for_row = {row_index: cvss_rows[candidate] for candidate, row_index in cvss_pairs.paired.items()}
+    warnings.extend(_position_warnings("CVSS row", [_cvss_title(row) for row in cvss_rows], cvss_pairs, row_titles))
     findings, dropped, rewritten = [], [], []
-    for position, (index, title) in enumerate(starts):
+    for position, (index, _) in enumerate(starts):
         stop = len(body)
         for later, _ in starts[position + 1:]:
             stop = later
@@ -945,14 +1000,10 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                 if paragraph_style_id(element) == GROUP_HEADING_STYLE:
                     stop = cursor
                     break
-        row = next(candidate for candidate in unclaimed if candidate["title"] == title)
-        unclaimed.remove(row)
-        # Claimed before the Resolved drop, so a dropped finding consumes its own row rather than
-        # leaving it for the next title to match. Never by index: the table carries a row per
-        # rendered finding while this function omits every Resolved one.
-        cvss_row = next((candidate for candidate in unclaimed_cvss if _clean(candidate.cells[1].text) == title), None)
-        if cvss_row is not None:
-            unclaimed_cvss.remove(cvss_row)
+        row = summary_rows[heading_pairs.paired[position]]
+        title = row["title"]
+        # Paired up front, so a finding that a retest drops still uses its own CVSS row.
+        cvss_row = cvss_for_row.get(heading_pairs.paired[position])
         cvss_score, cvss_vector = "", ""
         if cvss_row is not None:
             score, vector = _visible_value(cvss_row.cells[3].text), _visible_value(cvss_row.cells[4].text)
@@ -1033,25 +1084,16 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             if len(cells := [cell.text.strip() for cell in table_row.cells]) >= 2
         }
         differences = [
-            (label, shown, detail_values.get(label, ""))
-            for label, shown in (("Severity", row["severity"].title()), ("ID", row["display_id"]))
-            if _clean(detail_values.get(label, "")) != _clean(shown)
+            (label, detail_values.get(label, ""), value)
+            for label, value in (("Severity", row["severity"].title()), ("ID", row["display_id"]))
+            if _clean(detail_values.get(label, "")).casefold() != _clean(value).casefold()
         ]
-        # Compared only when both cells name a status this app knows. Either one unrecognised means
-        # the status was assumed, so there is nothing to disagree about and the document still
-        # imports. Two known labels that differ is a real inconsistency, and still refuses.
+        # Compared only when both cells name a status this app knows. An unrecognised one means the
+        # status was assumed, and that has its own warning.
         detail_status_label = _clean(detail_values.get("Status", ""))
-        if (
-            row["status_label"] in STATUS_BY_LABEL
-            and detail_status_label in STATUS_BY_LABEL
-            and STATUS_BY_LABEL[detail_status_label] != row["status"]
-        ):
-            differences.append(("Status", row["status_label"], detail_status_label))
-        if differences:
-            raise ReportImportError(" ".join(
-                f'"{title}": the Findings Summary table says {label} is "{shown}", but the finding\'s table says "{found}".'
-                for label, shown, found in differences
-            ))
+        detail_status = STATUS_BY_FOLDED_LABEL.get(detail_status_label.casefold())
+        if row["status_label"] in STATUS_BY_LABEL and detail_status not in (None, row["status"]):
+            differences.append(("Status", detail_status_label, row["status_label"]))
 
         local_evidence: dict[str, bytes] = {}
         source_contents = [
@@ -1071,7 +1113,8 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             for content_type in expected_sections
         ]
         working_targets = list(targets)
-        local_warnings = []
+        # Kept with the finding's other warnings, so a finding a retest drops says nothing about its table.
+        local_warnings = [_table_disagreement(title, differences)] if differences else []
         scope = _detail_locations(detail, working_targets, local_warnings, title)
 
         if mode == "retest" and row["status"] in ("resolved", "closed"):
@@ -1133,7 +1176,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         if mode == "retest":
             contents[3]["fragments"] = _empty_proof(scope, targets)
         findings.append({
-            "uid": _fresh("v"), "display_id": display_id, "title": typed_titles[index],
+            "uid": _fresh("v"), "display_id": display_id, "title": title,
             "likelihood": row["likelihood"], "impact": row["impact"], "severity": row["severity"],
             "status": status,
             "scope": scope,
@@ -1142,11 +1185,8 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             "cvss_vector": cvss_vector,
             "contents": contents,
         })
-    if unclaimed_cvss:
-        titles = [_clean(row.cells[1].text) or "(no title)" for row in unclaimed_cvss]
-        raise ReportImportError(
-            f"{_lists_without_heading('The CVSS table', titles)} {_headings_found([title for _, title in starts])}"
-        )
+    if cvss_pairs.left_candidates:
+        raise ReportImportError(_cvss_unpaired_problem([_cvss_title(cvss_rows[candidate]) for candidate in cvss_pairs.left_candidates]))
     return findings, dropped, rewritten
 
 
@@ -1235,14 +1275,17 @@ def _format_change(old_runs: list[dict], new_runs: list[dict]) -> str:
     return f'"{_excerpt(text)}" would change from {_format_words(was[start])} to {_format_words(would_be[start])}'
 
 
-def _fragment_change(old: dict, new: dict, section: str, status: str) -> str:
+def _fragment_change(old: dict, new: dict, section: str, status: str, title: str) -> str:
     if old["type"] != new["type"]:
         return f"A {_part_word(old['type'])} would become a {_part_word(new['type'])}."
     old_text, new_text = _fragment_text(old), _fragment_text(new)
     if old_text != new_text:
         message = f'The report has: "{_excerpt(old_text)}". The app would store: "{_excerpt(new_text)}".'
         if section == "in_conclusion" and default_conclusion_span(old_text):
-            message += f" The app writes the first sentence from the finding's status, {STATUS_LABELS[status]}."
+            message += (
+                " The app writes the first sentence from the finding's title and status."
+                f' The title is "{title}", from the finding row, and the status is {STATUS_LABELS[status]}.'
+            )
         return message
     part = _part_word(old["type"])
     scalars = [
@@ -1276,7 +1319,7 @@ def first_change(before: dict, after: dict) -> str:
                 )
             for was, would_be in zip(content["fragments"], other["fragments"]):
                 if was != would_be:
-                    return f"{head} {_fragment_change(was, would_be, content['type'], old['status'])}"
+                    return f"{head} {_fragment_change(was, would_be, content['type'], old['status'], title)}"
         for key in old:
             if key == "contents" or old[key] == new.get(key):
                 continue

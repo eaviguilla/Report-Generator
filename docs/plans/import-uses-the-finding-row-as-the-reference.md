@@ -1,6 +1,6 @@
 # Import takes a finding's identity from its finding row
 
-> **Status:** in-progress
+> **Status:** done · 2026-10-14 · `c564b41`
 >
 > **From:** [Import refusals name the cause](import-refusals-name-the-cause.md)
 
@@ -45,7 +45,7 @@ These are the test contract. Keep the meaning if a phrase needs to change, and c
 - [x] 3. `_fragment_change` in `app/docx_import.py`: the conclusion hint.
 - [x] 4. Existing tests that pinned the old refusals now pin the new behavior: `test_a_row_and_a_heading_with_different_titles_are_both_named`, `test_a_value_that_differs_between_the_findings_summary_table_and_the_finding_table_names_both`, `test_a_title_listed_more_often_than_it_has_headings_is_counted`, `test_a_title_with_more_headings_than_rows_is_counted`, `test_a_cvss_row_for_another_title_is_named`, `test_a_refusal_through_the_route_names_what_did_not_pair_up`, `test_a_finding_heading_in_another_style_is_named_with_the_style_it_has`, `test_a_long_list_of_titles_with_no_heading_is_cut_after_eight`, and the two conclusion tests that pin the hint.
 - [x] 5. Docs: `docs/DATA_MAP.md` (the Status-cells sentence and the Last verified line), `docs/DOCX_TEMPLATE.md` (the CVSS pairing sentence and the paragraph that begins "A refused document says why"), the Word pipeline instruction (add "finding row"), regenerated into `.claude/rules/` with `scripts/sync_ai_rules.py`, and a note in `docs/plans/import-refusals-name-the-cause.md` and one in `docs/plans/status-username-and-na-locations.md`.
-- [ ] 6. Lint, `graphify update app --force`, `scripts/relevant_tests.py --affected --run`, `/code-review`, then commit. Set this plan to `done` with the commit.
+- [x] 6. Lint, `graphify update app --force`, `scripts/relevant_tests.py --affected --run`, `/code-review`, then commit. Set this plan to `done` with the commit.
 
 Out of scope: the Description, Recommended Remediation and Conclusion parts of the refusal list, what the importer drops without saying, and ZIP and JSON messages.
 
@@ -59,7 +59,3 @@ The plan held up. These things changed while building and in review.
 - **The finding table's Status is compared in any capitals,** so `CLOSED` still counts as a known status. A status the app does not know, on either side, adds no finding table warning.
 - **A CVSS row with no title is named "(no title)"** in the warning and in the refusal.
 - **The CVSS method sentence says "CVSS row"** where the plan said it was the same sentence.
-
-## Next steps
-
-1. `/implement`: The decisions are agreed and written down above.

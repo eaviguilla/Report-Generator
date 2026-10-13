@@ -9,7 +9,7 @@ The server's decision to take a submitted report, after checking it and completi
 _Avoid_: save rules, intake, accepting a draft
 
 **Refusal**:
-The answer acceptance gives a report it will not take, naming the rule the report broke, such as a save conflict, a removed scope target or an invalid Setup field.
+The answer the server gives a report it will not take, whether a save or an import, naming the rule the report broke. Examples are a save conflict, a removed scope target, an invalid Setup field, and a finding heading with no row in the Findings Summary table.
 _Avoid_: rejection
 
 **Save conflict**:
@@ -82,6 +82,22 @@ _Avoid_: environment-irrelevant image, stale image, orphaned image, out-of-scope
 **Word report**:
 The Word document the app builds from a report.
 _Avoid_: Word document report, generated report, docx, output file
+
+**Findings Summary table**:
+The table under the Findings Summary heading of a Word report, with one row per finding: its title, likelihood, impact, severity, ID and status.
+_Avoid_: summary section, summary table, summary row
+
+**Finding heading**:
+A finding's title in the Word report, above its table and its sections.
+_Avoid_: finding detail, detail heading
+
+**Finding table**:
+The two-column table under a finding heading. It repeats the finding's severity, ID and status and lists its affected locations.
+_Avoid_: detail table, detail section, finding detail
+
+**Section**:
+One of the labelled parts of a finding in the Word report: Description, Recommended Remediation, Previous Proof of Concept, Proof of Concept and In Conclusion. The finding's status decides which it prints.
+_Avoid_: detail section, block
 
 **Editable copy**:
 A new report the app builds from a Word report so that it reads the same: every finding, status, printed section and engagement detail. What the Word report does not print starts fresh.

@@ -12,6 +12,7 @@ import hashlib
 import re
 import uuid
 import zipfile
+from collections import Counter
 from datetime import datetime
 from io import BytesIO
 from typing import get_args
@@ -22,8 +23,9 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from PIL import Image, UnidentifiedImageError
 
+from .docx_captions import paragraph_style_id
 from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, Segment
-from .report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status
+from .report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status, default_conclusion_span
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
 # renders one of every fragment type and fails if any of these stops identifying it.
@@ -45,6 +47,7 @@ SECTION_HEADINGS = (
     ("Proof of Concept:", "proof_of_concept"),
     ("In Conclusion:", "in_conclusion"),
 )
+SECTION_LABELS = {kind: heading.rstrip(":") for heading, kind in SECTION_HEADINGS}
 # Printed by the finding template, never typed by the tester.
 SEVERITY_TICKET_LABEL = "Severity Review Ticket (if applicable):"
 BOILERPLATE = {
@@ -82,9 +85,14 @@ def _fresh(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+def _collapsed(value: str) -> str:
+    """The text with each run of whitespace, non-breaking spaces included, reduced to one space."""
+    return " ".join(value.split())
+
+
 def _clean(value: str) -> str:
     """Map the document's placeholder for "nothing here" back to nothing."""
-    text = " ".join(value.split())
+    text = _collapsed(value)
     return "" if text == "N/A" else text
 
 
@@ -250,7 +258,7 @@ def _strip_run_prefix(runs: list[dict], pattern: re.Pattern) -> list[dict]:
 
 def section_of(text: str) -> str | None:
     """Name the content section a heading opens, or nothing if it is not a heading."""
-    stripped = " ".join(text.split())
+    stripped = _collapsed(text)
     for heading, content_type in SECTION_HEADINGS:
         if stripped == heading:
             return content_type
@@ -353,7 +361,7 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
             continue
         paragraph = Paragraph(element, document)
         text = text_of(paragraph)
-        stripped = " ".join(text.split())
+        stripped = _collapsed(text)
         if stripped in BOILERPLATE:
             continue
         kind = classify_paragraph(paragraph, formats)
@@ -461,14 +469,14 @@ def _document_texts(document) -> list[str]:
 
 
 def _labelled_value(texts: list[str], label: str) -> str:
-    values = {
+    values = list(dict.fromkeys(
         _clean(texts[index + 1])
         for index, text in enumerate(texts[:-1])
         if text == label and _clean(texts[index + 1])
-    }
+    ))
     if len(values) > 1:
-        raise ReportImportError(f'The document contains conflicting values for "{label}".')
-    return next(iter(values), "")
+        raise ReportImportError(f'The document contains conflicting values for "{label}": {_quoted(values)}.')
+    return values[0] if values else ""
 
 
 def _network_access(document) -> str | None:
@@ -552,7 +560,10 @@ def _component_rows(document, observed_environments: list[str], warnings: list[s
     if not values:
         return []
     if len(channels) != 1:
-        raise ReportImportError("The component report does not identify exactly one supported app type.")
+        raise ReportImportError(
+            "The component report does not identify exactly one supported app type. Its text must mention exactly one of "
+            f'"Mobile Application Binary" and "Thick Client Application Binary", and it mentions {len(channels)}.'
+        )
     environment = observed_environments[0] if len(observed_environments) == 1 else "production"
     targets = []
     for order, (value, description) in enumerate(values):
@@ -645,7 +656,9 @@ def _scope_rows(document, header: str, channel: str) -> list[dict]:
 def _summary_rows(document) -> list[dict]:
     table = _find_table(document, "Findings")
     if table is None:
-        raise ReportImportError("This document has no findings summary table.")
+        raise ReportImportError(
+            'The Word report has no Findings Summary table. The importer looks for a table whose first header cell is "Findings".'
+        )
     printed = [[cell.text.strip() for cell in row.cells] for row in table.rows[1:]]
     if len(printed) == 1 and printed[0][:6] == [NO_FINDINGS_TITLE, *["N/A"] * 5]:
         return []
@@ -654,19 +667,100 @@ def _summary_rows(document) -> list[dict]:
         if len(cells) < 6 or not cells[0]:
             continue
         rows.append({
-            "title": " ".join(cells[0].split()), "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
+            "title": _collapsed(cells[0]), "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
             "severity": cells[3].lower() or "informational", "display_id": cells[4],
             "status": STATUS_BY_LABEL.get(cells[5], FALLBACK_STATUS), "status_label": cells[5],
         })
     return rows
 
 
+FINDING_HEADING_RULE = (
+    "A finding heading is a Report Heading 2 paragraph after the table and before the Appendix, "
+    "with the same title as its row."
+)
+FINDING_TABLE_RULE = (
+    "A finding table is a table under the finding heading, before its first section, "
+    "with the labels Severity, ID, Status and Location in its first column."
+)
+
+
+def _quoted(values: list[str], limit: int = 8) -> str:
+    """Values in quotes, the rest counted, so a long report cannot make the message unreadable."""
+    shown = ", ".join(f'"{value}"' for value in values[:limit])
+    return shown + (f" and {len(values) - limit} more" if len(values) > limit else "")
+
+
+def _times(count: int) -> str:
+    return "once" if count == 1 else f"{count} times"
+
+
+def _lists_without_heading(source: str, titles: list[str]) -> str:
+    those = "those titles" if len(titles) > 1 else "that title"
+    return f"{source} lists {_quoted(titles)}, but no finding heading has {those}."
+
+
+def _headings_found(titles: list[str]) -> str:
+    return f"Finding headings found: {_quoted(titles) if titles else 'none'}."
+
+
+def _section_names(kinds: list[str]) -> str:
+    return ", ".join(SECTION_LABELS[kind] for kind in kinds)
+
+
+def _part_word(kind: str) -> str:
+    """A fragment type as a tester would name it."""
+    return "picture" if kind == "image" else kind.replace("_", " ")
+
+
+def _excerpt(text: str, limit: int = 120) -> str:
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def _described(fragments: list[dict]) -> str:
+    """What a section holds: each paragraph's text in quotes and any other part by name."""
+    parts = [
+        '"' + _excerpt("".join(run["text"] for run in fragment["runs"])) + '"' if fragment["type"] == "paragraph" else _part_word(fragment["type"])
+        for fragment in fragments
+    ]
+    return ", ".join(parts) or "nothing"
+
+
+def _pairing_problem(row_titles: list[str], heading_titles: list[str], other_headings: dict[str, list[str]]) -> str:
+    """Why the Findings Summary rows and the finding headings do not pair up, or "" when they do."""
+    rows, headings = Counter(row_titles), Counter(heading_titles)
+    no_heading = list((rows - headings).elements())
+    no_row = list((headings - rows).elements())
+    if not no_heading and not no_row:
+        return ""
+    sentences = []
+    # A title that some heading has is counted rather than called absent, or the message contradicts itself.
+    for title in dict.fromkeys(title for title in no_heading if title in headings):
+        found = headings[title]
+        sentences.append(
+            f'The Findings Summary table lists "{title}" {_times(rows[title])}, '
+            f"but only {found} finding {'heading has' if found == 1 else 'headings have'} that title."
+        )
+    if absent := [title for title in no_heading if title not in headings]:
+        sentences.append(_lists_without_heading("The Findings Summary table", absent))
+    for title in dict.fromkeys(title for title in no_row if title in rows):
+        sentences.append(
+            f'The report has {headings[title]} finding headings titled "{title}", '
+            f"but the Findings Summary table lists it {_times(rows[title])}."
+        )
+    if unlisted := [title for title in no_row if title not in rows]:
+        sentences.append(
+            f"The finding headings {_quoted(unlisted)} are not in the Findings Summary table."
+            if len(unlisted) > 1 else
+            f'The finding heading "{unlisted[0]}" is not in the Findings Summary table.'
+        )
+    sentences += [_headings_found(heading_titles), FINDING_HEADING_RULE]
+    if no_heading and other_headings:
+        styles = ", ".join(f"{style} ({_quoted(titles, 3)})" for style, titles in other_headings.items())
+        sentences.append(f"Headings in other styles after the table: {styles}.")
+    return " ".join(sentences)
+
+
 def _is_finding_detail_table(table) -> bool:
-    if any(
-        row.cells and row.cells[0].text.strip() == "Location" and len(row.cells) < 2
-        for row in table.rows
-    ):
-        raise ReportImportError("A finding detail table has an invalid Location row.")
     labels = [row.cells[0].text.strip() for row in table.rows if row.cells]
     return all(label in labels for label in ("Severity", "ID", "Status", "Location"))
 
@@ -677,7 +771,7 @@ def _observed_environments(document, windows: dict, targets: list[dict]) -> list
         if not _is_finding_detail_table(table):
             continue
         for row in table.rows:
-            if not row.cells or row.cells[0].text.strip() != "Location":
+            if len(row.cells) < 2 or row.cells[0].text.strip() != "Location":
                 continue
             paragraphs = [text_of(paragraph).strip() for paragraph in row.cells[1].paragraphs]
             if not any(_visible_value(value) for value in paragraphs[1:]):
@@ -696,7 +790,7 @@ def _observed_environments(document, windows: dict, targets: list[dict]) -> list
 
 
 def _detail_locations(table, targets, warnings, title) -> dict:
-    """Rebuild a finding's affected locations from its detail table.
+    """Rebuild a finding's affected locations from its finding table.
 
     Ambiguous values become ordinary selected targets. That keeps them visible on Setup and
     Findings and lets the normal first-save reconciliation preserve their IDs.
@@ -705,6 +799,10 @@ def _detail_locations(table, targets, warnings, title) -> dict:
     for row in table.rows:
         if not row.cells or row.cells[0].text.strip() != "Location":
             continue
+        if len(row.cells) < 2:
+            raise ReportImportError(
+                f'"{title}" has an invalid Location row in its finding table: the row has {len(row.cells)} of the 2 cells it needs.'
+            )
         paragraphs = ["".join(text_of(paragraph).splitlines()).strip() for paragraph in row.cells[1].paragraphs]
         heading = paragraphs[0] if paragraphs else ""
         if heading.startswith(PRODUCTION_ROW):
@@ -712,7 +810,10 @@ def _detail_locations(table, targets, warnings, title) -> dict:
         elif heading.endswith("Environment:"):
             environment = "non_production"
         else:
-            raise ReportImportError(f'"{title}" has an unsupported location heading.')
+            raise ReportImportError(
+                f'"{title}" has an unsupported location heading "{heading}". '
+                f'The first line of its Location row must start with "{PRODUCTION_ROW}" or end with "Environment:".'
+            )
         for paragraph in paragraphs[1:]:
             value = _visible_value(paragraph)
             if not value:
@@ -776,6 +877,14 @@ def _empty_proof(scope: dict, targets: list[dict]) -> list[dict]:
     return fragments
 
 
+def _section_fragments(title: str, content_type: str, *arguments) -> list[dict]:
+    """Build one section's fragments, naming the finding and the section when one cannot be read."""
+    try:
+        return _build_fragments(*arguments)
+    except ReportImportError as error:
+        raise type(error)(f'In the {SECTION_LABELS[content_type]} section of "{title}": {error}') from error
+
+
 def _findings(document, formats, targets, non_production_label, evidence, mode, warnings):
     """Walk each finding's body, from its heading to the next one."""
     summary_rows = _summary_rows(document)
@@ -790,29 +899,40 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
     summary_table = _find_table(document, "Findings")
     summary_index = body.index(summary_table._tbl)
     starts = []
+    typed_titles = {}
+    other_headings: dict[str, list[str]] = {}
     for index, element in enumerate(body[summary_index + 1:], start=summary_index + 1):
         if element.tag != qn("w:p"):
             continue
-        properties = element.find(qn("w:pPr"))
-        style = properties.find(qn("w:pStyle")) if properties is not None else None
-        style_id = style.get(qn("w:val")) if style is not None else ""
-        title = " ".join(Paragraph(element, document).text.split())
+        style_id = paragraph_style_id(element) or ""
+        printed = Paragraph(element, document).text
+        title = _collapsed(printed)
         if style_id == GROUP_HEADING_STYLE and title.startswith("Appendix:"):
             break
         if style_id == FINDING_HEADING_STYLE:
             starts.append((index, title))
+            # The conclusion sentence carries the title as typed, so a finding keeps it that way.
+            typed_titles[index] = re.sub(r"[\r\n\t]+", " ", printed)
+        elif title and style_id.lower().startswith("heading"):
+            other_headings.setdefault(style_id, []).append(title)
 
     # Nothing stops two findings sharing a title, so each heading claims the next unclaimed row of
     # that name. Keying the summary by title instead would give both the same finding number.
     unclaimed = list(summary_rows)
     # Absent from three of the four templates, so a missing table is normal and never an error.
     cvss_table = _find_table(document, "Section")
-    if cvss_table is not None and any(len(row.cells) < 5 for row in cvss_table.rows[1:]):
-        raise ReportImportError("The CVSS table has an invalid Section row.")
+    short_row = next((row for row in cvss_table.rows[1:] if len(row.cells) < 5), None) if cvss_table is not None else None
+    if short_row is not None:
+        titled = _clean(short_row.cells[1].text) if len(short_row.cells) > 1 else ""
+        which = f'the row for "{titled}"' if titled else "a row"
+        raise ReportImportError(f"The CVSS table has an invalid Section row: {which} has {len(short_row.cells)} cells and needs 5.")
     unclaimed_cvss = list(cvss_table.rows[1:]) if cvss_table is not None else []
     # Beside the placeholder summary row, this row names no finding for a heading to claim.
     if not summary_rows and [[cell.text.strip() for cell in row.cells][:5] for row in unclaimed_cvss] == [["N/A"] * 5]:
         unclaimed_cvss = []
+    problem = _pairing_problem([row["title"] for row in summary_rows], [title for _, title in starts], other_headings)
+    if problem:
+        raise ReportImportError(problem)
     findings, dropped, rewritten = [], [], []
     for position, (index, title) in enumerate(starts):
         stop = len(body)
@@ -822,14 +942,10 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         for cursor in range(index + 1, stop):
             element = body[cursor]
             if element.tag == qn("w:p"):
-                properties = element.find(qn("w:pPr"))
-                style = properties.find(qn("w:pStyle")) if properties is not None else None
-                if style is not None and style.get(qn("w:val")) == GROUP_HEADING_STYLE:
+                if paragraph_style_id(element) == GROUP_HEADING_STYLE:
                     stop = cursor
                     break
-        row = next((candidate for candidate in unclaimed if candidate["title"] == title), None)
-        if row is None:
-            raise ReportImportError(f'Finding detail "{title}" has no matching summary row.')
+        row = next(candidate for candidate in unclaimed if candidate["title"] == title)
         unclaimed.remove(row)
         # Claimed before the Resolved drop, so a dropped finding consumes its own row rather than
         # leaving it for the next title to match. Never by index: the table carries a row per
@@ -841,9 +957,9 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         if cvss_row is not None:
             score, vector = _visible_value(cvss_row.cells[3].text), _visible_value(cvss_row.cells[4].text)
             if mode == "editable" and score and not _valid_cvss_score(score):
-                raise ReportImportError(f'"{title}" has an invalid CVSS score.')
+                raise ReportImportError(f'"{title}" has an invalid CVSS score "{score}". {character_issue("cvss_score", score)}')
             if mode == "editable" and vector and not _valid_cvss_vector(vector):
-                raise ReportImportError(f'"{title}" has an invalid CVSS vector.')
+                raise ReportImportError(f'"{title}" has an invalid CVSS vector "{vector}". {character_issue("cvss_vector", vector)}')
             cvss_score = score if _valid_cvss_score(score) else ""
             cvss_vector = vector if _valid_cvss_vector(vector) else ""
 
@@ -858,7 +974,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                 table = next(table for table in document.tables if table._tbl is element)
                 if _is_finding_detail_table(table):
                     if detail is not None:
-                        raise ReportImportError(f'"{title}" has more than one finding detail table.')
+                        raise ReportImportError(f'"{title}" has more than one finding table. {FINDING_TABLE_RULE}')
                     detail = table
                 continue
             if element.tag == qn("w:p"):
@@ -866,14 +982,14 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                 found = section_of(paragraph.text)
                 if found:
                     if found in sections:
-                        raise ReportImportError(f'"{title}" has more than one {found.replace("_", " ")} section.')
+                        raise ReportImportError(f'"{title}" has the {SECTION_LABELS[found]} section more than once.')
                     current = found
                     section_order.append(found)
                     awaiting_tickets = False
                     sections.setdefault(current, [])
                     continue
                 # The label and its value both stop here, or they reach in_conclusion as fragments.
-                if " ".join(paragraph.text.split()) == SEVERITY_TICKET_LABEL:
+                if _collapsed(paragraph.text) == SEVERITY_TICKET_LABEL:
                     awaiting_tickets = True
                     continue
                 if awaiting_tickets:
@@ -883,7 +999,10 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                         continue
                     tickets, invalid_tickets = _parsed_ticket_lines(value)
                     if mode == "editable" and invalid_tickets:
-                        raise ReportImportError(f'"{title}" has an invalid severity review ticket.')
+                        raise ReportImportError(
+                            f'"{title}" has an invalid severity review ticket: {_quoted(invalid_tickets)}. '
+                            'A ticket is a number, with or without a key and a dash in front, such as "1234" or "ABC-1234". Separate tickets with line breaks or commas.'
+                        )
                     awaiting_tickets = False
                     continue
             if current is not None:
@@ -902,22 +1021,22 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             expected_sections = section_order
         if section_order != expected_sections:
             raise ReportImportError(
-                f'"{title}" does not have the expected section structure for '
-                f'{row["status_label"] or STATUS_LABELS[row["status"]]}.'
+                f'"{title}" is {row["status_label"] or STATUS_LABELS[row["status"]]}, so it needs these sections in this order: '
+                f"{_section_names(expected_sections)}. Found: {_section_names(section_order) or 'none'}. "
+                'A section starts at a paragraph that holds only its label, such as "Description:".'
             )
         if detail is None:
-            raise ReportImportError(f'"{title}" has no finding detail table.')
+            raise ReportImportError(f'"{title}" has no finding table. {FINDING_TABLE_RULE}')
         detail_values = {
             cells[0]: cells[1]
             for table_row in detail.rows
             if len(cells := [cell.text.strip() for cell in table_row.cells]) >= 2
         }
-        repeated = {
-            "Severity": row["severity"].title(),
-            "ID": row["display_id"],
-        }
-        if any(_clean(detail_values.get(label, "")) != _clean(value) for label, value in repeated.items()):
-            raise ReportImportError(f'"{title}" summary and detail values do not match.')
+        differences = [
+            (label, shown, detail_values.get(label, ""))
+            for label, shown in (("Severity", row["severity"].title()), ("ID", row["display_id"]))
+            if _clean(detail_values.get(label, "")) != _clean(shown)
+        ]
         # Compared only when both cells name a status this app knows. Either one unrecognised means
         # the status was assumed, so there is nothing to disagree about and the document still
         # imports. Two known labels that differ is a real inconsistency, and still refuses.
@@ -927,13 +1046,20 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             and detail_status_label in STATUS_BY_LABEL
             and STATUS_BY_LABEL[detail_status_label] != row["status"]
         ):
-            raise ReportImportError(f'"{title}" summary and detail values do not match.')
+            differences.append(("Status", row["status_label"], detail_status_label))
+        if differences:
+            raise ReportImportError(" ".join(
+                f'"{title}": the Findings Summary table says {label} is "{shown}", but the finding\'s table says "{found}".'
+                for label, shown, found in differences
+            ))
 
         local_evidence: dict[str, bytes] = {}
         source_contents = [
             {
                 "type": content_type,
-                "fragments": _build_fragments(
+                "fragments": _section_fragments(
+                    title,
+                    content_type,
                     document,
                     sections[content_type],
                     formats,
@@ -972,7 +1098,10 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                     for run in fragment["runs"]
                 )
                 if len(fragments) != 1 or fragments[0]["type"] != "paragraph" or text != RESOLVED_REMEDIATION:
-                    raise ReportImportError(f'"{title}" has edited remediation while Resolved.')
+                    raise ReportImportError(
+                        f'"{title}" has edited remediation while Resolved. A Resolved finding keeps the sentence the app writes '
+                        f'for Recommended Remediation ("{RESOLVED_REMEDIATION}"), but the report has: {_described(fragments)}.'
+                    )
                 fragments[0]["generated"] = "resolved_remediation"
         else:
             # A retest keeps last year's status, because the distinction it carries is exactly what
@@ -999,12 +1128,12 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         }
         evidence.update({evidence_id: local_evidence[evidence_id] for evidence_id in used_evidence})
         if mode == "editable" and row["display_id"] and not DISPLAY_ID.match(row["display_id"]):
-            raise ReportImportError(f'"{title}" has an invalid finding ID.')
+            raise ReportImportError(f'"{title}" has an invalid finding ID "{row["display_id"]}". A finding ID is one to five digits.')
         display_id = row["display_id"] if DISPLAY_ID.match(row["display_id"] or "") else None
         if mode == "retest":
             contents[3]["fragments"] = _empty_proof(scope, targets)
         findings.append({
-            "uid": _fresh("v"), "display_id": display_id, "title": title,
+            "uid": _fresh("v"), "display_id": display_id, "title": typed_titles[index],
             "likelihood": row["likelihood"], "impact": row["impact"], "severity": row["severity"],
             "status": status,
             "scope": scope,
@@ -1013,10 +1142,11 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             "cvss_vector": cvss_vector,
             "contents": contents,
         })
-    if unclaimed:
-        raise ReportImportError("The findings summary and detail sections do not match.")
     if unclaimed_cvss:
-        raise ReportImportError("The CVSS table and finding detail sections do not match.")
+        titles = [_clean(row.cells[1].text) or "(no title)" for row in unclaimed_cvss]
+        raise ReportImportError(
+            f"{_lists_without_heading('The CVSS table', titles)} {_headings_found([title for _, title in starts])}"
+        )
     return findings, dropped, rewritten
 
 
@@ -1059,6 +1189,122 @@ def _evidence_records(
             "sha256": hashlib.sha256(data).hexdigest(), "uploaded_at": uploaded_at,
         }
     return records
+
+
+def _fragment_runs(fragment: dict) -> list[dict]:
+    runs = list(fragment.get("runs") or [])
+    for item in fragment.get("items") or []:
+        runs.extend(item["runs"])
+    for cell in [*(fragment.get("header") or []), *(cell for row in fragment.get("rows") or [] for cell in row)]:
+        runs.extend(cell["runs"])
+    return runs
+
+
+def _fragment_text(fragment: dict) -> str:
+    return "".join(run["text"] for run in _fragment_runs(fragment)) or fragment.get("text") or ""
+
+
+def _value_text(value) -> str:
+    if value in (None, ""):
+        return "empty"
+    return f'"{value}"' if isinstance(value, str) else str(value)
+
+
+def _counted(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def _format_words(flags: tuple) -> str:
+    return " and ".join(name for flag, name in zip(flags, ("bold", "italic", "underlined")) if flag) or "plain"
+
+
+def _format_change(old_runs: list[dict], new_runs: list[dict]) -> str:
+    """Name the first stretch of identical text whose bold, italic or underline would change, or "" if none."""
+    def flags(run: dict) -> tuple:
+        return tuple(bool(run.get(key)) for key in ("bold", "italic", "underline"))
+
+    was = [flags(run) for run in old_runs for _ in run["text"]]
+    would_be = [flags(run) for run in new_runs for _ in run["text"]]
+    start = next((index for index, pair in enumerate(zip(was, would_be)) if pair[0] != pair[1]), None)
+    if start is None:
+        return ""
+    end = start
+    while end < len(was) and was[end] == was[start] and would_be[end] == would_be[start]:
+        end += 1
+    text = "".join(run["text"] for run in new_runs)[start:end]
+    return f'"{_excerpt(text)}" would change from {_format_words(was[start])} to {_format_words(would_be[start])}'
+
+
+def _fragment_change(old: dict, new: dict, section: str, status: str) -> str:
+    if old["type"] != new["type"]:
+        return f"A {_part_word(old['type'])} would become a {_part_word(new['type'])}."
+    old_text, new_text = _fragment_text(old), _fragment_text(new)
+    if old_text != new_text:
+        message = f'The report has: "{_excerpt(old_text)}". The app would store: "{_excerpt(new_text)}".'
+        if section == "in_conclusion" and default_conclusion_span(old_text):
+            message += f" The app writes the first sentence from the finding's status, {STATUS_LABELS[status]}."
+        return message
+    part = _part_word(old["type"])
+    scalars = [
+        key for key in sorted(old.keys() | new.keys())
+        if old.get(key) != new.get(key) and not isinstance(old.get(key, new.get(key)), (list, dict))
+    ]
+    if scalars:
+        changes = ", ".join(f"{key.replace('_', ' ')} from {_value_text(old.get(key))} to {_value_text(new.get(key))}" for key in scalars)
+        return f"Its {part} would change: {changes}."
+    if formatting := _format_change(_fragment_runs(old), _fragment_runs(new)):
+        return f"The formatting of its {part} would change: {formatting}."
+    return f"The structure of its {part} would change."
+
+
+def first_change(before: dict, after: dict) -> str:
+    """Name the first difference between two dumps of one report, in the report's own words."""
+    for old, new in zip(before["vulnerabilities"], after["vulnerabilities"]):
+        if old == new:
+            continue
+        title = old["title"]
+        after_sections = {content["type"]: content for content in new["contents"]}
+        for content in old["contents"]:
+            other = after_sections.get(content["type"])
+            if other is None or other == content:
+                continue
+            head = f'Importing would change the {SECTION_LABELS[content["type"]]} section of "{title}".'
+            if len(content["fragments"]) != len(other["fragments"]):
+                return (
+                    f"{head} It has {_counted(len(content['fragments']), 'part')} "
+                    f"and the app would store {_counted(len(other['fragments']), 'part')}."
+                )
+            for was, would_be in zip(content["fragments"], other["fragments"]):
+                if was != would_be:
+                    return f"{head} {_fragment_change(was, would_be, content['type'], old['status'])}"
+        for key in old:
+            if key == "contents" or old[key] == new.get(key):
+                continue
+            if key == "scope":
+                listed, kept = len(old[key].get("target_ids", [])), len(new[key].get("target_ids", []))
+                if listed == kept:
+                    return f'Importing would change the locations of "{title}".'
+                return (
+                    f'Importing would change the locations of "{title}": '
+                    f"the report lists {_counted(listed, 'scope target')} for it and the app would keep {kept}."
+                )
+            return (
+                f'Importing would change "{title}": its {key.replace("_", " ")} would change '
+                f"from {_excerpt(_value_text(old[key]))} to {_excerpt(_value_text(new.get(key)))}."
+            )
+        return f'Importing would change the sections of "{title}".'
+    for key in before:
+        if key != "vulnerabilities" and before[key] != after.get(key):
+            return f"Importing would change the report's {key.replace('_', ' ')}."
+    return "Importing would change the report."
+
+
+def stranded_scope_refusal(titles: list[str]) -> str:
+    uses = "it uses" if len(titles) == 1 else "they use"
+    return (
+        f"Importing would leave {_quoted(titles)} with no location. "
+        f"The report does not list the environment or app type of the scope targets {uses} as tested."
+    )
 
 
 def parse_report_docx(
@@ -1118,7 +1364,9 @@ def parse_report_docx(
             label = re.sub(r"\s+\d{4}$", "", parts[-1])
             report_type = REPORT_TYPE_BY_LABEL.get(label)
             if mode == "editable" and report_type is None:
-                raise ReportImportError(f"Unknown report type: {label}")
+                raise ReportImportError(
+                    f'Unknown report type "{label}" in the cover title. It must be one of: {", ".join(REPORT_TYPE_LABELS.values())}.'
+                )
             break
 
     formats = numbering_formats(document)

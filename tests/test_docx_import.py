@@ -26,7 +26,7 @@ from docx.oxml.ns import qn
 from fastapi.testclient import TestClient
 
 from app import main
-from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _parsed_ticket_lines, classify_paragraph, numbering_formats, parse_report_docx
+from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _parsed_ticket_lines, classify_paragraph, first_change, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import RESOLVED_REMEDIATION, character_issue, finding_input_issues, setup_issues
 from tests.support import png_bytes, use_temp_workspace
@@ -63,20 +63,75 @@ def base_render() -> bytes:
         return render_report_docx(FragmentRecognitionTests._report(folder), TEMPLATE, folder)
 
 
-def conclusion_render(runs: list[Run], status: str = "open_previously_discovered") -> bytes:
+def retest_shaped(finding: Vulnerability, conclusion: list[Run], status: str = "open_previously_discovered") -> None:
+    """Give a finding the five sections a previously discovered one prints, ending in ``conclusion``."""
+    finding.status = status
+    finding.contents.extend([
+        Content(type="previous_proof_of_concept", fragments=[
+            ListFragment(frag_id="f_prev", type="numbered_list", items=[ListItem(runs=[Run(text="Last year's step.")])]),
+        ]),
+        Content(type="in_conclusion", fragments=[ParagraphFragment(frag_id="f_conc", type="paragraph", runs=conclusion)]),
+    ])
+
+
+def conclusion_render(runs: list[Run], status: str = "open_previously_discovered", title: str | None = None) -> bytes:
     """The shared finding as a retest-shaped finding whose In Conclusion section holds ``runs``."""
     with tempfile.TemporaryDirectory() as temporary_directory:
         folder = Path(temporary_directory)
         report = FragmentRecognitionTests._report(folder)
-        finding = report.vulnerabilities[0]
-        finding.status = status
-        finding.contents.extend([
-            Content(type="previous_proof_of_concept", fragments=[
-                ListFragment(frag_id="f_prev", type="numbered_list", items=[ListItem(runs=[Run(text="Last year's step.")])]),
-            ]),
-            Content(type="in_conclusion", fragments=[ParagraphFragment(frag_id="f_conc", type="paragraph", runs=runs)]),
-        ])
+        if title:
+            report.vulnerabilities[0].title = title
+        retest_shaped(report.vulnerabilities[0], runs, status)
         return render_report_docx(report, TEMPLATE, folder)
+
+
+@functools.cache
+def two_findings_render() -> bytes:
+    """Two previously discovered findings in different severity groups, so each heading sits under its
+    own group heading and one can be damaged without the other."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        folder = Path(temporary_directory)
+        report = FragmentRecognitionTests._report(folder)
+        first = report.vulnerabilities[0]
+        retest_shaped(first, [Run(text="Still reachable on retest.")])
+        second = copy.deepcopy(first)
+        second.uid, second.display_id, second.title, second.severity = "v_second", "002", "Second finding", "medium"
+        for content in second.contents:
+            for fragment in content.fragments:
+                fragment.frag_id += "_second"
+        report.vulnerabilities.append(second)
+        return render_report_docx(report, TEMPLATE, folder)
+
+
+def _heading(document, text: str):
+    """The first body paragraph whose whole text is ``text``."""
+    return next(paragraph for paragraph in document.paragraphs if " ".join(paragraph.text.split()) == text)
+
+
+def _set_text(paragraph, text: str) -> None:
+    for run in paragraph.runs[1:]:
+        run.text = ""
+    paragraph.runs[0].text = text
+
+
+def _table_starting(document, header: str):
+    return next(table for table in document.tables if table.rows[0].cells[0].text.strip() == header)
+
+
+def _table_after(document, heading: str):
+    """The first table after the paragraph whose whole text is ``heading``."""
+    element = _heading(document, heading)._p.getnext()
+    while element.tag != qn("w:tbl"):
+        element = element.getnext()
+    return next(table for table in document.tables if table._tbl is element)
+
+
+def _edited(data: bytes, change) -> bytes:
+    document = Document(BytesIO(data))
+    change(document)
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 class FragmentRecognitionTests(unittest.TestCase):
@@ -614,9 +669,10 @@ class FragmentRecognitionTests(unittest.TestCase):
         # None is the unedited document: it must import, or every refusal below proves nothing.
         cases = {
             None: None,
-            "display_id": "invalid finding ID",
-            "cvss_score": "invalid CVSS score",
-            "severity_review_tickets": "invalid severity review ticket",
+            "display_id": '"Authorization bypass" has an invalid finding ID "ABC". A finding ID is one to five digits.',
+            "cvss_score": '"Authorization bypass" has an invalid CVSS score "8.1?". CVSS Score cannot have "?".',
+            "cvss_vector": '"Authorization bypass" has an invalid CVSS vector "CVSS:3.1/AV:N (bad)". CVSS Vector cannot have " ", "(" or ")".',
+            "severity_review_tickets": '"Authorization bypass" has an invalid severity review ticket: "not-a-ticket".',
         }
         for field, message in cases.items():
             with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary_directory:
@@ -635,6 +691,9 @@ class FragmentRecognitionTests(unittest.TestCase):
                 elif field == "cvss_score":
                     cvss = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Section")
                     cvss.rows[1].cells[3].text = "8.1?"
+                elif field == "cvss_vector":
+                    cvss = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Section")
+                    cvss.rows[1].cells[4].text = "CVSS:3.1/AV:N (bad)"
                 elif field == "severity_review_tickets":
                     paragraph = next(paragraph for paragraph in document.paragraphs if "GRIMPEN-1234" in paragraph.text)
                     paragraph.text = "GRIMPEN-1234\nnot-a-ticket"
@@ -644,8 +703,9 @@ class FragmentRecognitionTests(unittest.TestCase):
                 if message is None:
                     parse_report_docx(output.getvalue(), mode="editable")
                     continue
-                with self.assertRaisesRegex(ReportImportError, message):
+                with self.assertRaises(ReportImportError) as raised:
                     parse_report_docx(output.getvalue(), mode="editable")
+                self.assertIn(message, str(raised.exception))
 
     def test_editable_scope_recovers_all_four_template_variants(self) -> None:
         resources = Path(__file__).resolve().parent.parent / "resources"
@@ -840,7 +900,10 @@ class FragmentRecognitionTests(unittest.TestCase):
             )]
 
             data = render_report_docx(report, TEMPLATE, folder, allow_incomplete=True)
-            with self.assertRaisesRegex(ReportImportError, "edited remediation while Resolved"):
+            with self.assertRaisesRegex(
+                ReportImportError,
+                r'"Authorization bypass" has edited remediation while Resolved\..*but the report has: "Keep this manually edited advice\."',
+            ):
                 parse_report_docx(data, mode="editable")
 
     def test_an_unmatched_api_location_becomes_a_visible_review_target(self) -> None:
@@ -1031,7 +1094,7 @@ class FragmentRecognitionTests(unittest.TestCase):
         output = BytesIO()
         document.save(output)
 
-        with self.assertRaisesRegex(ReportImportError, "Rotated or flipped"):
+        with self.assertRaisesRegex(ReportImportError, r'^In the Proof of Concept section of "Authorization bypass": Rotated or flipped'):
             parse_report_docx(output.getvalue(), mode="editable")
 
     def test_the_note_prefix_is_not_kept_as_content(self) -> None:
@@ -1059,10 +1122,15 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual([finding["display_id"] for finding in payload["vulnerabilities"]], ["001", "002"])
             Report.model_validate(payload)
 
-    def test_a_title_with_extra_spaces_imports_back_with_the_spaces_collapsed(self) -> None:
-        """The title is printed as typed in the heading and in the summary row, so a report the app wrote
-        has to read back whatever spaces it holds."""
-        for label, title in (("a double space", "Cross  site scripting"), ("a non-breaking space", "Cross\u00a0site scripting")):
+    def test_a_title_with_extra_spaces_imports_back_as_typed(self) -> None:
+        """The heading and the Findings Summary table print the title as typed, so a report the app wrote
+        must pair them whatever spaces the title holds, and the finding keeps the title as typed."""
+        titles = (
+            ("a double space", "Cross  site scripting"),
+            ("a non-breaking space", "Cross\u00a0site scripting"),
+            ("a trailing space", "Cross site scripting "),
+        )
+        for label, title in titles:
             with tempfile.TemporaryDirectory() as temporary_directory:
                 folder = Path(temporary_directory)
                 report = self._report(folder)
@@ -1071,11 +1139,296 @@ class FragmentRecognitionTests(unittest.TestCase):
             for mode in ("retest", "editable"):
                 with self.subTest(title=label, mode=mode):
                     payload, _evidence, _summary = parse_report_docx(data, mode=mode)
-                    self.assertEqual(payload["vulnerabilities"][0]["title"], "Cross site scripting")
+                    self.assertEqual(payload["vulnerabilities"][0]["title"], title)
 
     def test_a_file_that_is_not_a_word_document_is_refused_by_name(self) -> None:
         with self.assertRaisesRegex(ReportImportError, "not a readable Word document"):
             parse_report_docx(b"not a document")
+
+
+class RefusalMessageTests(unittest.TestCase):
+    """A refused Word report says which finding and which part of the report broke which rule, and what
+    the importer expected and found, in the words the report itself uses (see GLOSSARY.md)."""
+
+    def assertRefused(self, data: bytes, *expected: str) -> None:
+        self.assertTrue(expected, "a refusal test must say what the message has to name")
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(ReportImportError) as raised:
+                    parse_report_docx(data, mode=mode)
+                for fragment in expected:
+                    self.assertIn(fragment, str(raised.exception))
+
+    def test_a_finding_heading_in_another_style_is_named_with_the_style_it_has(self) -> None:
+        def restyle(document):
+            _heading(document, "Second finding")._p.find(qn("w:pPr") + "/" + qn("w:pStyle")).set(qn("w:val"), "Heading2")
+
+        self.assertRefused(
+            _edited(two_findings_render(), restyle),
+            'The Findings Summary table lists "Second finding", but no finding heading has that title.',
+            'Finding headings found: "Authorization bypass".',
+            "A finding heading is a Report Heading 2 paragraph after the table and before the Appendix, with the same title as its row.",
+            'Headings in other styles after the table: Heading2 ("Second finding").',
+        )
+
+    def test_a_row_and_a_heading_with_different_titles_are_both_named(self) -> None:
+        def rename_row(document):
+            _set_text(_table_starting(document, "Findings").rows[2].cells[0].paragraphs[0], "Renamed finding")
+
+        self.assertRefused(
+            _edited(two_findings_render(), rename_row),
+            'The Findings Summary table lists "Renamed finding", but no finding heading has that title.',
+            'The finding heading "Second finding" is not in the Findings Summary table.',
+            'Finding headings found: "Authorization bypass", "Second finding".',
+        )
+
+    def test_a_report_without_a_findings_summary_table_says_what_it_looked_for(self) -> None:
+        def rename_header(document):
+            _set_text(_table_starting(document, "Findings").rows[0].cells[0].paragraphs[0], "Issues")
+
+        self.assertRefused(
+            _edited(two_findings_render(), rename_header),
+            "The Word report has no Findings Summary table.",
+            'whose first header cell is "Findings"',
+        )
+
+    def test_a_cvss_row_for_another_title_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.segment = "Asia"
+            finding = report.vulnerabilities[0]
+            finding.cvss_score = "8.1"
+            finding.cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+            data = render_report_docx(report, main_template_path(report, Path(__file__).resolve().parent.parent / "resources"), folder)
+
+        def rename_row(document):
+            _set_text(_table_starting(document, "Section").rows[1].cells[1].paragraphs[0], "Other finding")
+
+        self.assertRefused(
+            _edited(data, rename_row),
+            'The CVSS table lists "Other finding", but no finding heading has that title.',
+            'Finding headings found: "Authorization bypass".',
+        )
+
+    def test_a_missing_section_lists_the_sections_expected_and_found(self) -> None:
+        self.assertRefused(
+            _edited(two_findings_render(), lambda document: _set_text(_heading(document, "Description:"), "Summary:")),
+            '"Authorization bypass" is Open (Previously Discovered), so it needs these sections in this order: '
+            "Description, Recommended Remediation, Previous Proof of Concept, Proof of Concept, In Conclusion.",
+            "Found: Recommended Remediation, Previous Proof of Concept, Proof of Concept, In Conclusion.",
+            'A section starts at a paragraph that holds only its label, such as "Description:".',
+        )
+
+    def test_a_section_that_appears_twice_is_named(self) -> None:
+        self.assertRefused(
+            _edited(two_findings_render(), lambda document: _set_text(_heading(document, "Recommended Remediation:"), "Description:")),
+            '"Authorization bypass" has the Description section more than once.',
+        )
+
+    def test_a_value_that_differs_between_the_findings_summary_table_and_the_finding_table_names_both(self) -> None:
+        cases = (
+            (3, "Low", 'says Severity is "Low", but the finding\'s table says "High".'),
+            (4, "009", 'says ID is "009", but the finding\'s table says "001".'),
+            (5, "Resolved", 'says Status is "Resolved", but the finding\'s table says "Open (Previously Discovered)".'),
+        )
+        for column, value, expected in cases:
+            with self.subTest(column=column):
+                def change(document, column=column, value=value):
+                    _set_text(_table_starting(document, "Findings").rows[1].cells[column].paragraphs[0], value)
+
+                self.assertRefused(
+                    _edited(two_findings_render(), change),
+                    '"Authorization bypass": the Findings Summary table ' + expected,
+                )
+
+    def test_a_finding_without_its_table_is_named(self) -> None:
+        def remove_table(document):
+            table = _table_after(document, "Authorization bypass")._tbl
+            table.getparent().remove(table)
+
+        self.assertRefused(
+            _edited(two_findings_render(), remove_table),
+            '"Authorization bypass" has no finding table.',
+            "with the labels Severity, ID, Status and Location in its first column.",
+        )
+
+    def test_a_finding_with_two_tables_is_named(self) -> None:
+        def repeat_table(document):
+            table = _table_after(document, "Authorization bypass")._tbl
+            table.addnext(copy.deepcopy(table))
+
+        self.assertRefused(
+            _edited(two_findings_render(), repeat_table),
+            '"Authorization bypass" has more than one finding table.',
+            "A finding table is a table under the finding heading, before its first section,",
+        )
+
+    def test_a_location_heading_the_importer_does_not_know_is_named(self) -> None:
+        def rename_location_heading(document):
+            row = next(row for row in _table_after(document, "Authorization bypass").rows if row.cells[0].text.strip() == "Location")
+            _set_text(row.cells[1].paragraphs[0], "Somewhere else")
+
+        self.assertRefused(
+            _edited(two_findings_render(), rename_location_heading),
+            '"Authorization bypass" has an unsupported location heading "Somewhere else".',
+            'The first line of its Location row must start with "Production Environment" or end with "Environment:".',
+        )
+
+    def test_a_cover_value_given_two_ways_lists_both(self) -> None:
+        def give_two_values(document):
+            paragraphs = list(document.element.body.iter(qn("w:p")))
+            labels = [
+                index for index, paragraph in enumerate(paragraphs)
+                if "".join(node.text or "" for node in paragraph.iter(qn("w:t"))).strip() == "Delivered To"
+            ]
+            for index, value in zip(labels, ("Alice", "Bob")):
+                nodes = list(paragraphs[index + 1].iter(qn("w:t")))
+                nodes[0].text = value
+                for node in nodes[1:]:
+                    node.text = ""
+
+        with self.assertRaises(ReportImportError) as raised:
+            parse_report_docx(_edited(base_render(), give_two_values), mode="editable")
+
+        self.assertIn('The document contains conflicting values for "Delivered To": "Alice", "Bob".', str(raised.exception))
+
+    def test_an_unknown_report_type_in_the_cover_title_lists_the_known_ones(self) -> None:
+        def rename_type(document):
+            title = next(paragraph for paragraph in document.paragraphs[:20] if "Annual Pentest" in paragraph.text)
+            _set_text(title, "JH \u2013 Northstar Banking \u2013 Mystery Pentest 2026")
+
+        with self.assertRaises(ReportImportError) as raised:
+            parse_report_docx(_edited(base_render(), rename_type), mode="editable")
+
+        self.assertIn(
+            'Unknown report type "Mystery Pentest" in the cover title. It must be one of: Annual Pentest, Retest, Deployment Pentest, New Test.',
+            str(raised.exception),
+        )
+
+    def test_a_title_listed_more_often_than_it_has_headings_is_counted(self) -> None:
+        def share_a_title(document):
+            _set_text(_heading(document, "Second finding"), "Authorization bypass")
+            _set_text(_table_starting(document, "Findings").rows[2].cells[0].paragraphs[0], "Authorization bypass")
+            twin = [paragraph for paragraph in document.paragraphs if " ".join(paragraph.text.split()) == "Authorization bypass"][1]
+            twin._p.find(qn("w:pPr") + "/" + qn("w:pStyle")).set(qn("w:val"), "Heading2")
+
+        self.assertRefused(
+            _edited(two_findings_render(), share_a_title),
+            'The Findings Summary table lists "Authorization bypass" 2 times, but only 1 finding heading has that title.',
+        )
+
+    def test_a_title_with_more_headings_than_rows_is_counted(self) -> None:
+        def share_a_title(document):
+            _set_text(_heading(document, "Second finding"), "Authorization bypass")
+
+        self.assertRefused(
+            _edited(two_findings_render(), share_a_title),
+            'The report has 2 finding headings titled "Authorization bypass", but the Findings Summary table lists it once.',
+        )
+
+    def test_a_long_list_of_titles_with_no_heading_is_cut_after_eight(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            first = report.vulnerabilities[0]
+            for number, letter in enumerate("BCDEFGHIJ", start=2):
+                twin = copy.deepcopy(first)
+                twin.uid, twin.display_id, twin.title = f"v_{letter}", f"{number:03d}", f"Finding {letter}"
+                for content in twin.contents:
+                    for fragment in content.fragments:
+                        fragment.frag_id += f"_{letter}"
+                report.vulnerabilities.append(twin)
+            data = render_report_docx(report, TEMPLATE, folder)
+
+        def drop_headings(document):
+            for letter in "BCDEFGHIJ":
+                heading = _heading(document, f"Finding {letter}")._p
+                heading.getparent().remove(heading)
+
+        self.assertRefused(
+            _edited(data, drop_headings),
+            'lists "Finding B", "Finding C", "Finding D", "Finding E", "Finding F", "Finding G", "Finding H", "Finding I" and 1 more, '
+            "but no finding heading has those titles.",
+        )
+
+
+class FirstChangeTests(unittest.TestCase):
+    """The editable import's last checks say what the app would change by comparing two dumps of one report."""
+
+    PLAIN = {"bold": False, "italic": False, "underline": False}
+
+    def _report(self, fragments: list[dict], contents: list[dict] | None = None, **changes) -> dict:
+        finding = {
+            "title": "Authorization bypass", "status": "open_new", "severity": "high", "scope": {"target_ids": ["a"]},
+            "contents": [{"type": "description", "fragments": fragments}] if contents is None else contents,
+        }
+        return {"engagement": {"app_name": "Northstar"}, "vulnerabilities": [{**finding, **changes}]}
+
+    def test_each_kind_of_difference_is_named(self) -> None:
+        def paragraph(*runs):
+            return {"type": "paragraph", "runs": [{"text": text, **self.PLAIN, **flags} for text, flags in runs]}
+
+        def numbered(*items):
+            return {"type": "numbered_list", "items": [{"runs": [{"text": text, **self.PLAIN}]} for text in items]}
+
+        head = 'Importing would change the Description section of "Authorization bypass". '
+        picture = {"type": "image", "environment": "production", "evidence_id": None, "caption": "", "width_mm": None}
+        cases = (
+            (
+                "a part of another kind",
+                self._report([paragraph(("Same", {}))]), self._report([picture]),
+                head + "A paragraph would become a picture.",
+            ),
+            (
+                "a different number of parts",
+                self._report([paragraph(("Same", {}))]), self._report([paragraph(("Same", {})), picture]),
+                head + "It has 1 part and the app would store 2 parts.",
+            ),
+            (
+                "formatting only",
+                self._report([paragraph(("Open now", {}))]), self._report([paragraph(("Open", {}), (" now", {"bold": True}))]),
+                head + 'The formatting of its paragraph would change: " now" would change from plain to bold.',
+            ),
+            (
+                "how a list is divided",
+                self._report([numbered("ab")]), self._report([numbered("a", "b")]),
+                head + "The structure of its numbered list would change.",
+            ),
+            (
+                "a finding value",
+                self._report([]), self._report([], severity="low"),
+                'Importing would change "Authorization bypass": its severity would change from "high" to "low".',
+            ),
+            (
+                "locations of the same number",
+                self._report([]), self._report([], scope={"target_ids": ["b"]}),
+                'Importing would change the locations of "Authorization bypass".',
+            ),
+            (
+                "locations that would be dropped",
+                self._report([], scope={"target_ids": ["a", "b"]}), self._report([]),
+                'Importing would change the locations of "Authorization bypass": the report lists 2 scope targets for it and the app would keep 1.',
+            ),
+            (
+                "a section that would go",
+                self._report([paragraph(("Same", {}))]), self._report([], contents=[]),
+                'Importing would change the sections of "Authorization bypass".',
+            ),
+            (
+                "something outside the findings",
+                self._report([]), {**self._report([]), "engagement": {"app_name": "Other"}},
+                "Importing would change the report's engagement.",
+            ),
+            (
+                "nothing at all",
+                self._report([]), self._report([]),
+                "Importing would change the report.",
+            ),
+        )
+        for label, before, after, expected in cases:
+            with self.subTest(label):
+                self.assertEqual(first_change(before, after), expected)
 
 
 class ImportRouteTests(unittest.TestCase):
@@ -1586,7 +1939,8 @@ class ImportRouteTests(unittest.TestCase):
         response = self._import("report.docx", output.getvalue(), "editable")
 
         self.assertEqual(response.status_code, 422)
-        self.assertIn("invalid Location row", response.json()["detail"])
+        self.assertIn('"Authorization bypass" has an invalid Location row', response.json()["detail"])
+        self.assertIn("the row has 1 of the 2 cells it needs", response.json()["detail"])
         self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_truncated_component_row_is_rejected_without_writing(self) -> None:
@@ -1653,6 +2007,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("does not identify exactly one supported app type", response.json()["detail"])
+        self.assertIn('mentions 2', response.json()["detail"])
         self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_truncated_asia_section_row_is_rejected_without_writing(self) -> None:
@@ -1677,6 +2032,7 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("invalid Section row", response.json()["detail"])
+        self.assertIn('the row for "Authorization bypass" has 4 cells and needs 5', response.json()["detail"])
         self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_empty_limitations_row_is_rejected_without_writing(self) -> None:
@@ -1703,6 +2059,19 @@ class ImportRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertRegex(response.json()["detail"], r"^This Word report can't be imported: .*invalid Limitations row")
+
+    def test_a_refusal_through_the_route_names_what_did_not_pair_up(self) -> None:
+        def restyle(document):
+            _heading(document, "Second finding")._p.find(qn("w:pPr") + "/" + qn("w:pStyle")).set(qn("w:val"), "Heading2")
+
+        response = self._import("report.docx", _edited(two_findings_render(), restyle), "editable")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertRegex(
+            response.json()["detail"],
+            r'^This Word report can\'t be imported: The Findings Summary table lists "Second finding", but no finding heading has that title\.',
+        )
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
 
     def test_an_export_that_fails_names_an_export(self) -> None:
         response = self._import("report.docx", b"not valid JSON", "prompt")
@@ -1769,8 +2138,23 @@ class ImportRouteTests(unittest.TestCase):
         payload["scope_targets"].append(duplicate)
         payload["vulnerabilities"][0]["scope"]["target_ids"].append("tgt_duplicate")
 
-        with self.assertRaisesRegex(ValueError, "Scope reconciliation would alter imported locations"):
+        with self.assertRaises(ValueError) as raised:
             main.finalize_editable_import(payload)
+
+        self.assertIn('Importing would change the locations of "Authorization bypass": the report lists 2 scope targets for it and the app would keep 1.', str(raised.exception))
+
+    def test_a_finding_whose_scope_would_be_dropped_is_named(self) -> None:
+        payload, _evidence, _summary = parse_report_docx(self._docx(), mode="editable")
+        payload["engagement"]["tested_environments"] = ["non_production"]
+
+        with self.assertRaises(ValueError) as raised:
+            main.finalize_editable_import(payload)
+
+        self.assertIn(
+            'Importing would leave "Authorization bypass" with no location. '
+            "The report does not list the environment or app type of the scope targets it uses as tested.",
+            str(raised.exception),
+        )
 
     def test_a_conclusion_that_continues_after_the_apps_sentence_imports_as_an_editable_copy(self) -> None:
         """Only how the text is split into runs differs once the server rewrites the sentence, so the
@@ -1784,12 +2168,61 @@ class ImportRouteTests(unittest.TestCase):
         text = "".join(run["text"] for fragment in conclusion["fragments"] for run in fragment["runs"])
         self.assertEqual(text, 'The finding "Authorization bypass" is still Open. Retested on 5 October.')
 
-    def test_a_conclusion_sentence_that_disagrees_with_the_status_is_still_refused(self) -> None:
+    def test_a_title_with_extra_spaces_still_imports_as_an_editable_copy_when_the_conclusion_names_it(self) -> None:
+        """The conclusion sentence carries the title as typed, so a title that is stored with fewer spaces
+        makes provisioning rewrite the sentence and the guard take that for an edit."""
+        for label, title in (("a double space", "Cross  site scripting"), ("a trailing space", "Cross site scripting ")):
+            with self.subTest(title=label):
+                runs = [Run(text=f'The finding "{title}" is still '), Run(text="Open", bold=True), Run(text=". Retested on 5 October.")]
+                payload, _evidence, _summary = parse_report_docx(conclusion_render(runs, title=title), mode="editable")
+
+                imported, _normalizations = main.finalize_editable_import(payload)
+
+                self.assertEqual(imported["vulnerabilities"][0]["title"], title)
+
+    def test_a_conclusion_sentence_whose_status_word_lost_its_bold_is_refused_with_the_word_named(self) -> None:
+        runs = [Run(text='The finding "Authorization bypass" is still Open. Retested on 5 October.')]
+        payload, _evidence, _summary = parse_report_docx(conclusion_render(runs), mode="editable")
+
+        with self.assertRaises(ValueError) as raised:
+            main.finalize_editable_import(payload)
+
+        self.assertIn(
+            'Importing would change the In Conclusion section of "Authorization bypass". '
+            'The formatting of its paragraph would change: "Open" would change from plain to bold.',
+            str(raised.exception),
+        )
+
+    def test_a_conclusion_sentence_that_disagrees_with_the_status_is_refused_by_name(self) -> None:
         runs = [Run(text='The finding "Authorization bypass" is still '), Run(text="Open", bold=True), Run(text=". Retested on 5 October.")]
         payload, _evidence, _summary = parse_report_docx(conclusion_render(runs, status="closed"), mode="editable")
 
-        with self.assertRaisesRegex(ValueError, "Server provisioning would alter imported user content"):
+        with self.assertRaises(ValueError) as raised:
             main.finalize_editable_import(payload)
+
+        message = str(raised.exception)
+        for expected in (
+            'Importing would change the In Conclusion section of "Authorization bypass".',
+            'The report has: "The finding "Authorization bypass" is still Open. Retested on 5 October."',
+            'The app would store: "The finding "Authorization bypass" is now CLOSED. Retested on 5 October."',
+            "The app writes the first sentence from the finding's status, Closed.",
+        ):
+            self.assertIn(expected, message)
+
+    def test_a_picture_in_the_description_is_refused_with_the_finding_and_section_named(self) -> None:
+        def paste_picture(document):
+            picture = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+            _heading(document, "Description:")._p.addnext(copy.deepcopy(picture._p))
+
+        payload, _evidence, _summary = parse_report_docx(_edited(base_render(), paste_picture), mode="editable")
+
+        with self.assertRaises(ValueError) as raised:
+            main.finalize_editable_import(payload)
+
+        self.assertIn(
+            'Importing would change the Description section of "Authorization bypass". Its picture would change: environment from empty to "production".',
+            str(raised.exception),
+        )
 
     def test_editable_preflight_names_invalid_fields_before_scope_reconciliation_loss(self) -> None:
         """Acceptance checks fields before the import compares locations, so failing both names the fields."""

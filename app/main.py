@@ -30,7 +30,7 @@ from . import acceptance
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, main_template_path, render_report_docx
 from .library import Library
-from .docx_import import ReportImportLimitError, parse_report_docx
+from .docx_import import ReportImportLimitError, first_change, parse_report_docx, stranded_scope_refusal
 from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_is_complete, provision, report_export_filename, scope_text_from_targets, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 from .vocabulary import client_vocabulary
@@ -668,16 +668,18 @@ def finalize_editable_import(payload: dict) -> tuple[dict, list[str]]:
     try:
         report = acceptance.check(prior, candidate)
     except acceptance.ScopeTargetRemoved as error:
-        raise ValueError(f"Recovered scope would strand: {', '.join(error.findings)}") from error
+        raise ValueError(stranded_scope_refusal(error.findings)) from error
     except acceptance.InvalidFields as error:
         raise ValueError("Imported report contains fields that cannot be saved: " + "; ".join([*error.setup_issues, *error.finding_issues])) from error
-    if _editable_user_projection(report) != imported_user:
-        raise ValueError("Scope reconciliation would alter imported locations")
+    checked = _editable_user_projection(report)
+    if checked != imported_user:
+        raise ValueError(first_change(imported_user, checked))
 
     before_provision = _provisioned_projection(report)
     acceptance.provision(report)
-    if _editable_user_projection(report) != imported_user:
-        raise ValueError("Server provisioning would alter imported user content")
+    provisioned = _editable_user_projection(report)
+    if provisioned != imported_user:
+        raise ValueError(first_change(imported_user, provisioned))
     after_provision = _provisioned_projection(report)
     normalizations = [] if before_provision == after_provision else ["Server-owned empty editor placeholders were added."]
     acceptance.provision(report)

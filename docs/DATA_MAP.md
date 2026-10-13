@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-14**, after the editable import's change guard began comparing text rather than how provisioning splits it into runs.
+> Last verified against source: **2026-10-14**, after the guard that builds an editable copy began comparing text rather than how provisioning splits it into runs, and import refusals began naming the finding, the section and what was found.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -311,13 +311,15 @@ Both modes mint new identities and retain only visible document state; neither r
 **Editable mode is untouched and keeps Closed as Closed**, which is also the way back for anyone who needs a dropped finding, since a dropped finding takes its evidence and its typed work with it.
 The summary key carrying both is still named `dropped_resolved` and was deliberately not renamed: `manager.js` reads `summary.dropped_resolved || []`, so a half-landed rename fails **silently** — the dropped-findings notice simply stops appearing — and the accurate name buys nothing the comment beside the key does not.
 A status label this app does not recognise — a report from an older version, or a hand-edited cell — is **assumed** to be `open_previously_discovered` rather than refusing the document, and the assumption is named in `warnings`.
-The summary and detail Status cells are compared only when **both** name a status this app knows, so a hand-edit to one cell is not an inconsistency; two known labels that disagree still are, and still refuse.
+The Status cells of the Findings Summary table and the finding table are compared only when **both** name a status this app knows, so a hand-edit to one cell is not an inconsistency; two known labels that disagree still are, and still refuse.
 A finding that took the fallback may carry either section shape, and the editable path pads it to `content_types_for_status` before handing it over, because `finalize_editable_import` refuses an import whose sections differ in **order** from what provisioning would produce.
 
 Editable parsing creates covered review targets for ambiguous finding locations so their exact text remains visible on Setup and selected on Findings.
 `finalize_editable_import` validates the parsed `Report`, serializes targets through `scope_text_from_targets`, runs `acceptance.check` and `acceptance.provision` as a save does, provisions a second time to prove a fixed point, and only then calls `Workspace.import_report` once.
 Because `check` runs the field checks before the import compares locations, a document that fails both is refused for its fields.
-Every "would the server change what was imported" comparison joins neighbouring runs that differ only in text (`_with_merged_runs`), because `provision` re-splits the default In Conclusion sentence from any text that follows it in the same run, and a split is not an edit.
+The comparisons that ask whether the server would change what was imported first join neighbouring runs that differ only in text (`_with_merged_runs`).
+`provision` re-splits the default In Conclusion sentence from any text after it in the same run, and a split is not an edit.
+A refusal from these comparisons is worded by `first_change` in `docx_import.py`: the finding, the section and the part that would change, with what the report has and what the app would store.
 Embedded PNG bytes remain unchanged, are checked against package/member/pixel/evidence limits, and are stored one-for-one with reachable image fragments.
 Their original upload metadata and pre-render pixels are unavailable, so the manager warns that they are Word-rendered copies.
 

@@ -158,12 +158,12 @@ render. Requiring a value is `generation_issues`' job, and only when the segment
 is Asia (`app/docx_report.py` L112-L116) — a field the tester cannot see must
 never block their report.
 
-Reading a finished report back, `parse_report_docx` pairs this table with finding
-details by title **and occurrence order**, so duplicate titles retain distinct
+Reading a finished report back, `parse_report_docx` pairs this table with the finding
+headings by title **and occurrence order**, so duplicate titles retain distinct
 rows. Editable mode keeps Resolved and Closed rows; retest claims their rows
 before applying its intentional Resolved and Closed filter. A non-empty editable
 score or vector must pass the same Unicode-aware character allowlist as an
-ordinary save or the entire import is rejected; it is never silently erased.
+ordinary save or the entire import is refused; it is never silently erased.
 
 ## Import contract
 
@@ -196,6 +196,25 @@ Unmatched or ambiguous finding locations become selected, covered review
 targets, so their text remains visible on Setup and Findings rather than being
 discarded on the first save.
 
+A refused document says why. Before it reads any finding, the importer pairs the
+Findings Summary rows with the finding headings, which are `ReportHeading2`
+paragraphs between that table and the Appendix. Titles are compared with their
+spaces collapsed, but a finding keeps its title as printed, because the default
+In Conclusion sentence carries it that way. A title with no partner on either
+side is named with the headings the importer did find, and a title listed more
+often than it has headings is counted. A heading in one of Word's own heading
+styles (`Heading2`) is listed with its style.
+
+Each finding then needs a finding table (the labels Severity, ID, Status and
+Location in its first column, before its first section) and the sections its
+status prints, in order. A value that differs between the Findings Summary row
+and the finding table, a missing or repeated section, and an invalid ID, CVSS
+value or ticket are each named with the finding and what was found. A fragment
+that cannot be read is named with its section too. The wording is in
+`app/docx_import.py`, pinned by tests in `tests/test_docx_import.py`. The checks
+in `finalize_editable_import` name the finding, the section and what the app
+would change (`first_change`).
+
 Every retained image occurrence receives fresh evidence identity while keeping
 its embedded PNG bytes exactly. ZIP member counts and expanded size, media byte
 size, selected evidence aggregate, PNG dimensions, and pixel count are bounded
@@ -224,7 +243,7 @@ Rating names and tags are matched case-insensitively.
 | Low | `RGBColor(112, 173, 71)` / `70AD47` |
 | Informational | `RGBColor(81, 81, 81)` / `515151` |
 
-Likelihood, impact, and severity values in the Findings summary table are
+Likelihood, impact, and severity values in the Findings Summary table are
 always rendered at `12 pt`.
 
 Non-rating tags and unrecognized rating values retain the color defined by the
@@ -241,8 +260,8 @@ template.
 
 ## Findings
 
-The summary table is rebuilt from its generic prototype row with one row per
-finding. `{{findings}}` is the insertion point for the component hierarchy:
+The Findings Summary table is rebuilt from its generic prototype row with one
+row per finding. `{{findings}}` is the insertion point for the component hierarchy:
 
 1. A document from `resources/severity_titles/` is inserted for every severity
   that has findings.
@@ -265,14 +284,14 @@ this app writes a report it cannot read back. `STATUS_LABELS` in
 call sites are bare subscripts, and the status cell is neither recoloured nor
 resized, so a fifth label was all the document needed.
 
-Detail sections are generated dynamically:
+Each finding's heading, table and sections are generated dynamically:
 
 - Empty severity categories are omitted.
 - Multiple findings of one severity share one severity-title component.
 - Finding title, likelihood, impact, severity, ID, status, and affected locations
   are populated from report data.
-- A finding with no Vuln ID leaves that cell blank in both the findings summary
-  and the finding's detail table; the internal `uid` is never printed.
+- A finding with no Vuln ID leaves that cell blank in both the Findings Summary
+  table and the finding table; the internal `uid` is never printed.
 - Affected locations render as a real bulleted list cloned from
   `resources/fragments/bulleted_fragment.docx`, forced left-aligned, one bullet
   per location. The bullet glyph comes from the list style, so it is not part of
@@ -296,7 +315,7 @@ A report with no findings of any status prints a fixed layout instead of the
 findings body. The decisions are in `docs/plans/no-findings-report.md` and
 `docs/adr/0002-no-findings-report-is-derived-and-confirmed-per-request.md`.
 
-- The Findings summary table gets one row: `NO_FINDINGS_TITLE`
+- The Findings Summary table gets one row: `NO_FINDINGS_TITLE`
   (`(No vulnerability found)`, in `app/docx_import.py`), then `N/A` for
   Likelihood, Impact, Severity, ID and Status. No cell is coloured. The three
   rating cells are set to 12 pt like any rating, because their prototype token

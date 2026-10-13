@@ -108,7 +108,9 @@ parsed report, seeds Setup scope from its targets, runs it through acceptance in
 memory, and proves a second provision pass is stable. Parser resource-limit failures
 return `413`; malformed or lossy imports return `422` before persistence. The
 `422` message starts "This Word report can't be imported: " when the bytes are a
-generated DOCX, and "Select a valid VulnReport export: " otherwise.
+generated DOCX, and "Select a valid VulnReport export: " otherwise. For a Word report
+the rest of the message is the cause: the finding or table concerned, what the importer
+expected and what it found.
 
 Successful DOCX responses add `source: "docx"`, the selected `mode`, and a
 mode-specific `summary`; bundle responses retain `{report_id, source:

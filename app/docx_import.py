@@ -654,7 +654,7 @@ def _summary_rows(document) -> list[dict]:
         if len(cells) < 6 or not cells[0]:
             continue
         rows.append({
-            "title": cells[0], "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
+            "title": " ".join(cells[0].split()), "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
             "severity": cells[3].lower() or "informational", "display_id": cells[4],
             "status": STATUS_BY_LABEL.get(cells[5], FALLBACK_STATUS), "status_label": cells[5],
         })

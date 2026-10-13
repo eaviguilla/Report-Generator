@@ -31,6 +31,7 @@
     chip.replaceChildren(Object.assign(document.createElement("b"), {textContent: String(total)}), document.createTextNode(` ${noun}${total === 1 ? "" : "s"}`));
     chip.hidden = !total;
   };
+  let loadRevision = 0;
   // Drawn rather than lettered, so four actions per row stop shouting in red and blue.
   const ACTION_PATHS = {
     rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
@@ -46,10 +47,13 @@
     return `<article class="report-row" data-report-id="${reportId}"><a class="report-name" href="/reports/${reportUrlId}/setup"><b>${escapeHtml(report.app_name)}</b><small>${reportId}</small></a><time datetime="${escapeHtml(report.saved_at)}">${formatDate(report.saved_at)}</time><span class="report-findings">${report.finding_count}</span><div class="report-actions"><button type="button" data-rename="${reportId}" data-name="${escapeHtml(report.app_name)}" aria-label="Rename" title="Rename application">${actionIcon("rename")}</button><button type="button" data-duplicate="${reportId}" aria-label="Duplicate" title="Duplicate report">${actionIcon("duplicate")}</button><a href="/reports/${reportUrlId}/export" aria-label="Export" title="Export ZIP">${actionIcon("export")}</a><button class="report-delete" type="button" data-delete="${reportId}" aria-label="Delete" title="Delete report">${actionIcon("delete")}</button></div></article>`;
   };
   const load = async () => {
+    const revision = ++loadRevision;
     const [response, legacyResponse] = await Promise.all([fetch("/reports"), fetch("/reports/legacy")]);
+    if (revision !== loadRevision) return;
     if (!response.ok) throw await diagnostics.fromResponse(response, "list_reports", "Unable to load reports");
     if (!legacyResponse.ok) throw await diagnostics.fromResponse(legacyResponse, "list_legacy_reports", "Unable to load legacy reports");
     const [reports, legacy] = await Promise.all([response.json(), legacyResponse.json()]);
+    if (revision !== loadRevision) return;
     const groups = groupReportsByFolder(reports).sort((left, right) => (left[0].app_folder || "Unassigned").localeCompare(right[0].app_folder || "Unassigned"));
     setHeaderCount("#draft-count", reports.length, "draft");
     setHeaderCount("#app-count", groups.length, "application");
@@ -138,17 +142,19 @@
     });
   };
   const escapeHtml = window.vrPage.escapeHtml;
-  const uploadImport = async (file, mode) => {
+  const NOT_REPORT_DOCX = "DOCX import mode was supplied for a file that is not a report DOCX";
+  const uploadImport = async (file, mode, requestId) => {
     const form = new FormData();
     form.append("file", file);
     form.append("docx_mode", mode);
-    const response = await fetch("/reports/import", {method:"POST", body:form});
+    const response = await fetch("/reports/import", {method:"POST", headers:{"X-VulnReport-Import-Id":requestId}, body:form});
     if (!response.ok) throw await diagnostics.fromResponse(response, "import_report", "Import failed");
     return response.json();
   };
   const revealImportedReport = async reportId => {
     appSearch.value = "";
     await load();
+    if (importDialog) return;
     const importedRow = [...rows.querySelectorAll(".report-row")].find(item => item.dataset.reportId === reportId);
     if (!importedRow) return;
     const group = importedRow.closest(".app-group");
@@ -186,6 +192,39 @@
   };
   // The name picks the buttons; the server still sorts the file by its bytes.
   const importKind = name => [[".docx", "docx"], [".zip", "bundle"], [".json", "bundle"]].find(([ending]) => name.toLowerCase().endsWith(ending))?.[1];
+  const pendingImportRequests = new Map();
+  const importRequestKey = fingerprint => `vulnreport-import-request:${fingerprint}`;
+  const historyImportRequests = () => {
+    const requests = history.state?.vulnreportImportRequests;
+    return requests && typeof requests === "object" ? requests : {};
+  };
+  const writeHistoryImportRequests = requests => {
+    try { history.replaceState({...history.state, vulnreportImportRequests: requests}, ""); } catch {}
+  };
+  const fileFingerprint = async file => {
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  };
+  const pendingImportRequest = fingerprint => {
+    let requestId = pendingImportRequests.get(fingerprint);
+    const historyRequests = historyImportRequests();
+    if (!requestId && Object.hasOwn(historyRequests, fingerprint)) {
+      requestId = historyRequests[fingerprint];
+    } else if (!requestId) {
+      try { requestId = sessionStorage.getItem(importRequestKey(fingerprint)); } catch {}
+    }
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId || "") ? requestId : crypto.randomUUID();
+  };
+  const rememberImportRequest = state => {
+    pendingImportRequests.set(state.fingerprint, state.requestId);
+    try { sessionStorage.setItem(importRequestKey(state.fingerprint), state.requestId); } catch {}
+    writeHistoryImportRequests({...historyImportRequests(), [state.fingerprint]: state.requestId});
+  };
+  const forgetImportRequest = state => {
+    pendingImportRequests.delete(state.fingerprint);
+    try { sessionStorage.removeItem(importRequestKey(state.fingerprint)); } catch {}
+    writeHistoryImportRequests({...historyImportRequests(), [state.fingerprint]: null});
+  };
   const IMPORT_FOCUSABLE = 'button:not([disabled]), [tabindex]:not([tabindex="-1"])';
   let importDialog = null;
   const openImportDialog = () => {
@@ -214,7 +253,7 @@
     const drop = find(".import-drop");
     const fileLine = find(".import-file");
     const live = find(".import-live");
-    const state = {file: null, kind: null, asked: false, busy: false, result: null};
+    const state = {file: null, kind: null, fingerprint: null, requestId: null, asked: false, busy: false, result: null};
     const render = () => {
       const {file, kind, asked, busy, result} = state;
       drop.hidden = live.hidden = Boolean(result);
@@ -226,8 +265,9 @@
       find('[data-for="docx"]').hidden = Boolean(result) || kind === "bundle";
       find('[data-for="bundle"]').hidden = Boolean(result) || kind !== "bundle";
       find('[data-for="result"]').hidden = !result;
-      button("retest").disabled = button("editable").disabled = busy || kind !== "docx";
-      button("bundle").disabled = button("close").disabled = busy;
+      button("retest").disabled = button("editable").disabled = busy || kind !== "docx" || !state.requestId;
+      button("bundle").disabled = busy || !state.requestId;
+      button("close").disabled = busy;
     };
     const say = (text, failed = false) => {
       live.replaceChildren(...(text ? [Object.assign(document.createElement("p"), {className: failed ? "import-error" : "", textContent: text})] : []));
@@ -243,14 +283,23 @@
       say(diagnostic.message, true);
       live.append(code);
     };
-    const take = files => {
+    const take = async files => {
       if (state.busy || state.result || !files.length) return;
       if (files.length > 1) return say("Drop one file at a time.", true);
-      const kind = importKind(files[0].name);
+      const file = files[0];
+      const kind = importKind(file.name);
       if (!kind) return say("Import takes a Word report (.docx), an export (.zip), or a report's draft.json.", true);
-      Object.assign(state, {file: files[0], kind, asked: false});
+      Object.assign(state, {file, kind, fingerprint: null, requestId: null, asked: false});
       say("");
       render();
+      try {
+        const fingerprint = await fileFingerprint(file);
+        if (state.file !== file || state.result) return;
+        Object.assign(state, {fingerprint, requestId: pendingImportRequest(fingerprint)});
+        render();
+      } catch {
+        if (state.file === file) say("Unable to read this file.", true);
+      }
     };
     const showResult = result => {
       const {details, notices} = importSummary(result);
@@ -264,13 +313,22 @@
       button("open").focus();
     };
     const run = async choice => {
+      rememberImportRequest(state);
       state.busy = true;
       say("Importing...");
       render();
       try {
-        const result = await uploadImport(state.file, choice === "bundle" ? "prompt" : choice);
+        let result;
+        try {
+          result = await uploadImport(state.file, choice === "bundle" ? "prompt" : choice, state.requestId);
+        } catch (error) {
+          if (state.kind !== "docx" || error.message !== NOT_REPORT_DOCX) throw error;
+          result = await uploadImport(state.file, "prompt", state.requestId);
+        }
         diagnostics.clear();
+        if (!result.mode_required) forgetImportRequest(state);
         if (!result.mode_required && result.source !== "docx") {
+          state.busy = false;
           location.href = `/reports/${result.report_id}/setup`;
           return;
         }
@@ -336,7 +394,11 @@
     };
     document.addEventListener("keydown", onKeydown, true);
     document.body.append(backdrop);
-    importDialog = {take, mark: on => drop.classList.toggle("is-drop-target", on && !state.busy && !state.result)};
+    importDialog = {
+      isBusy: () => state.busy,
+      take,
+      mark: on => drop.classList.toggle("is-drop-target", on && !state.busy && !state.result),
+    };
     render();
     drop.focus();
   };
@@ -359,6 +421,11 @@
     importDialog?.take(importInput.files);
     importInput.value = "";
   };
+  window.addEventListener("beforeunload", event => {
+    if (!importDialog?.isBusy()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
   importCommand.onclick = openImportDialog;
   appSearch.oninput = filterApps;
   load().catch(error => showError(error, "load_report_manager", "Unable to load reports"));

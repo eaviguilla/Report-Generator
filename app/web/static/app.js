@@ -250,7 +250,7 @@
   const rememberFocusedField = () => keepFieldName(pageFieldName(document.activeElement));
   const nameField = element => pageFieldName(element) || fieldBeforeRebuild;
   const {isRecord, activeTextEntry} = window.vrSave;
-  const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
+  const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
@@ -2713,7 +2713,10 @@
       formData.append("file", selectedFile);
       try {
         setSaveState(SAVE_STATES.SAVING, "Uploading...");
-        if (!(await save("Uploading..."))) return;
+        if (!(await save("Uploading..."))) {
+          queueConflictRetry(() => uploadImage(selectedFile));
+          return;
+        }
         const response = await fetch(`/reports/${reportId}/evidence`, {method:"POST", headers:{"X-Report-Saved-At":report.saved_at}, body:formData});
         if (!response.ok) throw await diagnostics.fromResponse(response, "upload_evidence", "Upload failed");
         const mutation = await response.json();
@@ -2733,7 +2736,7 @@
         scheduleSave();
         await save();
       } catch (error) {
-        if (error.status === 409) markSaveConflict(error, "upload_evidence");
+        if (error.status === 409) markSaveConflict(error, "upload_evidence", () => uploadImage(selectedFile));
         else showOperationError(error, "upload_evidence", "Upload failed");
       }
     });

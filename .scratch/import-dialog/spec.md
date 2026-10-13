@@ -2,6 +2,8 @@
 
 Status: done (2026-10-09)
 
+Follow-up (2026-10-09): Import retries now keep a file-fingerprint request ID across close and reload, with history fallback when Web Storage refuses, and the server persists one final result per operation, because lost responses, restarts, mode switches and receipt eviction each produced duplicate or dead report results under stress.
+
 ## Problem Statement
 
 On the Reports page, Import opens the operating system's file picker straight away. A tester who already has last year's Word report open in a folder window still has to browse to it, because the page takes no dragged file. Dropping one on the page is worse: the browser opens or downloads the file, and the tester leaves the app.

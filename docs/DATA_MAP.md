@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-07**, after a paste on the Setup page began dropping the blanks it brings to the start or end of a line, as its own undo step.
+> Last verified against source: **2026-10-09**, after stale evidence uploads began returning 409 and import retries began reusing successful request receipts.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -151,8 +151,10 @@ Every mutating `Workspace` method takes this lock. If you add one that does not,
   `waitForMutations` drains the live queue tail in a loop, so Back or Next also waits for work appended after the navigation click.
 - **Same-tab history handoff:** each successful `applyServerRevision` records the newest revision in `sessionStorage["vulnreport-saved-at:{reportId}"]`. Separate tabs keep separate values. A clean document restored by bfcache or a Navigation Timing `back_forward` load reloads when this tab saved a newer revision on another page.
 - **409 body** (`main.stale_report_detail`) carries `code: "stale_report"`, `recoverable`, and `latest_saved_at`.
+  Evidence upload converts a stale write under the evidence lock into this same response; the file is not left behind.
 
 **Client handling of 409** (`markSaveConflict`): sets `saveConflict`, forces `pendingSave`, persists the recovery copy, and switches the save button to a `resolve` action offering *Save my version* (adopt `latest_saved_at`, re-PUT) or *Load latest* (discard the recovery copy and the undo history, clear `pendingSave` so `pagehide` does not write the copy back, reload).
+Evidence uploads keep their selected `File` objects in memory while this dialog is open, including uploads that were queued behind the one that got 409. After *Save my version* succeeds, `markSaveConflict` retries them in selection order; another 409 during resolution keeps the queue for the next attempt. *Load latest* drops the queued retries with the discarded draft.
 If Web Storage refuses to remove the undo history or the recovery copy, Load latest stops there and shows the storage warning; the page stays in the save conflict and does not reload.
 While `saveConflict` is set, `save()` restores the visible `conflict` state and returns immediately without sending anything, so an attempted upload or library insert cannot leave the header stuck at “Uploading” or “Adding.”
 
@@ -296,6 +298,11 @@ DOCX mode is request state, not report state.
 The Reports page's import dialog posts a Word report (`.docx` name) once, with the `editable` or `retest` mode of the button clicked.
 It posts an export or a draft.json (`.zip` or `.json` name) with `docx_mode=prompt`: ZIP/JSON bytes import immediately, while DOCX bytes return `mode_required` without a write.
 The dialog then asks for the mode, and the button clicked posts the same file again.
+The browser identifies a pending operation by the file's SHA-256 fingerprint and keeps its `X-VulnReport-Import-Id` in memory, `sessionStorage`, and the current history entry. History state preserves the operation through reload when Web Storage refuses writes.
+A final successful response clears memory and storage and leaves a history tombstone, so a refused storage removal cannot replay the completed operation forever. Replacing the file uses its own fingerprint and request ID.
+Successful route results are written atomically to `data/import-receipts.json`. Receipts for live imported reports stay until those reports are deleted; only prompt-only results, which create no report, are limited to the 100 most recent. Process restart reloads the file, malformed receipt data never blocks an import, and overlapping retries share one in-flight operation.
+`prompt` remains separate, but `editable`, `retest`, and the omitted legacy mode are one final choice. After any final mode has created a report, a retry or overlapping request for another final mode receives that completed result instead of creating a hidden second report.
+If a `.docx` name holds ZIP or JSON bytes, the dialog retries the route's specific non-DOCX refusal with `prompt` and the same request ID.
 Retest keeps its established `retained`, `dropped_resolved`, and `statuses_rewritten` summary, adding warnings only for shared recovery assumptions.
 Editable adds status/evidence counts, restored categories, normalizations, and warnings.
 Both modes mint new identities and retain only visible document state; neither restores hidden source-draft state.
@@ -562,7 +569,7 @@ Three server-rendered documents (`page1_setup`, `page2_findings`, `page2_editor`
   When the copy's page is not the current one the button names it, with the page's name from `pageNames`, for example "Restore on Content"; on its own page, or for a copy with no `page`, it reads "Restore" and reloads.
   Discard removes the copy, and marks the page Saved only when it has no unsaved edits.
 - `pageshow` compares a clean history-restored document with the newest revision saved in this tab and reloads stale cached HTML before it can create a false self-conflict. A restored page with pending edits is not reloaded into data loss; it retains the ordinary recovery/conflict path.
-- `beforeunload` prompts when `saveRevision > savedRevision` unless `allowUnsavedUnload` is set.
+- `beforeunload` prompts when `saveRevision > savedRevision` or `pendingMutation` is set, unless `allowUnsavedUnload` is set. Native Back, reload and tab close can otherwise abandon a screenshot after the report save finishes but before the upload reaches the server. Dismissing the prompt keeps the upload running; in-app Back drains the mutation queue first.
 - `visibilitychange` to hidden forces an immediate save when one is pending.
 
 **Undo and redo navigate too.** `restoreHistory` applies the change, forces `pendingSave`, persists the local draft and the history stacks, points `sessionStorage["vulnreport-recovery:{reportId}"]` at the local draft key, sets `allowUnsavedUnload`, then `await save()` and opens the step's page (`openPage`),

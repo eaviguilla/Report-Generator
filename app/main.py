@@ -8,11 +8,14 @@ import logging
 import os
 import uuid
 import zipfile
+from collections import OrderedDict
+from concurrent.futures import Future
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from threading import Lock
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -29,7 +32,7 @@ from .docx_report import ReportGenerationError, generation_issues, main_template
 from .library import Library
 from .docx_import import ReportImportLimitError, parse_report_docx
 from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_is_complete, provision, report_export_filename, scope_text_from_targets, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
-from .storage import atomic_write_bytes
+from .storage import atomic_write_bytes, atomic_write_json, read_json
 from .vocabulary import client_vocabulary
 from .workspace import StaleReportError, Workspace, app_id_for
 
@@ -197,6 +200,53 @@ MAX_IMAGE_BYTES = configured_limit("VULNREPORT_MAX_IMAGE_BYTES", 20 * 1024 * 102
 MAX_IMAGE_PIXELS = configured_limit("VULNREPORT_MAX_IMAGE_PIXELS", 40_000_000)
 MAX_REPORT_EVIDENCE_BYTES = configured_limit("VULNREPORT_MAX_REPORT_EVIDENCE_BYTES", 250 * 1024 * 1024)
 DOCX_IMPORT_MODES = {"prompt", "editable", "retest"}
+IMPORT_RECEIPT_LIMIT = 100
+_import_receipts: OrderedDict[tuple[str, str | None], dict] = OrderedDict()
+_imports_in_flight: dict[tuple[str, str | None], Future] = {}
+_import_receipts_lock = Lock()
+
+
+def _import_receipts_path() -> Path:
+    return workspace.apps_root.parent / "import-receipts.json"
+
+
+def _prune_import_receipts(receipts: OrderedDict[tuple[str, str | None], dict]) -> None:
+    for request_key, result in list(receipts.items()):
+        report_id = result.get("report_id")
+        if report_id and workspace.find_path(report_id) is None:
+            receipts.pop(request_key)
+    prompt_keys = [request_key for request_key, result in receipts.items() if not result.get("report_id")]
+    for request_key in prompt_keys[:-IMPORT_RECEIPT_LIMIT]:
+        receipts.pop(request_key)
+
+
+def _load_import_receipts() -> OrderedDict[tuple[str, str | None], dict]:
+    loaded: OrderedDict[tuple[str, str | None], dict] = OrderedDict()
+    try:
+        payload = read_json(_import_receipts_path())
+    except (AttributeError, FileNotFoundError, OSError, ValueError):
+        return loaded
+    if not isinstance(payload, dict) or not isinstance(payload.get("receipts", []), list):
+        return loaded
+    entries = payload.get("receipts", [])
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("import_id"), str) or not isinstance(entry.get("result"), dict):
+            continue
+        mode = entry.get("mode")
+        if mode is not None and not isinstance(mode, str):
+            continue
+        result = entry["result"]
+        loaded[(entry["import_id"], mode)] = copy.deepcopy(result)
+    _prune_import_receipts(loaded)
+    return loaded
+
+
+def _persist_import_receipts() -> None:
+    entries = [
+        {"import_id": import_id, "mode": mode, "result": copy.deepcopy(result)}
+        for (import_id, mode), result in _import_receipts.items()
+    ]
+    atomic_write_json(_import_receipts_path(), {"schema_version": 1, "receipts": entries})
 
 
 @app.exception_handler(HTTPException)
@@ -624,9 +674,7 @@ def open_report(report_id: str):
     return RedirectResponse(f"/reports/{report_id}/setup", status_code=303)
 
 
-@app.post("/reports/import")
-async def import_report(file: UploadFile = File(...), docx_mode: str | None = Form(None)):
-    """Validate a JSON draft, a ZIP bundle, or a report this app generated, and save it separately."""
+async def _import_report_once(file: UploadFile, docx_mode: str | None) -> dict:
     is_docx = False
     try:
         if docx_mode is not None and docx_mode not in DOCX_IMPORT_MODES:
@@ -664,6 +712,87 @@ async def import_report(file: UploadFile = File(...), docx_mode: str | None = Fo
         prefix = "This Word report can't be imported" if is_docx else "Select a valid VulnReport export"
         raise HTTPException(422, f"{prefix}: {error}") from error
     return {"report_id": report.report_id, "source": "bundle"}
+
+
+def _claim_import(request_key: tuple[str, str | None]) -> tuple[str, dict | Future]:
+    with _import_receipts_lock:
+        if request_key not in _import_receipts:
+            _import_receipts.update(_load_import_receipts())
+        receipt = _import_receipts.get(request_key)
+        if receipt is not None:
+            report_id = receipt.get("report_id")
+            if report_id and workspace.find_path(report_id) is None:
+                _import_receipts.pop(request_key)
+            else:
+                _import_receipts.move_to_end(request_key)
+                return "complete", copy.deepcopy(receipt)
+        import_id, _ = request_key
+        for completed_key, completed in list(_import_receipts.items()):
+            if completed_key[0] != import_id or not completed.get("report_id"):
+                continue
+            if workspace.find_path(completed["report_id"]) is None:
+                _import_receipts.pop(completed_key)
+                continue
+            _import_receipts.move_to_end(completed_key)
+            return "complete", copy.deepcopy(completed)
+        pending = _imports_in_flight.get(request_key)
+        if pending is not None:
+            return "pending", pending
+        import_id, mode = request_key
+        final_modes = {None, "editable", "retest"}
+        if mode in final_modes:
+            for pending_key, pending in _imports_in_flight.items():
+                if pending_key[0] == import_id and pending_key[1] in final_modes:
+                    return "pending", pending
+        pending = Future()
+        _imports_in_flight[request_key] = pending
+        return "owner", pending
+
+
+def _complete_import(request_key: tuple[str, str | None], pending: Future, result: dict) -> None:
+    receipt = copy.deepcopy(result)
+    with _import_receipts_lock:
+        _imports_in_flight.pop(request_key, None)
+        _import_receipts[request_key] = receipt
+        _import_receipts.move_to_end(request_key)
+        _prune_import_receipts(_import_receipts)
+        try:
+            _persist_import_receipts()
+        except OSError:
+            logger.exception("Unable to persist import request receipts")
+    pending.set_result(copy.deepcopy(receipt))
+
+
+def _fail_import(request_key: tuple[str, str | None], pending: Future, error: BaseException) -> None:
+    with _import_receipts_lock:
+        _imports_in_flight.pop(request_key, None)
+    pending.set_exception(error)
+
+
+@app.post("/reports/import")
+async def import_report(
+    file: UploadFile = File(...),
+    docx_mode: str | None = Form(None),
+    import_id: str | None = Header(None, alias="X-VulnReport-Import-Id"),
+):
+    """Validate an import and save it once when a client retries after losing the response."""
+    if import_id is None:
+        return await _import_report_once(file, docx_mode)
+    if not import_id.strip() or len(import_id) > 128:
+        raise HTTPException(400, "Invalid import request ID")
+    request_key = (import_id, docx_mode)
+    claim, value = _claim_import(request_key)
+    if claim == "complete":
+        return value
+    if claim == "pending":
+        return copy.deepcopy(await run_in_threadpool(value.result))
+    try:
+        result = await _import_report_once(file, docx_mode)
+    except BaseException as error:
+        _fail_import(request_key, value, error)
+        raise
+    _complete_import(request_key, value, result)
+    return result
 
 
 @app.delete("/reports/{report_id}")
@@ -854,16 +983,20 @@ async def upload_evidence(request: Request, report_id: str, file: UploadFile = F
         raise HTTPException(413, "Image exceeds the pixel limit") from error
     except (SyntaxError, UnidentifiedImageError, OSError, ValueError) as error:
         raise HTTPException(400, "Upload a valid image file") from error
-    evidence_id, evidence = await run_in_threadpool(
-        persist_uploaded_evidence,
-        report,
-        report_id,
-        file.filename,
-        contents,
-        width,
-        height,
-        expected_revision(request, report.saved_at),
-    )
+    try:
+        evidence_id, evidence = await run_in_threadpool(
+            persist_uploaded_evidence,
+            report,
+            report_id,
+            file.filename,
+            contents,
+            width,
+            height,
+            expected_revision(request, report.saved_at),
+        )
+    except StaleReportError as error:
+        detail = await run_in_threadpool(stale_report_detail, report_id)
+        raise HTTPException(409, detail) from error
     return {
         "saved_at": report.saved_at.isoformat(),
         "evidence": {"evidence_id": evidence_id, **evidence.model_dump(mode="json")},

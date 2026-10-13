@@ -945,6 +945,33 @@ class FragmentRecognitionTests(unittest.TestCase):
         self.assertEqual(evidence[image["evidence_id"]], expected)
         self.assertEqual(image["width_mm"], 155.0)
 
+    def test_an_imported_image_regenerates_at_the_size_it_was_imported(self) -> None:
+        """The embedded picture already carries the border, so drawing one again would grow it."""
+        payload, evidence, _summary = parse_report_docx(base_render(), mode="editable")
+        report = Report.model_validate(payload)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            (folder / "evidence").mkdir()
+            for evidence_id, data in evidence.items():
+                (folder / report.evidence[evidence_id].file).write_bytes(data)
+            regenerated = Document(BytesIO(render_report_docx(report, TEMPLATE, folder)))
+
+        embedded = sorted(
+            (part.image.px_width, part.image.px_height)
+            for part in (
+                regenerated.part.related_parts[shape._inline.graphic.graphicData.pic.blipFill.blip.get(qn("r:embed"))]
+                for shape in regenerated.inline_shapes
+            )
+        )
+        imported = sorted((item.width_px, item.height_px) for item in report.evidence.values())
+        self.assertEqual(embedded, imported)
+
+    def test_the_editable_import_names_rendered_copies_but_promises_no_second_border(self) -> None:
+        _payload, _evidence, summary = parse_report_docx(base_render(), mode="editable")
+
+        self.assertTrue(any("rendered Word copies" in warning for warning in summary["warnings"]))
+        self.assertFalse(any("another border" in warning for warning in summary["warnings"]))
+
     def test_docx_resource_limits_reject_before_import(self) -> None:
         data = base_render()
         cases = (

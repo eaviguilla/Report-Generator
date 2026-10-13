@@ -12,13 +12,14 @@ from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 
 from app.docx_report import (
     LOCATION_WRAP_CHARACTERS,
     SCOPE_WRAP_CHARACTERS,
     TESTING_RESULT_PARAGRAPH,
     ReportGenerationError,
+    _bordered_image_stream,
     _find_table,
     _populate_scope_tables,
     _wrap_long_value,
@@ -536,6 +537,33 @@ class DocxReportTests(unittest.TestCase):
             paragraph_texts = [paragraph.text for paragraph in rendered.paragraphs]
             self.assertEqual(paragraph_texts.count("UAT:"), 1, "the carried non-production image must still be labelled and rendered")
             self.assertEqual(len(rendered.inline_shapes), 2)
+
+    def test_a_carried_image_that_already_has_a_border_prints_without_a_second_one(self) -> None:
+        """A picture carried over from an earlier report went through this renderer once already."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._retest_report(report_folder, ("ev_prod", "ev_history"))
+            earlier = ImageOps.expand(Image.new("RGB", (1200, 800), "white"), border=2, fill="black")
+            earlier.save(report_folder / "evidence" / "ev_history.png")
+            report.vulnerabilities = [
+                self._finding("v_retest", "Authorization bypass", "high", "001", ["t_prod"], [
+                    ImageFragment(frag_id="f_img_prod", type="image", environment="production", evidence_id="ev_prod", caption="Production response"),
+                ]),
+            ]
+            self._carry_history(report.vulnerabilities[0], "production", "ev_history")
+
+            rendered = Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder)))
+
+            printed = []
+            for shape in rendered.inline_shapes:
+                relationship_id = shape._inline.graphic.graphicData.pic.blipFill.blip.get(qn("r:embed"))
+                printed.append(Image.open(BytesIO(rendered.part.related_parts[relationship_id].blob)).convert("RGB"))
+            carried = [image for image in printed if image.size == earlier.size]
+            self.assertEqual(len(carried), 1, [image.size for image in printed])
+            self.assertTrue(carried[0].tobytes() == earlier.tobytes(), "the carried picture was changed")
+            current = [image for image in printed if image.size != earlier.size]
+            self.assertEqual(len(current), 1)
+            self.assertEqual(off_border_pixels(current[0]), [], "the new screenshot lost its border")
 
     def test_previous_evidence_does_not_satisfy_the_retest_requirement(self) -> None:
         """Last year's screenshot is not this year's proof, so it must not silently stand in for it."""
@@ -1518,6 +1546,59 @@ class DocxReportTests(unittest.TestCase):
                 Content(type="proof_of_concept", fragments=[ListFragment(frag_id=f"{uid}_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")]), ListItem(runs=[Run(text="Observe the response.")])]), CodeFragment(frag_id=f"{uid}_code", type="code_block", caption="Request", text="GET /accounts/123"), TableFragment(frag_id=f"{uid}_table", type="table", caption="Generated table", header=[ListItem(runs=[Run(text="Generated Header")]), ListItem(runs=[Run(text="Result")])], rows=[[ListItem(runs=[Run(text="Request")]), ListItem(runs=[Run(text="Allowed")])]]), *images]),
             ],
         )
+
+
+class ImageBorderTests(unittest.TestCase):
+    """The border is part of the picture's pixels, so a picture that came out of an earlier report
+    already has it and must not get a second."""
+
+    TEMPLATE = RESOURCES / "fragments" / "image_fragment.docx"
+
+    def _embedded(self, folder: Path, image: Image.Image) -> Image.Image:
+        """The picture the generator embeds for this image."""
+        path = folder / "source.png"
+        image.save(path)
+        return Image.open(_bordered_image_stream(path, 155, self.TEMPLATE)).convert("RGB")
+
+    def test_an_image_that_already_has_a_border_gets_no_second_one(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            screenshot = Image.new("RGB", (1920, 1080), "white")
+            once = self._embedded(folder, screenshot)
+            twice = self._embedded(folder, once)
+
+            self.assertGreater(once.width, screenshot.width, "a plain screenshot must still get a border")
+            self.assertEqual(twice.size, once.size, "a second border was drawn around the first")
+            self.assertTrue(twice.tobytes() == once.tobytes(), "the bordered picture was changed")
+            self.assertEqual(off_border_pixels(twice), [])
+
+    def test_a_border_shrunk_and_blurred_by_a_copy_is_still_found(self) -> None:
+        """Copying a picture out of Word may hand back a smaller, softer one."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            bordered = self._embedded(folder, Image.new("RGB", (1920, 1080), "white"))
+            for scale in (1.0, 0.75, 0.5, 0.4):
+                with self.subTest(scale=scale):
+                    smaller = bordered.resize((round(bordered.width * scale), round(bordered.height * scale)), Image.Resampling.LANCZOS)
+                    smaller = smaller.filter(ImageFilter.GaussianBlur(0.6))
+
+                    self.assertEqual(self._embedded(folder, smaller).size, smaller.size)
+
+    def test_only_a_dark_edge_all_the_way_round_counts_as_a_border(self) -> None:
+        white = Image.new("RGB", (1920, 1080), "white")
+        dark_without_a_left_edge = Image.new("RGB", (1920, 1080), (30, 30, 30))
+        dark_without_a_left_edge.paste((255, 255, 255), (0, 0, 5, 1080))
+        cases = (
+            ("dark-mode screenshot", Image.new("RGB", (1920, 1080), (30, 30, 30)), False),
+            ("black frame", ImageOps.expand(white, border=3, fill="black"), False),
+            ("blue frame", ImageOps.expand(white, border=5, fill=(0, 0, 255)), True),
+            ("grey frame", ImageOps.expand(white, border=6, fill=(128, 128, 128)), True),
+            ("dark on three sides only", dark_without_a_left_edge, True),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for label, image, gets_a_border in cases:
+                with self.subTest(label):
+                    self.assertEqual(self._embedded(Path(temporary_directory), image).size != image.size, gets_a_border)
 
 
 if __name__ == "__main__":

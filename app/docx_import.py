@@ -1206,7 +1206,7 @@ def parse_report_docx(
                 "test windows", "accounts", "limitations", "scope",
             ] + (["network access"] if engagement["network"] else []),
             "warnings": warnings + ([
-            "Imported images are rendered Word copies and may be resampled or receive another border when regenerated."
+            "Imported images are rendered Word copies, not the original files."
             ] if evidence else []),
         })
     elif warnings:

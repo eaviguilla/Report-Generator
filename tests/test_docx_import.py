@@ -1043,6 +1043,20 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual([finding["display_id"] for finding in payload["vulnerabilities"]], ["001", "002"])
             Report.model_validate(payload)
 
+    def test_a_title_with_extra_spaces_imports_back_with_the_spaces_collapsed(self) -> None:
+        """The title is printed as typed in the heading and in the summary row, so a report the app wrote
+        has to read back whatever spaces it holds."""
+        for label, title in (("a double space", "Cross  site scripting"), ("a non-breaking space", "Cross\u00a0site scripting")):
+            with tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                report = self._report(folder)
+                report.vulnerabilities[0].title = title
+                data = render_report_docx(report, TEMPLATE, folder)
+            for mode in ("retest", "editable"):
+                with self.subTest(title=label, mode=mode):
+                    payload, _evidence, _summary = parse_report_docx(data, mode=mode)
+                    self.assertEqual(payload["vulnerabilities"][0]["title"], "Cross site scripting")
+
     def test_a_file_that_is_not_a_word_document_is_refused_by_name(self) -> None:
         with self.assertRaisesRegex(ReportImportError, "not a readable Word document"):
             parse_report_docx(b"not a document")

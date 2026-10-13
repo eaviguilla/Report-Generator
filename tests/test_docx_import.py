@@ -22,11 +22,13 @@ from typing import get_args
 from unittest.mock import patch
 
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Mm
 from fastapi.testclient import TestClient
 
 from app import main
-from app.docx_import import NETWORK_IMPORT_WARNING, ReportImportError, ReportImportLimitError, _parsed_ticket_lines, classify_paragraph, first_change, numbering_formats, parse_report_docx
+from app.docx_import import NETWORK_IMPORT_WARNING, SEVERITY_TICKET_LABEL, ReportImportError, ReportImportLimitError, _parsed_ticket_lines, classify_paragraph, first_change, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import RESOLVED_REMEDIATION, character_issue, finding_input_issues, setup_issues
 from tests.support import png_bytes, use_temp_workspace
@@ -1182,10 +1184,226 @@ class FindingRowTests(unittest.TestCase):
     """A finding takes its title, severity, ID and status from its finding row. A finding heading finds its
     row by equal title, then by title ignoring capitals and extra spaces, then by position."""
 
+    def test_an_unlabelled_table_before_description_is_not_silently_lost(self) -> None:
+        def insert_table(document):
+            table = document.add_table(rows=1, cols=2)
+            table.cell(0, 0).text = "Account"
+            table.cell(0, 1).text = "Sensitive evidence"
+            _heading(document, "Description:")._p.addprevious(table._tbl)
+
+        data = _edited(base_render(), insert_table)
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(
+                ReportImportError, r'"Authorization bypass".*table.*before.*Description',
+            ):
+                parse_report_docx(data, mode=mode)
+
     @staticmethod
     def _parse(data: bytes, mode: str) -> tuple[dict, list[str]]:
         payload, _evidence, summary = parse_report_docx(data, mode=mode)
         return payload, summary.get("warnings", [])
+
+    def test_a_closed_finding_row_in_other_capitals_keeps_its_status(self) -> None:
+        def close(document):
+            _set_text(_table_starting(document, "Findings").rows[1].cells[5].paragraphs[0], "CLOSED")
+
+        data = _edited(two_findings_render(), close)
+        payload, _evidence, summary = parse_report_docx(data, mode="editable")
+        self.assertEqual(payload["vulnerabilities"][0]["status"], "closed")
+        self.assertFalse(any("unrecognised status" in warning for warning in summary.get("warnings", [])))
+        payload, _evidence, summary = parse_report_docx(data, mode="retest")
+        self.assertEqual([finding["title"] for finding in payload["vulnerabilities"]], ["Second finding"])
+        self.assertEqual(summary["dropped_resolved"], ["Authorization bypass"])
+
+    def test_hyperlink_text_in_a_description_survives_import(self) -> None:
+        def paste_link(document):
+            paragraph = _heading(document, "A justified paragraph.")
+            hyperlink = OxmlElement("w:hyperlink")
+            hyperlink.set(qn("w:anchor"), "endpoint")
+            run = OxmlElement("w:r")
+            text = OxmlElement("w:t")
+            text.text = " Sensitive endpoint"
+            run.append(text)
+            hyperlink.append(run)
+            paragraph._p.append(hyperlink)
+
+        data = _edited(base_render(), paste_link)
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, _evidence, _summary = parse_report_docx(data, mode=mode)
+                description = payload["vulnerabilities"][0]["contents"][0]
+                self.assertEqual(
+                    "".join(run["text"] for run in description["fragments"][0]["runs"]),
+                    "A justified paragraph. Sensitive endpoint",
+                )
+
+    def test_explicitly_disabled_emphasis_does_not_import_as_enabled(self) -> None:
+        for tag, value, field in (("w:b", "0", "bold"), ("w:i", "false", "italic"), ("w:u", "none", "underline")):
+            def turn_off(document):
+                run = _heading(document, "A justified paragraph.").runs[0]
+                mark = OxmlElement(tag)
+                mark.set(qn("w:val"), value)
+                run._r.get_or_add_rPr().append(mark)
+
+            data = _edited(base_render(), turn_off)
+            with self.subTest(field=field):
+                payload, _evidence, _summary = parse_report_docx(data, mode="editable")
+                paragraph = payload["vulnerabilities"][0]["contents"][0]["fragments"][0]
+                self.assertFalse(paragraph["runs"][0].get(field, False))
+
+    def test_a_ticket_label_in_description_does_not_consume_authored_text(self) -> None:
+        def explain_tickets(document):
+            label = document.add_paragraph(SEVERITY_TICKET_LABEL)
+            explanation = document.add_paragraph("The reviewer can request a reassessment.")
+            anchor = _heading(document, "A justified paragraph.")
+            anchor._p.addnext(explanation._p)
+            anchor._p.addnext(label._p)
+
+        data = _edited(base_render(), explain_tickets)
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, _evidence, _summary = parse_report_docx(data, mode=mode)
+                description = payload["vulnerabilities"][0]["contents"][0]
+                text = " ".join(
+                    run["text"] for fragment in description["fragments"]
+                    for run in fragment.get("runs", [])
+                )
+                self.assertIn(SEVERITY_TICKET_LABEL, text)
+                self.assertIn("The reviewer can request a reassessment.", text)
+                self.assertEqual(payload["vulnerabilities"][0]["severity_review_tickets"], "")
+
+    def test_unattached_or_repeated_captions_are_not_silently_lost(self) -> None:
+        def caption(document, text):
+            paragraph = document.add_paragraph(text)
+            paragraph._p.get_or_add_pPr().get_or_add_pStyle().val = "FiguresandTables"
+            return paragraph
+
+        def orphan(document):
+            _heading(document, "Recommended Remediation:")._p.addprevious(caption(document, "An orphan observation")._p)
+
+        def repeated(document):
+            original = next(paragraph for paragraph in document.paragraphs if "Production response" in paragraph.text)
+            original._p.addnext(caption(document, "A second observation")._p)
+
+        def separated(document):
+            table = _table_starting(document, "Header")
+            table._tbl.addprevious(document.add_paragraph("This is prose, not a caption.")._p)
+
+        for label, change in (("orphan", orphan), ("repeated image caption", repeated), ("separated table caption", separated)):
+            with self.subTest(label=label), self.assertRaisesRegex(ReportImportError, r'section of "Authorization bypass":.*caption'):
+                parse_report_docx(_edited(base_render(), change), mode="editable")
+
+    def test_images_in_mixed_text_containers_are_not_silently_lost(self) -> None:
+        def mixed_paragraph(document):
+            picture = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+            picture.add_run("The response exposes another customer's account.")
+
+        def picture_in_table(document):
+            picture = next(paragraph for paragraph in document.paragraphs if paragraph._p.findall(".//" + qn("a:blip")))
+            cell = _table_starting(document, "Header").cell(1, 0)
+            cell.paragraphs[0]._p.extend(copy.deepcopy(run) for run in picture._p.findall(qn("w:r")))
+
+        for label, change in (("text beside a picture", mixed_paragraph), ("picture inside a table", picture_in_table)):
+            data = _edited(base_render(), change)
+            for mode in ("retest", "editable"):
+                with self.subTest(label=label, mode=mode), self.assertRaisesRegex(
+                    ReportImportError, r'section of "Authorization bypass":.*(?:picture|image)',
+                ):
+                    parse_report_docx(data, mode=mode)
+
+    def test_content_control_text_is_not_silently_lost(self) -> None:
+        def wrap_description(document):
+            paragraph = _heading(document, "A justified paragraph.")
+            control = OxmlElement("w:sdt")
+            contents = OxmlElement("w:sdtContent")
+            control.append(contents)
+            paragraph._p.addprevious(control)
+            contents.append(paragraph._p)
+
+        data = _edited(base_render(), wrap_description)
+        with self.assertRaisesRegex(ReportImportError, r'Description section of "Authorization bypass":.*content control'):
+            parse_report_docx(data, mode="editable")
+
+    def test_a_header_only_table_does_not_gain_an_invented_row(self) -> None:
+        def remove_data(document):
+            table = _table_starting(document, "Header")
+            table._tbl.remove(table.rows[1]._tr)
+
+        payload, _evidence, _summary = parse_report_docx(_edited(base_render(), remove_data), mode="editable")
+        proof = next(content for content in payload["vulnerabilities"][0]["contents"] if content["type"] == "proof_of_concept")
+        table = next(fragment for fragment in proof["fragments"] if fragment["type"] == "table")
+        self.assertEqual(table["header"], [{"runs": [{"text": "Header", "bold": True}]}])
+        self.assertEqual(table["rows"], [])
+
+    def test_disabled_paragraph_marks_do_not_change_fragment_type(self) -> None:
+        for tag in ("w:b", "w:i"):
+            def plain_paragraph(document):
+                paragraph = document.add_paragraph("Plain authored observation.")
+                properties = OxmlElement("w:rPr")
+                mark = OxmlElement(tag)
+                mark.set(qn("w:val"), "0")
+                properties.append(mark)
+                paragraph._p.get_or_add_pPr().append(properties)
+                _heading(document, "A justified paragraph.")._p.addnext(paragraph._p)
+
+            with self.subTest(tag=tag):
+                payload, _evidence, _summary = parse_report_docx(_edited(base_render(), plain_paragraph), mode="editable")
+                fragment = payload["vulnerabilities"][0]["contents"][0]["fragments"][1]
+                self.assertEqual(fragment["type"], "paragraph")
+                self.assertEqual(fragment["runs"], [{"text": "Plain authored observation."}])
+
+    def test_explicitly_removed_numbering_does_not_become_a_numbered_list(self) -> None:
+        def remove_numbering(document):
+            paragraph = _heading(document, "A justified paragraph.")
+            paragraph._p.get_or_add_pPr().get_or_add_numPr().get_or_add_numId().val = 0
+
+        data = _edited(base_render(), remove_numbering)
+        for mode in ("retest", "editable"):
+            with self.subTest(mode=mode):
+                payload, _evidence, _summary = parse_report_docx(data, mode=mode)
+                self.assertEqual(payload["vulnerabilities"][0]["contents"][0]["fragments"][0]["type"], "paragraph")
+
+    def test_an_unexpected_final_group_heading_does_not_truncate_a_finding(self) -> None:
+        def insert_heading(document):
+            conclusion = [paragraph for paragraph in document.paragraphs if paragraph.text == "Still reachable on retest."][-1]
+            heading = document.add_paragraph("Additional retest details")
+            heading._p.get_or_add_pPr().get_or_add_pStyle().val = "ReportHeading1"
+            evidence = document.add_paragraph("The second endpoint still exposes customer data.")
+            conclusion._p.addnext(evidence._p)
+            conclusion._p.addnext(heading._p)
+
+        data = _edited(two_findings_render(), insert_heading)
+        with self.assertRaisesRegex(ReportImportError, r'"Second finding".*Additional retest details'):
+            parse_report_docx(data, mode="editable")
+
+    def test_merged_table_cells_do_not_import_as_duplicated_cells(self) -> None:
+        for direction in ("horizontal", "vertical"):
+            def merge(document):
+                table = _table_starting(document, "Header")
+                table.add_column(Mm(20))
+                table.cell(0, 1).text = "Second header"
+                table.cell(1, 1).text = "Second value"
+                other = table.cell(0, 1) if direction == "horizontal" else table.cell(1, 0)
+                table.cell(0, 0).merge(other)
+
+            with self.subTest(direction=direction), self.assertRaisesRegex(
+                ReportImportError, r'Proof of Concept section of "Authorization bypass":.*merged',
+            ):
+                parse_report_docx(_edited(base_render(), merge), mode="editable")
+
+    def test_blank_paragraphs_inside_table_cells_keep_their_line_breaks(self) -> None:
+        for label, lines in (("leading", ["", "Cell"]), ("middle", ["First", "", "Last"]), ("trailing", ["Cell", ""])):
+            def add_lines(document):
+                cell = _table_starting(document, "Header").cell(1, 0)
+                cell.text = lines[0]
+                for line in lines[1:]:
+                    cell.add_paragraph(line)
+
+            with self.subTest(label=label):
+                payload, _evidence, _summary = parse_report_docx(_edited(base_render(), add_lines), mode="editable")
+                proof = next(content for content in payload["vulnerabilities"][0]["contents"] if content["type"] == "proof_of_concept")
+                table = next(fragment for fragment in proof["fragments"] if fragment["type"] == "table")
+                self.assertEqual("".join(run["text"] for run in table["rows"][0][0]["runs"]), "\n".join(lines))
 
     def _assert_pairs(self, data: bytes, titles: list[str], position_warnings: list[str]) -> None:
         """Both modes import the findings under ``titles`` and warn about pairs made by position as given."""
@@ -1728,6 +1946,71 @@ class FirstChangeTests(unittest.TestCase):
 
 class ImportRouteTests(unittest.TestCase):
     """A .docx is itself a ZIP, so the sharpest risk here is the new branch stealing the bundle's."""
+
+    def test_supported_word_edits_survive_import_and_a_later_save(self) -> None:
+        def edit(document):
+            paragraph = _heading(document, "A justified paragraph.")
+            paragraph._p.get_or_add_pPr().get_or_add_numPr().get_or_add_numId().val = 0
+            paragraph.runs[0].bold = False
+            paragraph.runs[0].italic = False
+            paragraph.runs[0].underline = False
+            hyperlink = OxmlElement("w:hyperlink")
+            hyperlink.set(qn("w:anchor"), "endpoint")
+            run = OxmlElement("w:r")
+            text = OxmlElement("w:t")
+            text.text = " Sensitive endpoint"
+            run.append(text)
+            hyperlink.append(run)
+            paragraph._p.append(hyperlink)
+            table = _table_starting(document, "Header")
+            table._tbl.remove(table.rows[1]._tr)
+
+        response = self._import("report.docx", _edited(self._docx(), edit), "editable")
+        self.assertEqual(response.status_code, 200, response.text)
+        imported = main.workspace.load(response.json()["report_id"])
+        finding = imported.vulnerabilities[0]
+        paragraph = finding.contents[0].fragments[0]
+        self.assertEqual(paragraph.type, "paragraph")
+        self.assertEqual("".join(run.text for run in paragraph.runs), "A justified paragraph. Sensitive endpoint")
+        self.assertTrue(all(not run.bold and not run.italic and not run.underline for run in paragraph.runs))
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        self.assertEqual(next(fragment for fragment in proof.fragments if fragment.type == "table").rows, [])
+        before = finding.model_dump(mode="json")
+        payload = imported.model_dump(mode="json", by_alias=True)
+        payload["scope_text"] = main.scope_text_from_targets(imported.scope_targets)
+        payload["engagement"]["app_owner"] = "Owner after import"
+
+        saved = self.client.put(f"/reports/{imported.report_id}", json=payload)
+
+        self.assertEqual(saved.status_code, 200, saved.text)
+        after = main.workspace.load(imported.report_id)
+        self.assertEqual(after.engagement.app_owner, "Owner after import")
+        self.assertEqual(after.vulnerabilities[0].model_dump(mode="json"), before)
+
+    def test_an_extra_table_before_description_refuses_without_creating_a_draft(self) -> None:
+        def insert_table(document):
+            table = document.add_table(rows=1, cols=2)
+            table.cell(0, 0).text = "Account"
+            table.cell(0, 1).text = "Sensitive evidence"
+            _heading(document, "Description:")._p.addprevious(table._tbl)
+
+        response = self._import("report.docx", _edited(self._docx(), insert_table), "editable")
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn('"Authorization bypass"', response.json()["detail"])
+        self.assertIn("table", response.json()["detail"])
+        self.assertEqual(list(self.root.glob("apps/**/draft.json")), [])
+
+    def test_a_retest_does_not_reopen_a_closed_finding_row_written_in_capitals(self) -> None:
+        def close(document):
+            _set_text(_table_starting(document, "Findings").rows[1].cells[5].paragraphs[0], "  CLOSED  ")
+
+        response = self._import("report.docx", _edited(two_findings_render(), close), "retest")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        report = main.workspace.load(response.json()["report_id"])
+        self.assertEqual([finding.title for finding in report.vulnerabilities], ["Second finding"])
+        self.assertEqual(response.json()["summary"]["dropped_resolved"], ["Authorization bypass"])
 
     def setUp(self) -> None:
         self.root = use_temp_workspace(self, "QA Tester")

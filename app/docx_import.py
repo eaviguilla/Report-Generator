@@ -20,6 +20,7 @@ from docx import Document
 from docx.opc.exceptions import OpcError, PackageNotFoundError
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run as WordRun
 from PIL import Image, UnidentifiedImageError
 
 from .docx_captions import paragraph_style_id
@@ -51,7 +52,6 @@ SECTION_LABELS = {kind: heading.rstrip(":") for heading, kind in SECTION_HEADING
 SEVERITY_TICKET_LABEL = "Severity Review Ticket (if applicable):"
 BOILERPLATE = {
     "The following demonstrates the vulnerability:",
-    SEVERITY_TICKET_LABEL,
 }
 STATUS_BY_LABEL = {label: status for status, label in STATUS_LABELS.items()}
 # Capitals do not make a status label unknown when the finding table is compared with its finding row.
@@ -176,7 +176,8 @@ def _paragraph_mark(paragraph, tag: str) -> bool:
     """
     properties = paragraph._p.find(qn("w:pPr"))
     run_properties = properties.find(qn("w:rPr")) if properties is not None else None
-    return run_properties is not None and run_properties.find(qn(tag)) is not None
+    mark = run_properties.find(qn(tag)) if run_properties is not None else None
+    return mark is not None and mark.val
 
 
 def classify_paragraph(paragraph, formats: dict[str, str]) -> str:
@@ -191,7 +192,8 @@ def classify_paragraph(paragraph, formats: dict[str, str]) -> str:
     if numbering is not None:
         number_id = numbering.find(qn("w:numId"))
         value = number_id.get(qn("w:val")) if number_id is not None else None
-        return "bulleted_list" if formats.get(value) == "bullet" else "numbered_list"
+        if value not in (None, "0"):
+            return "bulleted_list" if formats.get(value) == "bullet" else "numbered_list"
     shading = properties.find(qn("w:shd")) if properties is not None else None
     if shading is not None and (shading.get(qn("w:fill")) or "").upper() == CODE_SHADING_FILL:
         return "code_block"
@@ -215,8 +217,8 @@ def runs_of(paragraph) -> list[dict]:
     ``paragraph.text`` drops them silently.
     """
     runs = []
-    for element in paragraph._p.findall(qn("w:r")):
-        properties = element.find(qn("w:rPr"))
+    for element in paragraph._p.xpath("./w:r | ./w:hyperlink/w:r"):
+        word_run = WordRun(element, paragraph)
         text = ""
         for node in element:
             if node.tag == qn("w:t"):
@@ -228,8 +230,8 @@ def runs_of(paragraph) -> list[dict]:
         if not text:
             continue
         run = {"text": text}
-        for tag, name in ((qn("w:b"), "bold"), (qn("w:i"), "italic"), (qn("w:u"), "underline")):
-            if properties is not None and properties.find(tag) is not None:
+        for name in ("bold", "italic", "underline"):
+            if getattr(word_run, name):
                 run[name] = True
         runs.append(run)
     return runs
@@ -273,9 +275,9 @@ def section_of(text: str) -> str | None:
 
 def _cell_runs(cell) -> list[dict]:
     runs: list[dict] = []
-    for paragraph in cell.paragraphs:
+    for paragraph_index, paragraph in enumerate(cell.paragraphs):
         recovered = runs_of(paragraph)
-        if runs and recovered:
+        if paragraph_index:
             runs.append({"text": "\n"})
         runs.extend(recovered)
     return runs or [{"text": ""}]
@@ -325,12 +327,18 @@ def _image_width_mm(paragraph, data: bytes) -> float:
 
 
 def _table_fragment(table, caption: str) -> dict:
+    if table._tbl.xpath(".//w:drawing | .//w:pict"):
+        raise ReportImportError("A table contains a picture, but the app's table cells hold text only. Move the picture outside the table before importing.")
+    if table._tbl.xpath(".//w:tcPr/w:vMerge | .//w:tcPr/w:hMerge") or any(
+        span.val > 1 for span in table._tbl.xpath(".//w:tcPr/w:gridSpan")
+    ):
+        raise ReportImportError("A table has merged cells, which the app cannot represent. Unmerge the cells before importing.")
     rows = [[{"runs": _cell_runs(cell)} for cell in row.cells] for row in table.rows]
     if not rows:
         raise ReportImportError("a table in this report has no rows")
     return {
         "frag_id": _fresh("f"), "type": "table", "caption": _clean(caption) or None,
-        "header": rows[0], "rows": rows[1:] or [[{"runs": [{"text": ""}]} for _ in rows[0]]],
+        "header": rows[0], "rows": rows[1:],
     }
 
 
@@ -363,6 +371,8 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
             pending_caption = ""
             active_list_id = None
             continue
+        if element.tag == qn("w:sdt"):
+            raise ReportImportError("A content control contains report content the app cannot read. Remove the content control while keeping its contents before importing.")
         if element.tag != qn("w:p"):
             continue
         paragraph = Paragraph(element, document)
@@ -371,6 +381,8 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
         if stripped in BOILERPLATE:
             continue
         kind = classify_paragraph(paragraph, formats)
+        if pending_caption and stripped and kind not in ("caption", "code_block"):
+            raise ReportImportError(f'An unattached caption "{pending_caption}" has no table or code block immediately after it.')
         # An image's caption sits directly under it, so position identifies it and the style name does
         # not have to. The generator's "Figure n." lead-in is its own, and never the tester's words.
         if fragments and fragments[-1]["type"] == "image" and not fragments[-1]["caption"] and FIGURE_PREFIX.match(stripped):
@@ -378,12 +390,18 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
             continue
         if kind == "caption":
             caption = FIGURE_PREFIX.sub("", stripped)
+            if pending_caption:
+                raise ReportImportError(f'An unattached caption "{pending_caption}" is followed by another caption "{caption}".')
             if fragments and fragments[-1]["type"] == "image":
+                if fragments[-1]["caption"]:
+                    raise ReportImportError(f'An image has more than one caption: "{fragments[-1]["caption"]}" and "{caption}".')
                 fragments[-1]["caption"] = _clean(caption)
             else:
                 pending_caption = caption
             continue
         if kind == "image":
+            if text.strip():
+                raise ReportImportError(f'An image paragraph also contains text "{_excerpt(text)}". Move the text into a separate paragraph before importing.')
             data = _image_bytes(document, paragraph)
             evidence_id = _fresh("ev")
             evidence[evidence_id] = data
@@ -446,6 +464,8 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
             })
             continue
         fragments.append({"frag_id": _fresh("f"), "type": "paragraph", "runs": runs_of(paragraph)})
+    if pending_caption:
+        raise ReportImportError(f'An unattached caption "{pending_caption}" has no table or code block after it.')
     return fragments
 
 
@@ -679,7 +699,7 @@ def _summary_rows(document) -> tuple[list[dict], int]:
         rows.append({
             "title": title, "likelihood": cells[1].lower() or None, "impact": cells[2].lower() or None,
             "severity": cells[3].lower() or "informational", "display_id": cells[4],
-            "status": STATUS_BY_LABEL.get(cells[5], FALLBACK_STATUS), "status_label": cells[5],
+            "status": STATUS_BY_FOLDED_LABEL.get(_title_key(cells[5]), FALLBACK_STATUS), "status_label": cells[5],
         })
     return rows, skipped
 
@@ -942,7 +962,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
     summary_rows, skipped_rows = _summary_rows(document)
     # Named rather than refused: the tester can see which findings were assumed and correct them.
     for row in summary_rows:
-        if row["status_label"] not in STATUS_BY_LABEL:
+        if _title_key(row["status_label"]) not in STATUS_BY_FOLDED_LABEL:
             warnings.append(
                 f'"{row["title"]}" had an unrecognised status '
                 f'({row["status_label"] or "blank"}) and was imported as {STATUS_LABELS[FALLBACK_STATUS]}.'
@@ -990,6 +1010,8 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
     warnings.extend(_position_warnings("CVSS row", [_cvss_title(row) for row in cvss_rows], cvss_pairs, row_titles))
     findings, dropped, rewritten = [], [], []
     for position, (index, _) in enumerate(starts):
+        row = summary_rows[heading_pairs.paired[position]]
+        title = row["title"]
         stop = len(body)
         for later, _ in starts[position + 1:]:
             stop = later
@@ -998,10 +1020,14 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             element = body[cursor]
             if element.tag == qn("w:p"):
                 if paragraph_style_id(element) == GROUP_HEADING_STYLE:
+                    heading = _collapsed(Paragraph(element, document).text)
+                    if position == len(starts) - 1 and not heading.startswith("Appendix:"):
+                        raise ReportImportError(
+                            f'"{title}" has an unexpected group heading "{_excerpt(heading)}" before the Appendix. '
+                            "It would hide the rest of the finding. Move it into a labelled section with an ordinary paragraph style before importing."
+                        )
                     stop = cursor
                     break
-        row = summary_rows[heading_pairs.paired[position]]
-        title = row["title"]
         # Paired up front, so a finding that a retest drops still uses its own CVSS row.
         cvss_row = cvss_for_row.get(heading_pairs.paired[position])
         cvss_score, cvss_vector = "", ""
@@ -1027,6 +1053,12 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                     if detail is not None:
                         raise ReportImportError(f'"{title}" has more than one finding table. {FINDING_TABLE_RULE}')
                     detail = table
+                else:
+                    found = _excerpt(" | ".join(cell.text for table_row in table.rows for cell in table_row.cells))
+                    raise ReportImportError(
+                        f'"{title}" has an unsupported table before its Description section: "{found}". '
+                        f"{FINDING_TABLE_RULE} Move content into a labelled section before importing."
+                    )
                 continue
             if element.tag == qn("w:p"):
                 paragraph = Paragraph(element, document)
@@ -1040,7 +1072,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                     sections.setdefault(current, [])
                     continue
                 # The label and its value both stop here, or they reach in_conclusion as fragments.
-                if _collapsed(paragraph.text) == SEVERITY_TICKET_LABEL:
+                if current == "in_conclusion" and _collapsed(paragraph.text) == SEVERITY_TICKET_LABEL:
                     awaiting_tickets = True
                     continue
                 if awaiting_tickets:
@@ -1066,7 +1098,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
             ]
         # A status this app assumed tells us nothing about the shape, so either is accepted and the
         # document decides. Without this the structure check refuses before the status ever matters.
-        if row["status_label"] not in STATUS_BY_LABEL and section_order == [
+        if _title_key(row["status_label"]) not in STATUS_BY_FOLDED_LABEL and section_order == [
             "description", "recommended_remediation", "proof_of_concept",
         ]:
             expected_sections = section_order
@@ -1092,7 +1124,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         # status was assumed, and that has its own warning.
         detail_status_label = _clean(detail_values.get("Status", ""))
         detail_status = STATUS_BY_FOLDED_LABEL.get(detail_status_label.casefold())
-        if row["status_label"] in STATUS_BY_LABEL and detail_status not in (None, row["status"]):
+        if _title_key(row["status_label"]) in STATUS_BY_FOLDED_LABEL and detail_status not in (None, row["status"]):
             differences.append(("Status", detail_status_label, row["status_label"]))
 
         local_evidence: dict[str, bytes] = {}

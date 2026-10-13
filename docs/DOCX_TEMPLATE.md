@@ -177,6 +177,9 @@ their printed sections, engagement metadata, scope, Additional Information, and
 reachable evidence. It does not recover hidden source-draft state, original IDs,
 or original image upload metadata.
 
+Status recognition ignores capitals and extra whitespace in both the finding
+row and the finding table. `CLOSED` has the same meaning as `Closed`.
+
 Status round-trips on the printed label. `STATUS_BY_LABEL` is the inverse of
 `STATUS_LABELS` in `app/models.py`, so it carries all five,
 including `"Closed": "closed"` — without it a generated Closed report imports as
@@ -223,6 +226,23 @@ fragment that cannot be read is named with its section too. The wording is in
 `app/docx_import.py`, pinned by tests in `tests/test_docx_import.py`. The checks
 in `finalize_editable_import` name the finding, the section and what the app
 would change (`first_change`).
+
+An unlabelled table before Description is refused rather than discarded. So are
+unattached captions, a repeated non-empty image caption, a caption separated from
+its table or code block by prose, text beside a picture in one paragraph, pictures
+inside text-only table cells, merged cells, and body-level Word content controls. The refusal
+names the finding and section where applicable. The tester can rearrange the Word
+content and retry; no partial draft is created.
+An unexpected non-Appendix group heading after the last finding is also refused,
+because treating it as a boundary would silently truncate that finding.
+
+Visible hyperlink text imports as ordinary text with its bold, italic and
+underline settings, not as a clickable link. Explicit formatting-off values,
+paragraph-mark formatting-off values, and Word's `numId=0` numbering-off value
+remain off. A header-only table keeps zero data rows, and empty cell paragraphs
+retain their line breaks. Severity review ticket
+metadata is read after In Conclusion begins; the same label in another section
+remains authored text.
 
 Every retained image occurrence receives fresh evidence identity while keeping
 its embedded PNG bytes exactly. ZIP member counts and expanded size, media byte

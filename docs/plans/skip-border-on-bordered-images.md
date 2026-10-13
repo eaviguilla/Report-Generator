@@ -31,7 +31,7 @@ From a grilling session on 2026-10-13.
 - [x] 4. Docs: `docs/DOCX_TEMPLATE.md` (two passages), `docs/ARCHITECTURE.md` (two lines), the Word pipeline instruction, regenerated into `.claude/rules/`, and GLOSSARY.md.
 - [x] 5. A note in the two earlier plans that their decision to accept the double border no longer holds.
 - [ ] 6. One real pasted picture checked on Windows.
-- [ ] 7. Commit. The status stays in-progress until a commit contains this change.
+- [x] 7. Committed as `e47d6bd`. The status stays in-progress until the Windows check in step 6.
 
 ## Next steps
 

@@ -170,6 +170,28 @@ RECONCILE_CASES = [
 
 @unittest.skipIf(sync_playwright is None, "Playwright is not installed")
 class SaveModuleTests(unittest.TestCase):
+    def test_native_unload_warns_for_pending_library_mutation_without_field_edits(self) -> None:
+        self.start(report_json())
+        self.page.evaluate("""() => {
+            void saveCode.trackMutation(() => new Promise(resolve => { window.finishLibraryInsert = resolve; }));
+        }""")
+        self.assertTrue(self.page.evaluate("""() => {
+            const event = new Event('beforeunload', {cancelable: true});
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+        }"""), "an in-flight library insert must warn even if the report has no unsaved field edits")
+
+        self.page.evaluate("""() => {
+            saveCode.waitForMutations().then(() => { window.libraryInsertSettled = true; });
+            window.finishLibraryInsert();
+        }""")
+        self.page.wait_for_function("window.libraryInsertSettled === true")
+        self.assertFalse(self.page.evaluate("""() => {
+            const event = new Event('beforeunload', {cancelable: true});
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+        }"""), "a settled mutation with no edits must no longer warn")
+
     def test_a_page_check_stops_the_next_round_of_a_save_already_out(self) -> None:
         self.start(report_json())
         save_button = self.page.locator("#save-button")

@@ -12,9 +12,12 @@ import hashlib
 import json
 import tempfile
 import unittest
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from threading import Event
 from typing import get_args
 from unittest.mock import patch
 
@@ -1029,12 +1032,13 @@ class ImportRouteTests(unittest.TestCase):
     def _docx() -> bytes:
         return base_render()
 
-    def _import(self, name: str, data: bytes, mode: str | None = None):
+    def _import(self, name: str, data: bytes, mode: str | None = None, import_id: str | None = None):
         form = {"docx_mode": mode} if mode is not None else None
         return self.client.post(
             "/reports/import",
             data=form,
             files={"file": (name, data, "application/octet-stream")},
+            headers={"X-VulnReport-Import-Id": import_id} if import_id else None,
         )
 
     def test_a_generated_report_imports_as_a_retest_draft(self) -> None:
@@ -1201,6 +1205,258 @@ class ImportRouteTests(unittest.TestCase):
         self.assertEqual(main._editable_user_projection(after), before)
         self.assertEqual(after.app_id, "Northstar_Banking")
         self.assertGreater(after.saved_at, previous_revision)
+
+    def test_repeated_import_request_id_returns_the_first_result_without_a_second_report(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        first = self._import("report.docx", self._docx(), "editable", import_id)
+        second = self._import("report.docx", self._docx(), "editable", import_id)
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json(), first.json())
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_one_import_request_id_keeps_prompt_classification_separate_from_the_final_import(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        prompt = self._import("report.docx", self._docx(), "prompt", import_id)
+        editable = self._import("report.docx", self._docx(), "editable", import_id)
+
+        self.assertEqual(prompt.status_code, 200, prompt.text)
+        self.assertEqual(prompt.json(), {"source": "docx", "mode_required": True})
+        self.assertEqual(editable.status_code, 200, editable.text)
+        self.assertEqual(editable.json()["mode"], "editable")
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_failed_import_request_id_can_be_retried_with_valid_bytes(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        refused = self._import("report.docx", b"not a report", "editable", import_id)
+        retried = self._import("report.docx", self._docx(), "editable", import_id)
+
+        self.assertEqual(refused.status_code, 422)
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_overlapping_import_retries_share_one_in_flight_request(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        entered = Event()
+        pending_claimed = Event()
+        release = Event()
+        calls = []
+        original_import = main._import_report_once
+        original_claim = main._claim_import
+
+        async def held_import(file, mode):
+            calls.append(mode)
+            entered.set()
+            await main.run_in_threadpool(release.wait)
+            return await original_import(file, mode)
+
+        def observed_claim(request_key):
+            claim = original_claim(request_key)
+            if claim[0] == "pending":
+                pending_claimed.set()
+            return claim
+
+        try:
+            with patch.object(main, "_import_report_once", side_effect=held_import), patch.object(main, "_claim_import", side_effect=observed_claim):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first = pool.submit(self._import, "report.docx", self._docx(), "editable", import_id)
+                    self.assertTrue(entered.wait(2), "the first request never reached the importer")
+                    second = pool.submit(self._import, "report.docx", self._docx(), "editable", import_id)
+                    self.assertTrue(pending_claimed.wait(2), "the retry did not join the in-flight request")
+                    release.set()
+                    responses = [first.result(), second.result()]
+        finally:
+            release.set()
+
+        self.assertEqual(calls, ["editable"])
+        self.assertEqual([response.status_code for response in responses], [200, 200])
+        self.assertEqual(responses[0].json(), responses[1].json())
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_overlapping_failed_imports_both_refuse_and_leave_the_request_id_retryable(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        entered = Event()
+        pending_claimed = Event()
+        release = Event()
+        calls = []
+        original_import = main._import_report_once
+        original_claim = main._claim_import
+
+        async def held_import(file, mode):
+            calls.append(mode)
+            entered.set()
+            await main.run_in_threadpool(release.wait)
+            return await original_import(file, mode)
+
+        def observed_claim(request_key):
+            claim = original_claim(request_key)
+            if claim[0] == "pending":
+                pending_claimed.set()
+            return claim
+
+        try:
+            with patch.object(main, "_import_report_once", side_effect=held_import), patch.object(main, "_claim_import", side_effect=observed_claim):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first = pool.submit(self._import, "report.docx", b"not a report", "editable", import_id)
+                    self.assertTrue(entered.wait(2), "the first request never reached the importer")
+                    second = pool.submit(self._import, "report.docx", b"not a report", "editable", import_id)
+                    self.assertTrue(pending_claimed.wait(2), "the retry did not join the in-flight request")
+                    release.set()
+                    responses = [first.result(), second.result()]
+        finally:
+            release.set()
+
+        self.assertEqual(calls, ["editable"])
+        self.assertEqual([response.status_code for response in responses], [422, 422])
+        retried = self._import("report.docx", self._docx(), "editable", import_id)
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_overlapping_final_modes_share_one_in_flight_import(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        entered = Event()
+        pending_claimed = Event()
+        release = Event()
+        calls = []
+        original_import = main._import_report_once
+        original_claim = main._claim_import
+
+        async def held_import(file, mode):
+            calls.append(mode)
+            entered.set()
+            await main.run_in_threadpool(release.wait)
+            return await original_import(file, mode)
+
+        def observed_claim(request_key):
+            claim = original_claim(request_key)
+            if claim[0] == "pending":
+                pending_claimed.set()
+            return claim
+
+        try:
+            with patch.object(main, "_import_report_once", side_effect=held_import), patch.object(main, "_claim_import", side_effect=observed_claim):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    editable = pool.submit(self._import, "report.docx", self._docx(), "editable", import_id)
+                    self.assertTrue(entered.wait(2), "the editable request never reached the importer")
+                    retest = pool.submit(self._import, "report.docx", self._docx(), "retest", import_id)
+                    joined = pending_claimed.wait(1)
+                    release.set()
+                    responses = [editable.result(), retest.result()]
+        finally:
+            release.set()
+
+        self.assertTrue(joined, "the second final mode did not join the in-flight import")
+        self.assertEqual(calls, ["editable"])
+        self.assertEqual([response.status_code for response in responses], [200, 200])
+        self.assertEqual(responses[0].json(), responses[1].json())
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_legacy_omitted_mode_and_explicit_retest_share_one_in_flight_import(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        entered = Event()
+        pending_claimed = Event()
+        release = Event()
+        calls = []
+        original_import = main._import_report_once
+        original_claim = main._claim_import
+
+        async def held_import(file, mode):
+            calls.append(mode)
+            entered.set()
+            await main.run_in_threadpool(release.wait)
+            return await original_import(file, mode)
+
+        def observed_claim(request_key):
+            claim = original_claim(request_key)
+            if claim[0] == "pending":
+                pending_claimed.set()
+            return claim
+
+        try:
+            with patch.object(main, "_import_report_once", side_effect=held_import), patch.object(main, "_claim_import", side_effect=observed_claim):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    legacy = pool.submit(self._import, "report.docx", self._docx(), None, import_id)
+                    self.assertTrue(entered.wait(2), "the legacy request never reached the importer")
+                    explicit = pool.submit(self._import, "report.docx", self._docx(), "retest", import_id)
+                    joined = pending_claimed.wait(1)
+                    release.set()
+                    responses = [legacy.result(), explicit.result()]
+        finally:
+            release.set()
+
+        self.assertTrue(joined, "explicit retest did not join the legacy in-flight retest")
+        self.assertEqual(calls, [None])
+        self.assertEqual([response.status_code for response in responses], [200, 200])
+        self.assertEqual(responses[0].json(), responses[1].json())
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_retry_reimports_when_the_report_in_its_receipt_was_deleted(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        first = self._import("report.docx", self._docx(), "editable", import_id)
+        self.assertEqual(first.status_code, 200, first.text)
+        main.workspace.delete(first.json()["report_id"])
+
+        retried = self._import("report.docx", self._docx(), "editable", import_id)
+
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertNotEqual(retried.json()["report_id"], first.json()["report_id"])
+        main.workspace.load(retried.json()["report_id"])
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_malformed_persistent_import_receipts_do_not_block_an_import(self) -> None:
+        main._import_receipts_path().write_text("{not json", encoding="utf-8")
+        with main._import_receipts_lock:
+            main._import_receipts.clear()
+            main._imports_in_flight.clear()
+
+        response = self._import("report.docx", self._docx(), "editable", f"test-{uuid.uuid4()}")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        main.workspace.load(response.json()["report_id"])
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_wrong_persistent_receipt_shape_does_not_block_an_import(self) -> None:
+        main._import_receipts_path().write_text('{"receipts": 12}', encoding="utf-8")
+        with main._import_receipts_lock:
+            main._import_receipts.clear()
+            main._imports_in_flight.clear()
+
+        response = self._import("report.docx", self._docx(), "editable", f"test-{uuid.uuid4()}")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        main.workspace.load(response.json()["report_id"])
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_persisted_receipt_for_a_deleted_report_is_discarded_after_restart(self) -> None:
+        import_id = f"test-{uuid.uuid4()}"
+        first = self._import("report.docx", self._docx(), "editable", import_id)
+        self.assertEqual(first.status_code, 200, first.text)
+        main.workspace.delete(first.json()["report_id"])
+        with main._import_receipts_lock:
+            main._import_receipts.clear()
+            main._imports_in_flight.clear()
+
+        retried = self._import("report.docx", self._docx(), "editable", import_id)
+
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertNotEqual(retried.json()["report_id"], first.json()["report_id"])
+        main.workspace.load(retried.json()["report_id"])
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 1)
+
+    def test_newer_imports_do_not_evict_the_receipt_for_a_live_report(self) -> None:
+        import_ids = [f"test-{uuid.uuid4()}" for _ in range(3)]
+        with patch.object(main, "IMPORT_RECEIPT_LIMIT", 2):
+            imported = [self._import("report.docx", self._docx(), "editable", import_id) for import_id in import_ids]
+            self.assertEqual([response.status_code for response in imported], [200, 200, 200])
+            with main._import_receipts_lock:
+                main._import_receipts.clear()
+                main._imports_in_flight.clear()
+            retried = self._import("report.docx", self._docx(), "editable", import_ids[0])
+
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertEqual(retried.json(), imported[0].json())
+        self.assertEqual(len(list(self.root.glob("apps/**/draft.json"))), 3)
 
     def test_explicit_docx_mode_is_rejected_for_a_bundle(self) -> None:
         created = self.client.get("/new", follow_redirects=False)

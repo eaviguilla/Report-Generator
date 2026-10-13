@@ -364,9 +364,16 @@
       const saveButton = document.querySelector("#save-button");
       if (saveButton) delete saveButton.dataset.action;
     }
-    function markSaveConflict(error, operation = "save_report") {
+    const retriesAfterConflict = [];
+    function queueConflictRetry(retry) {
+      if (!saveConflict) return false;
+      retriesAfterConflict.push(retry);
+      return true;
+    }
+    function markSaveConflict(error, operation = "save_report", retry) {
       const normalized = diagnostics.normalize(error, operation, "This report changed elsewhere");
       saveConflict = normalized.diagnostic;
+      if (retry) retriesAfterConflict.push(retry);
       pendingSave = true;
       persistLocalDraft();
       const saveButton = document.querySelector("#save-button");
@@ -389,7 +396,10 @@
               saveRevision += 1;
               diagnostics.clear();
               setSaveState(SAVE_STATES.SAVING);
-              await save();
+              if (await save()) {
+                const retries = retriesAfterConflict.splice(0);
+                for (const retry of retries) await retry();
+              }
             },
           },
           {
@@ -404,6 +414,7 @@
               }
               if (!clearLocalDraft()) return;
               clearSaveConflict();
+              retriesAfterConflict.length = 0;
               // The tester's version is discarded, so pagehide must not write it back as the page reloads.
               pendingSave = false;
               allowUnsavedUnload = true;
@@ -714,7 +725,7 @@
       persistLocalDraft();
     });
     window.addEventListener("beforeunload", event => {
-      if (allowUnsavedUnload || saveRevision <= savedRevision) return;
+      if (allowUnsavedUnload || (saveRevision <= savedRevision && !pendingMutation)) return;
       persistLocalDraft();
       event.preventDefault();
       event.returnValue = "";
@@ -730,7 +741,7 @@
     } else if (recoveryCandidate) {
       showLocalRecovery(recoveryCandidate);
     }
-    return {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
+    return {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
   }
   window.vrSave = {start, reconcileCanonicalObject, isRecord, activeTextEntry};
 })();

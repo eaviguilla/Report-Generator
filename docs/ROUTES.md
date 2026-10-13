@@ -76,7 +76,13 @@ page's Generate dialog adds it, and `scripts/generate_report.py` takes
 ### Report import protocol
 
 `POST /reports/import` always receives `file` and may receive multipart
-`docx_mode=prompt|editable|retest`. Classification is based on bytes, not the
+`docx_mode=prompt|editable|retest`. The Reports page also sends an
+`X-VulnReport-Import-Id` header. Identical and cross-mode final retries, including
+the omitted legacy Retest mode, wait for
+an in-flight request or reuse its successful result, so a lost response cannot
+create a second report. The active data folder persists receipts for live
+reports in `import-receipts.json`; prompt-only receipts are capped at 100, and
+failed requests are not retained. Classification is based on bytes, not the
 filename or MIME type. `prompt` returns `{source: "docx", mode_required: true}`
 without creating a report when the bytes are a generated DOCX; ZIP/JSON bytes
 import immediately. Omitting the field preserves the legacy retest behavior.
@@ -87,6 +93,12 @@ The Reports page's import dialog sends nothing until the tester clicks a button.
 It sorts the file by the end of its name: a `.docx` goes up once with the
 `editable` or `retest` mode of the button clicked; a `.zip` or `.json` goes up
 with `prompt`, and a `mode_required` answer makes the dialog ask for the mode.
+A file keeps one request ID while the dialog holds it, including after a failed
+response. The browser keys that pending operation by the file's SHA-256 in
+memory, `sessionStorage`, and the current history entry, so closing or reloading
+can resume it even when Web Storage refuses writes. A final success clears the
+marker and leaves a history tombstone that overrides stale storage. Replacing
+the file uses a different request ID.
 
 Retest rewrites retained findings to Previously Discovered, promotes the source
 Proof of Concept to Previous Proof of Concept, seeds a fresh proof, and reports

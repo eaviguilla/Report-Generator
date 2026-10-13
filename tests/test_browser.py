@@ -2518,6 +2518,34 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".content-block").filter(has_text="Description").locator(".rich").first.text_content(), "Unsaved description")
         self.assertEqual(page.locator(".image-preview").count(), 1)
 
+    def test_setup_paste_then_content_upload_keeps_both_changes(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        name = page.get_by_label("Application Name", exact=True)
+        name.fill("Browser")
+        self._paste_text(name, " QA  ")
+        self.assertEqual(name.input_value(), "Browser QA")
+
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_url("**/findings")
+        page.get_by_role("button", name="Next: Content", exact=False).click()
+        page.wait_for_url("**/edit")
+        page.locator('input[type="file"]').first.set_input_files(
+            {"name": "proof.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)}
+        )
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+        page.reload()
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.app_name, "Browser QA")
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        self.assertIsNotNone(image.evidence_id)
+        evidence = saved.evidence[image.evidence_id]
+        self.assertTrue((main.workspace.find_path(report_id).parent / evidence.file).is_file())
+        self.assertEqual(page.locator(".image-preview").count(), 1)
+
     def paste_png(self, selector: str | None = None) -> None:
         """Dispatch a genuine paste event carrying a PNG, on one card or on the page itself."""
         image_data = png_bytes(2, 2)
@@ -2867,6 +2895,343 @@ class BrowserWorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(len(saved.evidence), 1, "navigating away dropped the upload")
         self.assertEqual(referenced, list(saved.evidence), "the uploaded image is referenced by no fragment")
+
+    def test_native_back_warns_while_evidence_upload_is_pending(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.evaluate(
+            """() => {
+                const originalFetch = window.fetch.bind(window);
+                window.releaseNativeBackUpload = null;
+                window.fetch = (input, init = {}) => String(input).endsWith('/evidence') && init.method === 'POST'
+                    ? new Promise(resolve => { window.releaseNativeBackUpload = () => originalFetch(input, init).then(resolve); })
+                    : originalFetch(input, init);
+            }"""
+        )
+        page.locator('input[type="file"]').first.set_input_files(
+            {"name": "proof.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)}
+        )
+        page.wait_for_function("window.releaseNativeBackUpload !== null")
+        with page.expect_event("dialog", timeout=2_000) as dialog_info:
+            page.evaluate("history.back()")
+        self.assertEqual(dialog_info.value.type, "beforeunload")
+        dialog_info.value.dismiss()
+        self.assertTrue(page.url.endswith("/edit"), "dismissing the warning must retain the upload page")
+        page.evaluate("window.releaseNativeBackUpload()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+        saved = main.workspace.load(report_id)
+        self.assertEqual(len(saved.evidence), 1)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        evidence = saved.evidence[image.evidence_id]
+        self.assertTrue((main.workspace.find_path(report_id).parent / evidence.file).is_file())
+
+    def test_dismissed_native_back_keeps_two_queued_uploads(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(frag_id="f_second_native_upload", type="image", environment="production"))
+        main.workspace.save(report)
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.evaluate("""() => {
+            const originalFetch = window.fetch.bind(window);
+            window.heldNativeUploads = [];
+            window.fetch = (input, init = {}) => String(input).endsWith('/evidence') && init.method === 'POST'
+                ? new Promise(resolve => window.heldNativeUploads.push(() => originalFetch(input, init).then(resolve)))
+                : originalFetch(input, init);
+        }""")
+        uploads = page.locator('.evidence-tile:not(.has-evidence) input[type="file"]')
+        uploads.nth(0).set_input_files({"name": "first.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)})
+        uploads.nth(1).set_input_files({"name": "second.png", "mimeType": "image/png", "buffer": png_bytes(3, 3)})
+        page.wait_for_function("window.heldNativeUploads.length === 1")
+
+        with page.expect_event("dialog", timeout=2_000) as dialog_info:
+            page.evaluate("history.back()")
+        dialog_info.value.dismiss()
+        page.evaluate("window.heldNativeUploads.shift()()")
+        page.wait_for_function("window.heldNativeUploads.length === 1")
+        page.evaluate("window.heldNativeUploads.shift()()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        ids = [fragment.evidence_id for fragment in proof.fragments if fragment.type == "image"]
+        self.assertEqual(len(set(ids)), 2)
+        self.assertEqual(set(ids), set(saved.evidence))
+        for evidence in saved.evidence.values():
+            self.assertTrue((main.workspace.find_path(report_id).parent / evidence.file).is_file())
+
+    def test_upload_conflict_resolution_keeps_selected_screenshot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        other_page = self.other_profile_page()
+        other_page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("""() => {
+            const originalFetch = window.fetch.bind(window);
+            window.releaseStaleUpload = null;
+            window.fetch = (input, init = {}) => String(input).endsWith('/evidence') && init.method === 'POST'
+                ? new Promise(resolve => { window.releaseStaleUpload = () => originalFetch(input, init).then(resolve); })
+                : originalFetch(input, init);
+        }""")
+        page.locator('input[type="file"]').first.set_input_files(
+            {"name": "selected.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)}
+        )
+        page.wait_for_function("window.releaseStaleUpload !== null")
+        other_page.get_by_label("Application Owner").fill("Other profile")
+        other_page.get_by_role("button", name="Save").click()
+        other_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.request.method == "POST") as upload_result:
+            page.evaluate("() => { const release = window.releaseStaleUpload; window.releaseStaleUpload = null; release(); }")
+        self.assertEqual(upload_result.value.status, 409, "a stale upload must be a resolvable conflict, not a server error")
+        page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+        self.assertEqual(len(main.workspace.load(report_id).evidence), 0)
+
+        page.get_by_role("button", name="Save my version").click()
+        page.wait_for_function("window.releaseStaleUpload !== null", timeout=2_000)
+        page.evaluate("window.releaseStaleUpload()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        self.assertIn(image.evidence_id, saved.evidence, "resolving the conflict silently lost the selected screenshot")
+
+    def test_second_conflict_during_upload_resolution_keeps_selected_screenshot(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        other_page = self.other_profile_page()
+        other_page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("""() => {
+            const originalFetch = window.fetch.bind(window);
+            window.releaseUploadAfterConflicts = null;
+            window.fetch = (input, init = {}) => String(input).endsWith('/evidence') && init.method === 'POST'
+                ? new Promise(resolve => { window.releaseUploadAfterConflicts = () => originalFetch(input, init).then(resolve); })
+                : originalFetch(input, init);
+        }""")
+        page.locator('input[type="file"]').first.set_input_files(
+            {"name": "twice-stale.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)}
+        )
+        page.wait_for_function("window.releaseUploadAfterConflicts !== null")
+        other_page.get_by_label("Application Owner").fill("First newer revision")
+        other_page.get_by_role("button", name="Save").click()
+        other_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        page.evaluate("() => { const release = window.releaseUploadAfterConflicts; window.releaseUploadAfterConflicts = null; release(); }")
+        page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+
+        other_page.get_by_label("Application Owner").fill("Second newer revision")
+        other_page.get_by_role("button", name="Save").click()
+        other_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        with page.expect_response(lambda response: response.url.endswith(f"/reports/{report_id}") and response.request.method == "PUT") as resolution:
+            page.get_by_role("button", name="Save my version").click()
+        self.assertEqual(resolution.value.status, 409)
+        page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+        page.get_by_role("button", name="Save my version").click()
+        page.wait_for_function("window.releaseUploadAfterConflicts !== null", timeout=5_000)
+        page.evaluate("window.releaseUploadAfterConflicts()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        self.assertIn(image.evidence_id, saved.evidence)
+        self.assertTrue((main.workspace.find_path(report_id).parent / saved.evidence[image.evidence_id].file).is_file())
+
+    def test_failed_first_upload_does_not_block_queued_second_image(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(frag_id="f_after_bad_upload", type="image", environment="production"))
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.evaluate("""() => {
+            const originalFetch = window.fetch.bind(window);
+            window.releaseBadUpload = null;
+            let first = true;
+            window.fetch = (input, init = {}) => {
+                if (first && String(input).endsWith('/evidence') && init.method === 'POST') {
+                    first = false;
+                    return new Promise(resolve => { window.releaseBadUpload = () => originalFetch(input, init).then(resolve); });
+                }
+                return originalFetch(input, init);
+            };
+        }""")
+        uploads = page.locator('.evidence-tile:not(.has-evidence) input[type="file"]')
+        uploads.nth(0).set_input_files({"name": "bad.png", "mimeType": "image/png", "buffer": b"not a png"})
+        page.wait_for_function("window.releaseBadUpload !== null")
+        uploads.nth(1).set_input_files({"name": "good.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)})
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.status == 400):
+            page.evaluate("window.releaseBadUpload()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        images = [fragment for fragment in proof.fragments if fragment.type == "image"]
+        self.assertIsNone(images[0].evidence_id)
+        self.assertIn(images[1].evidence_id, saved.evidence)
+        self.assertEqual(len(saved.evidence), 1)
+        self.assertTrue((main.workspace.find_path(report_id).parent / saved.evidence[images[1].evidence_id].file).is_file())
+
+    def test_queued_second_image_survives_first_upload_conflict(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(frag_id="f_queued_conflict", type="image", environment="production"))
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        other_page = self.other_profile_page()
+        other_page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("""() => {
+            const originalFetch = window.fetch.bind(window);
+            window.heldConflictUploads = [];
+            window.fetch = (input, init = {}) => String(input).endsWith('/evidence') && init.method === 'POST'
+                ? new Promise(resolve => window.heldConflictUploads.push(() => originalFetch(input, init).then(resolve)))
+                : originalFetch(input, init);
+        }""")
+        uploads = page.locator('.evidence-tile:not(.has-evidence) input[type="file"]')
+        uploads.nth(0).set_input_files({"name": "first.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)})
+        page.wait_for_function("window.heldConflictUploads.length === 1")
+        uploads.nth(1).set_input_files({"name": "second.png", "mimeType": "image/png", "buffer": png_bytes(3, 3)})
+        other_page.get_by_label("Application Owner").fill("Another profile")
+        other_page.get_by_role("button", name="Save").click()
+        other_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.status == 409):
+            page.evaluate("window.heldConflictUploads.shift()()")
+        page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+        page.get_by_role("button", name="Save my version").click()
+        page.wait_for_function("window.heldConflictUploads.length === 1", timeout=5_000)
+        page.evaluate("window.heldConflictUploads.shift()()")
+        page.wait_for_function("window.heldConflictUploads.length === 1", timeout=5_000)
+        page.evaluate("window.heldConflictUploads.shift()()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        ids = [fragment.evidence_id for fragment in proof.fragments if fragment.type == "image"]
+        self.assertEqual(len(ids), 2)
+        self.assertTrue(all(ids), "a second selected image vanished while the first conflict was resolved")
+        self.assertEqual(set(ids), set(saved.evidence))
+
+    def test_load_latest_discards_images_queued_behind_upload_conflict(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(frag_id="f_discarded_upload", type="image", environment="production"))
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        other_page = self.other_profile_page()
+        other_page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("""() => {
+            const originalFetch = window.fetch.bind(window);
+            window.releaseDiscardedUpload = null;
+            window.fetch = (input, init = {}) => String(input).endsWith('/evidence') && init.method === 'POST'
+                ? new Promise(resolve => { window.releaseDiscardedUpload = () => originalFetch(input, init).then(resolve); })
+                : originalFetch(input, init);
+        }""")
+        uploads = page.locator('.evidence-tile:not(.has-evidence) input[type="file"]')
+        uploads.nth(0).set_input_files({"name": "first.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)})
+        page.wait_for_function("window.releaseDiscardedUpload !== null")
+        uploads.nth(1).set_input_files({"name": "second.png", "mimeType": "image/png", "buffer": png_bytes(3, 3)})
+        other_page.get_by_label("Application Owner").fill("Other tab owns this revision")
+        other_page.get_by_role("button", name="Save").click()
+        other_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.status == 409):
+            page.evaluate("window.releaseDiscardedUpload()")
+        page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+        with page.expect_navigation():
+            page.get_by_role("button", name="Load latest").click()
+        page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual(saved.engagement.app_owner, "Other tab owns this revision")
+        self.assertEqual(saved.evidence, {})
+        self.assertEqual(list((main.workspace.find_path(report_id).parent / "evidence").glob("*.png")), [])
+
+    def test_second_upload_conflict_retains_both_queued_images(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments.append(ImageFragment(frag_id="f_second_retry_conflict", type="image", environment="production"))
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        other_page = self.other_profile_page()
+        other_page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.evaluate("""() => {
+            const originalFetch = window.fetch.bind(window);
+            window.heldRetryUploads = [];
+            window.fetch = (input, init = {}) => String(input).endsWith('/evidence') && init.method === 'POST'
+                ? new Promise(resolve => window.heldRetryUploads.push(() => originalFetch(input, init).then(resolve)))
+                : originalFetch(input, init);
+        }""")
+        uploads = page.locator('.evidence-tile:not(.has-evidence) input[type="file"]')
+        uploads.nth(0).set_input_files({"name": "first.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)})
+        uploads.nth(1).set_input_files({"name": "second.png", "mimeType": "image/png", "buffer": png_bytes(3, 3)})
+        page.wait_for_function("window.heldRetryUploads.length === 1")
+        other_page.get_by_label("Application Owner").fill("First change")
+        other_page.get_by_role("button", name="Save").click()
+        other_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.status == 409):
+            page.evaluate("window.heldRetryUploads.shift()()")
+        page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+        page.get_by_role("button", name="Save my version").click()
+        page.wait_for_function("window.heldRetryUploads.length === 1", timeout=5_000)
+        other_page.reload()
+        other_page.get_by_label("Application Owner").fill("Second change")
+        other_page.get_by_role("button", name="Save").click()
+        other_page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
+        with page.expect_response(lambda response: response.url.endswith("/evidence") and response.status == 409):
+            page.evaluate("window.heldRetryUploads.shift()()")
+        page.get_by_role("heading", name="Save conflict").wait_for(timeout=5_000)
+        page.get_by_role("button", name="Save my version").click()
+        for _ in range(2):
+            page.wait_for_function("window.heldRetryUploads.length === 1", timeout=5_000)
+            page.evaluate("window.heldRetryUploads.shift()()")
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        ids = [fragment.evidence_id for fragment in proof.fragments if fragment.type == "image"]
+        self.assertEqual(len(ids), 2)
+        self.assertTrue(all(ids))
+        self.assertEqual(set(ids), set(saved.evidence))
+
+    def test_retrying_same_image_after_upload_server_error_saves_it(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        attempts = []
+
+        def fail_first_upload(route) -> None:
+            attempts.append(route.request)
+            if len(attempts) == 1:
+                route.fulfill(status=503, content_type="application/json", body='{"detail":"Upload temporarily unavailable"}')
+            else:
+                route.continue_()
+
+        page.route(f"**/reports/{report_id}/evidence", fail_first_upload)
+        upload = page.locator('input[type="file"]').first
+        selected = {"name": "retry.png", "mimeType": "image/png", "buffer": png_bytes(2, 2)}
+        upload.set_input_files(selected)
+        page.locator("#app-diagnostics").get_by_role("heading").wait_for(timeout=5_000)
+        self.assertIn("503", page.locator("#app-diagnostics").inner_text())
+        self.assertEqual(len(main.workspace.load(report_id).evidence), 0)
+        upload.set_input_files(selected)
+        page.get_by_role("button", name="Saved").wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        proof = next(content for content in saved.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        image = next(fragment for fragment in proof.fragments if fragment.type == "image")
+        self.assertIn(image.evidence_id, saved.evidence)
+        self.assertTrue((main.workspace.find_path(report_id).parent / saved.evidence[image.evidence_id].file).is_file())
 
     def test_back_waits_for_two_queued_evidence_uploads(self) -> None:
         report_id = self.ready_report(include_finding=True)
@@ -7050,6 +7415,261 @@ class BrowserWorkflowTests(unittest.TestCase):
         dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
         self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
 
+    def test_retry_after_a_lost_successful_import_response_does_not_create_a_duplicate(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        attempts = []
+
+        def lose_first_response(route) -> None:
+            attempts.append(route)
+            if len(attempts) == 1:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_response)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", document, "Editable copy")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+        dialog.get_by_role("button", name="Editable copy", exact=True).click()
+        dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+    def test_retry_after_server_restart_and_a_lost_import_response_does_not_create_a_duplicate(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        attempts = []
+
+        def lose_first_response(route) -> None:
+            attempts.append(route)
+            if len(attempts) == 1:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_response)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", document, "Editable copy")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+        with main._import_receipts_lock:
+            main._import_receipts.clear()
+            main._imports_in_flight.clear()
+
+        dialog.get_by_role("button", name="Editable copy", exact=True).click()
+        dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+    def test_reopening_the_same_file_after_a_lost_import_response_does_not_create_a_duplicate(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        attempts = []
+
+        def lose_first_response(route) -> None:
+            attempts.append(route)
+            if len(attempts) == 1:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_response)
+        self.page.goto(f"{self.base_url}/")
+        first_dialog = self.import_through_dialog("report.docx", document, "Editable copy")
+        first_dialog.get_by_text("import_report", exact=False).wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+        first_dialog.get_by_role("button", name="Close", exact=True).click()
+
+        second_dialog = self.import_through_dialog("report.docx", document, "Editable copy")
+        second_dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+    def test_switching_modes_after_a_lost_successful_response_reveals_the_completed_import(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        attempts = []
+
+        def lose_first_response(route) -> None:
+            attempts.append(route)
+            if len(attempts) == 1:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_response)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", document, "Editable copy")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+        retest = dialog.get_by_role("button", name="Retest", exact=True)
+        retest.click()
+        expect(retest).to_have_count(0)
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(dialog.locator("h2").text_content(), "Imported as an editable copy")
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+    def test_reselecting_after_page_and_server_restart_replays_the_lost_import(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        attempts = []
+
+        def lose_first_response(route) -> None:
+            attempts.append(route)
+            if len(attempts) == 1:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_response)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", document, "Editable copy")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+        with main._import_receipts_lock:
+            main._import_receipts.clear()
+            main._imports_in_flight.clear()
+        self.page.reload()
+
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+    def test_storage_refusal_and_reload_after_a_lost_response_do_not_duplicate_the_import(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        attempts = []
+        self.page.add_init_script("""(() => {
+            const original = Storage.prototype.setItem;
+            Storage.prototype.setItem = function(key, value) {
+                if (String(key).startsWith('vulnreport-import-request:')) throw new DOMException('blocked', 'QuotaExceededError');
+                return original.call(this, key, value);
+            };
+        })()""")
+
+        def lose_first_response(route) -> None:
+            attempts.append(route)
+            if len(attempts) == 1:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_response)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", document, "Editable copy")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+        self.page.reload()
+
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+    def test_same_file_can_be_imported_again_after_its_first_result_was_received(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        request_ids = []
+        self.page.on(
+            "request",
+            lambda request: request_ids.append(request.headers.get("x-vulnreport-import-id")) if request.url.endswith("/reports/import") else None,
+        )
+        self.page.goto(f"{self.base_url}/")
+        first = self.import_through_dialog("report.docx", document, "Editable copy")
+        first.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        first.get_by_role("button", name="Stay on reports").click()
+        self.page.get_by_text("Report imported.").wait_for()
+
+        second = self.import_through_dialog("report.docx", document, "Editable copy")
+        second.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(request_ids), 2)
+        self.assertNotEqual(request_ids[0], request_ids[1])
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 2)
+
+    def test_storage_remove_refusal_does_not_replay_a_completed_import_forever(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        request_ids = []
+        self.page.add_init_script("""(() => {
+            const original = Storage.prototype.removeItem;
+            Storage.prototype.removeItem = function(key) {
+                if (String(key).startsWith('vulnreport-import-request:')) throw new DOMException('blocked', 'SecurityError');
+                return original.call(this, key);
+            };
+        })()""")
+        self.page.on(
+            "request",
+            lambda request: request_ids.append(request.headers.get("x-vulnreport-import-id")) if request.url.endswith("/reports/import") else None,
+        )
+        self.page.goto(f"{self.base_url}/")
+        first = self.import_through_dialog("report.docx", document, "Editable copy")
+        first.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        first.get_by_role("button", name="Stay on reports").click()
+        self.page.get_by_text("Report imported.").wait_for()
+
+        second = self.import_through_dialog("report.docx", document, "Editable copy")
+        second.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(request_ids), 2)
+        self.assertNotEqual(request_ids[0], request_ids[1])
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 2)
+
+    def test_replacing_a_file_after_a_lost_response_starts_a_distinct_import(self) -> None:
+        first_document = self.importable_docx()
+        second = Document(BytesIO(first_document))
+        second.core_properties.comments = "Distinct replacement file"
+        second_buffer = BytesIO()
+        second.save(second_buffer)
+        second_document = second_buffer.getvalue()
+        before = set(self.root.glob("apps/**/draft.json"))
+        request_ids = []
+
+        def lose_first_response(route) -> None:
+            request_ids.append(route.request.headers.get("x-vulnreport-import-id"))
+            if len(request_ids) == 1:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_response)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("first.docx", first_document, "Editable copy")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        self.page.locator("#import-report").set_input_files({"name": "second.docx", "mimeType": "application/octet-stream", "buffer": second_document})
+        dialog.get_by_text("second.docx", exact=True).wait_for()
+        dialog.get_by_role("button", name="Editable copy", exact=True).click()
+        dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
+
+        self.assertEqual(len(request_ids), 2)
+        self.assertNotEqual(request_ids[0], request_ids[1])
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 2)
+
     def test_a_second_file_replaces_the_first(self) -> None:
         document = self.importable_docx()
         before = set(self.root.glob("apps/**/draft.json"))
@@ -7189,6 +7809,72 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(row.evaluate("element => element.closest('details').open"))
         self.assertTrue(row.locator(".report-name").evaluate("element => document.activeElement === element"))
 
+    def test_an_older_report_list_cannot_erase_the_row_revealed_after_import(self) -> None:
+        document = self.importable_docx()
+        before = {path.parent.name for path in self.root.glob("apps/**/draft.json")}
+        held = []
+
+        def hold_first_report_list(route) -> None:
+            if held:
+                route.continue_()
+                return
+            held.append((route, route.fetch()))
+
+        self.page.route("**/reports", hold_first_report_list)
+        self.page.goto(f"{self.base_url}/")
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        after = {path.parent.name for path in self.root.glob("apps/**/draft.json")}
+        imported_folder = (after - before).pop()
+        imported_id = main.workspace.load_path(next(self.root.glob(f"apps/**/{imported_folder}/draft.json"))).report_id
+        result.get_by_role("button", name="Stay on reports").click()
+        self.page.get_by_text("Report imported.").wait_for()
+        row = self.page.locator(f'[data-report-id="{imported_id}"]')
+        expect(row).to_be_visible()
+
+        route, response = held[0]
+        with self.page.expect_response(f"{self.base_url}/reports"):
+            route.fulfill(response=response)
+        self.page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+
+        expect(row).to_be_visible()
+        expect(row.locator(".report-name")).to_be_focused()
+
+    def test_an_earlier_import_refresh_cannot_move_focus_behind_a_new_import_dialog(self) -> None:
+        document = self.importable_docx()
+        self.page.goto(f"{self.base_url}/")
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        held = []
+        self.page.route("**/reports", lambda route: held.append(route))
+
+        result.get_by_role("button", name="Stay on reports").click()
+        expect(self.page.get_by_role("dialog")).to_have_count(0)
+        self.page.locator("#import-command").click()
+        dialog = self.page.get_by_role("dialog", name="Import a report")
+        drop_area = dialog.get_by_role("button", name="Click to choose, or drag a file here")
+        expect(drop_area).to_be_focused()
+        held[0].continue_()
+        self.page.get_by_text("Report imported.").wait_for()
+
+        expect(dialog).to_be_visible()
+        expect(drop_area).to_be_focused()
+
+    def test_failed_report_list_refresh_after_import_keeps_the_report_and_shows_the_error(self) -> None:
+        document = self.importable_docx()
+        before = set(self.root.glob("apps/**/draft.json"))
+        self.page.goto(f"{self.base_url}/")
+        result = self.import_through_dialog("report.docx", document, "Editable copy")
+        result.get_by_role("heading", name="Imported as an editable copy").wait_for()
+        self.page.route("**/reports", lambda route: route.fulfill(status=503, content_type="application/json", body='{"detail":"List unavailable"}'))
+
+        result.get_by_role("button", name="Stay on reports").click()
+
+        self.page.get_by_text("Unable to load reports").wait_for()
+        expect(self.page.get_by_role("dialog")).to_have_count(0)
+        expect(self.page.locator("#app-diagnostics")).to_contain_text("list_reports")
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
     def test_an_export_that_fails_shows_its_message_and_code_in_the_dialog(self) -> None:
         self.page.goto(f"{self.base_url}/")
         dialog = self.import_through_dialog("invalid-report.json", b"not valid JSON", "Import")
@@ -7290,6 +7976,44 @@ class BrowserWorkflowTests(unittest.TestCase):
         dialog.get_by_role("heading", name="Imported as an editable copy").wait_for()
         self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
 
+    def test_an_export_named_docx_still_imports_as_an_export(self) -> None:
+        source_id = self.ready_report()
+        export = self.page.request.get(f"{self.base_url}/reports/{source_id}/export").body()
+        self.page.goto(f"{self.base_url}/")
+        self.import_through_dialog("renamed.docx", export, "Editable copy")
+
+        self.page.wait_for_url("**/reports/*/setup")
+        imported_id = self.page.url.split("/reports/")[1].split("/")[0]
+        self.assertNotEqual(imported_id, source_id)
+        self.assertEqual(main.workspace.load(imported_id).engagement.app_name, "Browser QA")
+
+    def test_retry_after_losing_a_misnamed_exports_fallback_response_does_not_duplicate_it(self) -> None:
+        source_id = self.ready_report()
+        export = self.page.request.get(f"{self.base_url}/reports/{source_id}/export").body()
+        before = set(self.root.glob("apps/**/draft.json"))
+        attempts = []
+
+        def lose_first_success(route) -> None:
+            attempts.append(route)
+            if len(attempts) == 2:
+                response = route.fetch()
+                self.assertEqual(response.status, 200)
+                route.abort()
+                return
+            route.continue_()
+
+        self.page.route("**/reports/import", lose_first_success)
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("renamed.docx", export, "Editable copy")
+        dialog.get_by_text("import_report", exact=False).wait_for()
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
+        dialog.get_by_role("button", name="Editable copy", exact=True).click()
+        self.page.wait_for_url("**/reports/*/setup")
+
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(len(set(self.root.glob("apps/**/draft.json")) - before), 1)
+
     def test_nothing_can_be_clicked_or_closed_while_a_file_imports(self) -> None:
         document = self.importable_docx()
         held = []
@@ -7306,6 +8030,22 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(len(held), 1)
         held[0].continue_()
         dialog.get_by_role("heading", name="Imported as a retest").wait_for()
+
+    def test_native_navigation_warns_while_a_report_import_is_pending(self) -> None:
+        held = []
+        self.page.route("**/reports/import", lambda route: held.append(route))
+        self.page.goto(f"{self.base_url}/")
+        dialog = self.import_through_dialog("report.docx", b"held by the browser", "Retest")
+        dialog.get_by_text("Importing...").wait_for()
+
+        prevented = self.page.evaluate("""() => {
+            const event = new Event('beforeunload', {cancelable: true});
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+        }""")
+        held[0].abort()
+
+        self.assertIs(prevented, True, "reload or native Back would abandon the pending import result")
 
     def test_a_file_dropped_on_the_closed_reports_page_does_nothing(self) -> None:
         self.page.goto(f"{self.base_url}/")

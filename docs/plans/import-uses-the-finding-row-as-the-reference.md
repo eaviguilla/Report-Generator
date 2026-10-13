@@ -4,6 +4,8 @@
 >
 > **From:** [Import refusals name the cause](import-refusals-name-the-cause.md)
 
+> **Stress-test follow-up, 2026-10-14:** Finding-row status recognition now ignores capitals and extra whitespace, matching the finding table, because an edited `CLOSED` row previously reopened the finding.
+
 ## Request
 
 > for this part of refusal of import, I want to accept them. make it so that the imported findings will base on the title of the summary table. also am thinking that maybe it refused because the finding's heading still matches the finding summary row title but it does not match exactly when case sensitive. thinking of capital letter differentiations. also for the severity, id, or status differentiation, just make the summary table values be main reference and no need to check the values under the finding header.

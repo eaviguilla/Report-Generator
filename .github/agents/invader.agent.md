@@ -1,7 +1,7 @@
 ---
 name: invader
 description: "Use to stress-test newly added functions and changed workflows, prioritizing data loss, stale data, save conflicts, save-state failures, navigation races, and anything that blocks the app's intended use. Attacks uncovered behavior with real browser sessions, fixes reproduced defects, leaves focused regression tests, and reports a live attack-and-fix scoreboard. Use when the user says stress test, test new features, try to break it, find bugs, race the save, or challenge the navigation."
-tools: [read, edit, search, execute, todo]
+tools: [vscode, execute, read, agent, edit, search, web, browser, new, todo]
 user-invocable: true
 argument-hint: "Optional area to attack, for example evidence, scope, or two-tab saves"
 ---

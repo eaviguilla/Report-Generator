@@ -311,6 +311,7 @@ Both modes mint new identities and retain only visible document state; neither r
 **Editable mode is untouched and keeps Closed as Closed**, which is also the way back for anyone who needs a dropped finding, since a dropped finding takes its evidence and its typed work with it.
 The summary key carrying both is still named `dropped_resolved` and was deliberately not renamed: `manager.js` reads `summary.dropped_resolved || []`, so a half-landed rename fails **silently** — the dropped-findings notice simply stops appearing — and the accurate name buys nothing the comment beside the key does not.
 A status label this app does not recognise — a report from an older version, or a hand-edited cell — is **assumed** to be `open_previously_discovered` rather than refusing the document, and the assumption is named in `warnings`.
+Recognition ignores capitals and collapses whitespace in both the finding row and the finding table. An edited `CLOSED` finding row remains Closed in an editable copy and is dropped from a retest; it is not assumed to be open.
 A finding takes its title, severity, ID and status from its finding row in the Findings Summary table, with the title as printed there.
 A finding heading finds its finding row by equal title first, then by title ignoring capitals and extra spaces.
 What is left pairs by position when as many headings as finding rows are left, and each position pair adds a warning. Otherwise nothing pairs by position and the import refuses, naming the leftover rows and headings (the first eight of each).

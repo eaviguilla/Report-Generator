@@ -4,6 +4,8 @@
 >
 > **Superseded in part, 2026-10-14.** The refusals for a heading and a finding row with different titles, for a title listed more often than it has headings, and for a finding table that disagrees with the finding row no longer hold, and neither does the answer that titles pair by a collapsed copy. A finding now takes its title, severity, ID and status from its finding row. A heading pairs with a row by equal title, then by title ignoring capitals and spaces, then by position ([Import takes a finding's identity from its finding row](import-uses-the-finding-row-as-the-reference.md)). Still true: a leftover refuses and is named, a list shows at most eight titles, and a finding keeps its title as printed, now the row's.
 
+> **Stress-test follow-up, 2026-10-14:** Unsupported tables before Description, caption arrangements, mixed picture/text content, merged cells, body-level content controls and unexpected final group headings now refuse instead of silently losing or changing authored work; supported text, cell line breaks and formatting-off values are preserved.
+
 ## Request
 
 > When refusing an import, can we know the exact reason and why the import was rejected? For example, summary and detail sections do not match, but we do not have detail sections. We have description and recommended remediation, and we have no summary section. Can we correct the terms that we are using in the output of import errors? I am having errors when I am trying to input a valid report, and I would like to debug that by knowing exactly what the error of the import is.

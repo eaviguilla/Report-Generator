@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-09**, after stale evidence uploads began returning 409 and import retries began reusing successful request receipts.
+> Last verified against source: **2026-10-14**, after the editable import's change guard began comparing text rather than how provisioning splits it into runs.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -317,6 +317,7 @@ A finding that took the fallback may carry either section shape, and the editabl
 Editable parsing creates covered review targets for ambiguous finding locations so their exact text remains visible on Setup and selected on Findings.
 `finalize_editable_import` validates the parsed `Report`, serializes targets through `scope_text_from_targets`, runs `acceptance.check` and `acceptance.provision` as a save does, provisions a second time to prove a fixed point, and only then calls `Workspace.import_report` once.
 Because `check` runs the field checks before the import compares locations, a document that fails both is refused for its fields.
+Every "would the server change what was imported" comparison joins neighbouring runs that differ only in text (`_with_merged_runs`), because `provision` re-splits the default In Conclusion sentence from any text that follows it in the same run, and a split is not an edit.
 Embedded PNG bytes remain unchanged, are checked against package/member/pixel/evidence limits, and are stored one-for-one with reachable image fragments.
 Their original upload metadata and pre-render pixels are unavailable, so the manager warns that they are Word-rendered copies.
 

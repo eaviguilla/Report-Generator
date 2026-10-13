@@ -617,6 +617,25 @@ def _fragment_has_imported_work(fragment: dict) -> bool:
     return bool((fragment.get("text") or "").strip() or (fragment.get("caption") or "").strip())
 
 
+def _merge_runs(runs: list[dict]) -> list[dict]:
+    """Join neighbouring runs that differ only in text, so how provisioning splits a sentence is not an edit."""
+    merged: list[dict] = []
+    for run in runs:
+        if merged and {**merged[-1], "text": ""} == {**run, "text": ""}:
+            merged[-1] = {**merged[-1], "text": merged[-1]["text"] + run["text"]}
+        else:
+            merged.append(dict(run))
+    return merged
+
+
+def _with_merged_runs(value):
+    if isinstance(value, dict):
+        return {key: _merge_runs(item) if key == "runs" else _with_merged_runs(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_with_merged_runs(item) for item in value]
+    return value
+
+
 def _editable_user_projection(report: Report) -> dict:
     """Values provisioning must not remove or alter during editable-import finalization."""
     payload = report.model_dump(mode="json", by_alias=True)
@@ -628,7 +647,7 @@ def _editable_user_projection(report: Report) -> dict:
                 for fragment in content["fragments"]
                 if _fragment_has_imported_work(fragment)
             ]
-    return payload
+    return _with_merged_runs(payload)
 
 
 def _provisioned_projection(report: Report) -> dict:

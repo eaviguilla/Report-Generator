@@ -63,6 +63,22 @@ def base_render() -> bytes:
         return render_report_docx(FragmentRecognitionTests._report(folder), TEMPLATE, folder)
 
 
+def conclusion_render(runs: list[Run], status: str = "open_previously_discovered") -> bytes:
+    """The shared finding as a retest-shaped finding whose In Conclusion section holds ``runs``."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        folder = Path(temporary_directory)
+        report = FragmentRecognitionTests._report(folder)
+        finding = report.vulnerabilities[0]
+        finding.status = status
+        finding.contents.extend([
+            Content(type="previous_proof_of_concept", fragments=[
+                ListFragment(frag_id="f_prev", type="numbered_list", items=[ListItem(runs=[Run(text="Last year's step.")])]),
+            ]),
+            Content(type="in_conclusion", fragments=[ParagraphFragment(frag_id="f_conc", type="paragraph", runs=runs)]),
+        ])
+        return render_report_docx(report, TEMPLATE, folder)
+
+
 class FragmentRecognitionTests(unittest.TestCase):
     """The importer recognises a fragment by the component that produced it, so these pin the
     signals that survive generation. A template edit that erases one fails here rather than
@@ -1754,6 +1770,25 @@ class ImportRouteTests(unittest.TestCase):
         payload["vulnerabilities"][0]["scope"]["target_ids"].append("tgt_duplicate")
 
         with self.assertRaisesRegex(ValueError, "Scope reconciliation would alter imported locations"):
+            main.finalize_editable_import(payload)
+
+    def test_a_conclusion_that_continues_after_the_apps_sentence_imports_as_an_editable_copy(self) -> None:
+        """Only how the text is split into runs differs once the server rewrites the sentence, so the
+        import must not take that for a change to what was imported."""
+        runs = [Run(text='The finding "Authorization bypass" is still '), Run(text="Open", bold=True), Run(text=". Retested on 5 October.")]
+        payload, _evidence, _summary = parse_report_docx(conclusion_render(runs), mode="editable")
+
+        imported, _normalizations = main.finalize_editable_import(payload)
+
+        conclusion = next(content for content in imported["vulnerabilities"][0]["contents"] if content["type"] == "in_conclusion")
+        text = "".join(run["text"] for fragment in conclusion["fragments"] for run in fragment["runs"])
+        self.assertEqual(text, 'The finding "Authorization bypass" is still Open. Retested on 5 October.')
+
+    def test_a_conclusion_sentence_that_disagrees_with_the_status_is_still_refused(self) -> None:
+        runs = [Run(text='The finding "Authorization bypass" is still '), Run(text="Open", bold=True), Run(text=". Retested on 5 October.")]
+        payload, _evidence, _summary = parse_report_docx(conclusion_render(runs, status="closed"), mode="editable")
+
+        with self.assertRaisesRegex(ValueError, "Server provisioning would alter imported user content"):
             main.finalize_editable_import(payload)
 
     def test_editable_preflight_names_invalid_fields_before_scope_reconciliation_loss(self) -> None:

@@ -376,18 +376,47 @@
       button.style.minWidth = "";
     }
   });
-  // Converts editor DOM content into normalized, storage-safe rich-text runs.
+  // Converts editor DOM content into normalized, storage-safe rich-text runs, one "\n" per line break.
+  // A line break is markup, not text: Enter makes a <div>, an empty line is <div><br></div>, and the
+  // editor is pre-wrap, so Shift+Enter makes a newline character. The editor is therefore read by the
+  // lines it shows. The <br> or newline that ends the last line of a block, or of the editor, only
+  // closes that line and starts no new one; the second is what makes an empty line.
   function runsFrom(element) {
-    const output = [];
-    const walk = (node, format = {}) => {
-      if (node.nodeType === Node.TEXT_NODE && node.nodeValue) output.push({text:node.nodeValue, ...format});
+    const lines = [];
+    let line = null;
+    const openLine = () => line || (lines.push(line = []), line);
+    const endLine = () => { openLine(); line = null; };
+    const walk = (node, format) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        node.nodeValue.split("\n").forEach((text, index) => {
+          if (index) endLine();
+          if (text) openLine().push({text, ...format});
+        });
+      }
       if (node.nodeType !== Node.ELEMENT_NODE) return;
       const tag = node.tagName.toLowerCase();
-      const next = {...format, bold:format.bold || tag === "b" || tag === "strong", italic:format.italic || tag === "i" || tag === "em", underline:format.underline || tag === "u"};
+      if (tag === "br") return endLine();
+      const block = tag === "div" || tag === "p";
+      if (block) line = null;
+      const next = {bold:format.bold || tag === "b" || tag === "strong", italic:format.italic || tag === "i" || tag === "em", underline:format.underline || tag === "u"};
       node.childNodes.forEach(child => walk(child, next));
+      if (block) line = null;
     };
-    element.childNodes.forEach(child => walk(child));
-    const runs = output.reduce((all, run) => { const prior = all.at(-1); if (prior && prior.bold === run.bold && prior.italic === run.italic && prior.underline === run.underline) prior.text += run.text; else all.push(run); return all; }, []).filter(run => run.text).map(run => { if (!run.bold) delete run.bold; if (!run.italic) delete run.italic; if (!run.underline) delete run.underline; return run; });
+    element.childNodes.forEach(child => walk(child, {bold:false, italic:false, underline:false}));
+    const runs = [];
+    const append = (text, format) => {
+      const prior = runs.at(-1);
+      if (prior && prior.bold === format.bold && prior.italic === format.italic && prior.underline === format.underline) prior.text += text;
+      else runs.push({text, bold:format.bold, italic:format.italic, underline:format.underline});
+    };
+    // A break joins the run before it, so a bold line does not end its run. Breaks before any text
+    // wait for it and join its run.
+    let leading = "";
+    lines.forEach((pieces, index) => {
+      if (index) { if (runs.length) append("\n", runs.at(-1)); else leading += "\n"; }
+      pieces.forEach(piece => { append(leading + piece.text, piece); leading = ""; });
+    });
+    runs.forEach(run => { if (!run.bold) delete run.bold; if (!run.italic) delete run.italic; if (!run.underline) delete run.underline; });
     while (runs[0]?.text.trim() === "") runs.shift();
     while (runs.at(-1)?.text.trim() === "") runs.pop();
     return runs;
@@ -446,7 +475,15 @@
   // Builds a bold/italic/underline editor and reports normalized runs on change.
   function rich(runs, onChange, includeToolbar = true, placeholder = "") {
     const wrap = document.createElement("div"); wrap.innerHTML = `${includeToolbar ? '<div class="toolbar" role="toolbar" aria-label="Text formatting"><button type="button" tabindex="-1" title="Bold" aria-label="Bold"><b>B</b></button><button type="button" tabindex="-1" title="Italic" aria-label="Italic"><i>I</i></button><button type="button" tabindex="-1" title="Underline" aria-label="Underline"><u>U</u></button></div>' : ""}<div class="rich" contenteditable="true" role="textbox" aria-multiline="true"></div>`;
-    const input = wrap.querySelector(".rich"); input.innerHTML = runs.map(run => `${run.bold ? "<b>" : ""}${run.italic ? "<i>" : ""}${run.underline ? "<u>" : ""}${escape(run.text)}${run.underline ? "</u>" : ""}${run.italic ? "</i>" : ""}${run.bold ? "</b>" : ""}`).join("");
+    const input = wrap.querySelector(".rich");
+    // A <div> per line, as the browser builds them when Enter is pressed, so runsFrom reads back what
+    // was written here. An empty line is only as tall as the <br> in it.
+    const lines = [[]];
+    runs.forEach(run => run.text.split(/\r\n|\r|\n/).forEach((text, index) => {
+      if (index) lines.push([]);
+      if (text) lines.at(-1).push(`${run.bold ? "<b>" : ""}${run.italic ? "<i>" : ""}${run.underline ? "<u>" : ""}${escape(text)}${run.underline ? "</u>" : ""}${run.italic ? "</i>" : ""}${run.bold ? "</b>" : ""}`);
+    }));
+    input.innerHTML = lines.length === 1 ? lines[0].join("") : lines.map(line => `<div>${line.join("") || "<br>"}</div>`).join("");
     if (placeholder) { input.dataset.placeholder = placeholder; input.setAttribute("aria-label", placeholder); }
     const resize = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
     wrap.querySelectorAll("button").forEach((button, index) => button.onclick = () => { input.focus(); document.execCommand(["bold", "italic", "underline"][index]); onChange(runsFrom(input)); });

@@ -4911,6 +4911,174 @@ class BrowserWorkflowTests(unittest.TestCase):
             ["Bold", "Italic", "Underline"],
         )
 
+    def _paragraph_report(self, paragraphs: dict[str, str]) -> str:
+        """A report whose Description holds one paragraph per id, so each check types into its own."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+        description.fragments = [
+            ParagraphFragment(frag_id=frag_id, type="paragraph", runs=[Run(text=text)] if text else [])
+            for frag_id, text in paragraphs.items()
+        ]
+        main.workspace.save(report)
+        return report_id
+
+    def _stored_text(self, report_id: str, frag_id: str) -> str:
+        return "".join(run["text"] for run in self._stored_fragment(report_id, frag_id)["runs"])
+
+    @staticmethod
+    def _visible_lines(field) -> int:
+        """How many lines the editor shows, wrapped ones included. Read from the layout, because the
+        markup that draws an empty line is part of what is under test."""
+        return field.evaluate("""element => {
+            const style = getComputedStyle(element);
+            const text = element.scrollHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+            return Math.round(text / parseFloat(style.lineHeight));
+        }""")
+
+    def test_a_line_break_typed_in_a_paragraph_is_saved(self) -> None:
+        """Enter builds a <div> in the editor and Shift+Enter a newline character. The editor was read
+        back from its text nodes alone, so every Enter was saved as if it had not been pressed; the
+        screen only looked right until the pane was drawn again."""
+        report_id = self._paragraph_report({"f_enter": "", "f_shift_enter": ""})
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+
+        for frag_id, key in (("f_enter", "Enter"), ("f_shift_enter", "Shift+Enter")):
+            with self.subTest(key=key):
+                page.locator(f'[data-fragment-id="{frag_id}"] .rich').click()
+                page.keyboard.type("First")
+                page.keyboard.press(key)
+                page.keyboard.press(key)
+                page.keyboard.type("Second")
+                page.locator("#save-button").click()
+                page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+                self.assertEqual(self._stored_text(report_id, frag_id), "First\n\nSecond")
+
+    def test_a_pasted_paragraph_keeps_its_line_breaks(self) -> None:
+        report_id = self._paragraph_report({"f_paste": ""})
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+
+        page.locator('[data-fragment-id="f_paste"] .rich').evaluate("""(element, pasted) => {
+            element.focus();
+            const clipboard = new DataTransfer();
+            clipboard.setData("text/plain", pasted);
+            element.dispatchEvent(new ClipboardEvent("paste", {bubbles: true, cancelable: true, clipboardData: clipboard}));
+        }""", "First\n\nSecond\nThird")
+        # The paste handler reports the change a frame after inserting, so wait for the page to notice it.
+        page.wait_for_selector('#save-button[data-save-state="unsaved"]', timeout=5_000)
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(self._stored_text(report_id, "f_paste"), "First\n\nSecond\nThird")
+
+    def test_line_breaks_in_a_paragraph_are_still_shown_when_the_pane_is_drawn_again(self) -> None:
+        """Adding a fragment draws the whole pane again from the model, so this is the model's account
+        of what was typed. A blank line at the end counts: it is the one a plain newline would hide."""
+        report_id = self._paragraph_report({"f_between": "", "f_trailing": "", "f_saved": "Up\n\nDown"})
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        description.locator('[data-fragment-id="f_between"] .rich').click()
+        page.keyboard.type("First")
+        page.keyboard.press("Enter")
+        page.keyboard.press("Enter")
+        page.keyboard.type("Second")
+        description.locator('[data-fragment-id="f_trailing"] .rich').click()
+        page.keyboard.type("First")
+        page.keyboard.press("Enter")
+        page.keyboard.press("Enter")
+
+        description.get_by_role("combobox", name="Add fragment to Description").select_option("note")
+        expect(description.locator(".fragment .tag").filter(has_text="note")).to_have_count(1)
+        for frag_id in ("f_between", "f_trailing", "f_saved"):
+            with self.subTest(fragment=frag_id):
+                self.assertEqual(self._visible_lines(description.locator(f'[data-fragment-id="{frag_id}"] .rich')), 3)
+
+    def test_keeping_my_own_description_does_not_flatten_its_line_breaks(self) -> None:
+        """The report that found this: type a paragraph with a blank line, answer the library's offer
+        with Keep mine, and the blank line was gone."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._library_finding(report_id)
+        next(content for content in finding.contents if content.type == "description").fragments = [
+            ParagraphFragment(frag_id="f_mine", type="paragraph", runs=[]),
+        ]
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        block.locator('[data-fragment-id="f_mine"] .rich').click()
+        page.keyboard.type("Mine")
+        page.keyboard.press("Enter")
+        page.keyboard.press("Enter")
+        page.keyboard.type("Next")
+        page.locator("body").click(position={"x": 5, "y": 5})
+
+        block.get_by_role("button", name="Keep mine").click()
+        self.assertEqual(self._visible_lines(block.locator('[data-fragment-id="f_mine"] .rich')), 3)
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(self._stored_text(report_id, "f_mine"), "Mine\n\nNext")
+
+    def test_the_editor_is_read_back_line_by_line(self) -> None:
+        """What the browser builds for a line break depends on where Enter is pressed and which browser
+        it is, so each shape is read as the lines it shows. One <br> or newline ends the last line
+        without starting another; it is the second that makes an empty line."""
+        shapes = [
+            ("text, then a block", "one<div>two</div>", "one\ntwo", None),
+            ("an empty block between", "one<div><br></div><div>three</div>", "one\n\nthree", None),
+            ("every line in a block", "<div>one</div><div>two</div>", "one\ntwo", None),
+            ("br between", "one<br>two", "one\ntwo", None),
+            ("two br between", "one<br><br>two", "one\n\ntwo", None),
+            ("the br that only closes the editor", "one<br>", "one", None),
+            ("the br that closes a block", "<div>one<br></div><div>two</div>", "one\ntwo", None),
+            ("newline characters", "one\n\ntwo", "one\n\ntwo", None),
+            ("a newline that only closes the editor", "one\n", "one", None),
+            ("empty lines at the end", "one<div><br></div><div><br></div>", "one\n\n", None),
+            ("empty lines at the start", "<div><br></div><div>one</div>", "\none", None),
+            ("nothing but empty lines", "<div><br></div><div><br></div>", "", None),
+            ("formatting carried over a break", "<b>one</b><div><b>two</b></div>", "one\ntwo", "onetwo"),
+        ]
+        report_id = self._paragraph_report({f"f_shape_{index}": "" for index in range(len(shapes))})
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+
+        for index, (_name, markup, _text, _bold) in enumerate(shapes):
+            page.locator(f'[data-fragment-id="f_shape_{index}"] .rich').evaluate(
+                "(element, markup) => { element.innerHTML = markup; element.dispatchEvent(new Event('input', {bubbles: true})); }",
+                markup,
+            )
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        for index, (name, _markup, text, bold) in enumerate(shapes):
+            with self.subTest(shape=name):
+                self.assertEqual(self._stored_text(report_id, f"f_shape_{index}"), text)
+                if bold is not None:
+                    runs = self._stored_fragment(report_id, f"f_shape_{index}")["runs"]
+                    self.assertEqual("".join(run["text"] for run in runs if run["bold"]).replace("\n", ""), bold)
+
+    def test_editing_a_paragraph_that_holds_blank_lines_keeps_them(self) -> None:
+        """Library text brings its blank lines as newline characters and the editor draws each as a
+        line. Typing into it must read the same lines back, with nothing added or lost."""
+        held = "Up\n\nDown\nAcross"
+        report_id = self._paragraph_report({"f_held": held})
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+
+        field = page.locator('[data-fragment-id="f_held"] .rich')
+        box = field.bounding_box()
+        field.click(position={"x": box["width"] - 4, "y": box["height"] - 4})
+        page.keyboard.type(" X")
+        page.locator("#save-button").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(self._stored_text(report_id, "f_held"), held + " X")
+
     def _setup_page(self, report_id: str):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}")

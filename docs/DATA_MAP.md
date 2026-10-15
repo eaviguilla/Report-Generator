@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-14**, after an import began taking a finding's title, severity, ID and status from its finding row, and pairing finding headings and CVSS rows with finding rows by title and then by position.
+> Last verified against source: **2026-10-15**, after the paragraph and note editor began saving the line breaks a tester types with Enter, which it had read as nothing.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -255,6 +255,13 @@ The `GRIMPEN-` prefix is **never stored** — `docx_report.SEVERITY_TICKET_PREFI
 An empty value prints the literal `N/A`, which `docx_import._clean` maps back to nothing.
 
 `Scope.custom_locations` is keyed **environment then channel** (`{production: {web: [...]}}`), mirroring `scope_text`, so a typed-in endpoint carries an app type just as a selected `ScopeTarget` does. Without that, a finding's app types could not be resolved and the proof-of-concept offer could never fire for it.
+
+A `paragraph` or `note` stores each line break the tester types as one `\n` in a run's text, never as a separate fragment.
+The document prints each `\n` as a new Word paragraph and `\n\n` as an empty one (`_render_multiline_text_component`); a list item, a table cell and a code block print it as a soft line break instead.
+The editor is a `contenteditable`, so the break is markup and not text: Enter makes a `<div>`, an empty line is `<div><br></div>`, Shift+Enter inserts a newline character, and a pasted paragraph arrives as one `<div>` per line.
+`runsFrom` reads the editor by the lines it shows, and `rich()` draws a text that holds `\n` as one `<div>` per line, so each reads back what the other wrote.
+Empty lines at the start or end of a paragraph are kept and print as empty paragraphs, except at the end of a section, where `_trim_trailing_empty_paragraphs` removes them.
+Before 2026-10-15 `runsFrom` read only the text nodes, so a line break typed with Enter never reached the draft. A draft saved before then has lost them, and nothing can bring them back.
 
 **Cross-object invariants enforced by `Report.validate_references`:**
 

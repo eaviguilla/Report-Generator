@@ -1002,8 +1002,7 @@ def _render_component_fragment(
             replace_component_token_runs(elements, token, item.runs)
             rendered.extend(elements)
         # Only the component's first element: it ships with a trailing blank that would make two.
-        if fragment.type == "numbered_list":
-            rendered.extend(_render_text_component(document, component_root, "paragraph", [])[:1])
+        rendered.extend(_render_text_component(document, component_root, "paragraph", [])[:1])
         return rendered
     if isinstance(fragment, CodeFragment):
         rendered = _render_caption_component(document, component_root, fragment.caption)

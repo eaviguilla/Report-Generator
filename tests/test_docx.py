@@ -839,9 +839,9 @@ class DocxReportTests(unittest.TestCase):
             self.assertNotEqual(first[1], second[1], "two independent lists shared an nsid")
             self.assertEqual((first[2], second[2]), (1, 1), "each independent list needs its own restart")
 
-    def test_a_numbered_list_is_followed_by_one_blank_paragraph(self) -> None:
-        """Steps ran straight into whatever followed them. The paragraph and table components carry
-        their own trailing blank; the list component does not, because it is cloned once per item."""
+    def test_a_list_is_followed_by_one_blank_paragraph(self) -> None:
+        """Steps and bullets ran straight into whatever followed them. The paragraph and table components
+        carry their own trailing blank; the list component does not, because it is cloned once per item."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)
             document = self._layout_document(report_folder, [
@@ -849,8 +849,10 @@ class DocxReportTests(unittest.TestCase):
                     ListFragment(frag_id="f_steps", type="numbered_list", items=[
                         ListItem(runs=[Run(text="Step one")]), ListItem(runs=[Run(text="Step two")]),
                     ]),
-                    ParagraphFragment(frag_id="f_after", type="paragraph", runs=[Run(text="Text after the list.")]),
-                    ListFragment(frag_id="f_bullets", type="bulleted_list", items=[ListItem(runs=[Run(text="A bullet")])]),
+                    ParagraphFragment(frag_id="f_after", type="paragraph", runs=[Run(text="Text after the steps.")]),
+                    ListFragment(frag_id="f_bullets", type="bulleted_list", items=[
+                        ListItem(runs=[Run(text="A bullet")]), ListItem(runs=[Run(text="Another bullet")]),
+                    ]),
                     ParagraphFragment(frag_id="f_last", type="paragraph", runs=[Run(text="Text after the bullets.")]),
                 ]),
             ])
@@ -862,10 +864,35 @@ class DocxReportTests(unittest.TestCase):
             def between(first: str, second: str) -> list[str]:
                 return texts[texts.index(first) + 1:texts.index(second)]
 
-            self.assertEqual(between("Step two", "Text after the list."), [""], "a numbered list gained no blank line, or gained two")
-            # Scope, pinned deliberately: the request named numbered lists, and a bulleted list that
-            # introduces the sentence under it should not be pushed away from it.
-            self.assertEqual(between("A bullet", "Text after the bullets."), [], "a bulleted list gained a blank line it was not asked to")
+            for kind, first, last, after in (
+                ("numbered", "Step one", "Step two", "Text after the steps."),
+                ("bulleted", "A bullet", "Another bullet", "Text after the bullets."),
+            ):
+                with self.subTest(list=kind):
+                    self.assertEqual(between(last, after), [""], f"a {kind} list gained no blank line, or gained two")
+                    self.assertEqual(between(first, last), [], f"a {kind} list got its blank between items, not after the last one")
+
+    def test_a_list_that_ends_a_section_adds_no_blank_of_its_own(self) -> None:
+        """The blank below a list is spacing between fragments. At the end of a section the template's own
+        blank already stands between it and the next heading, and a second one would be a gap no other
+        section has."""
+        for kind in ("numbered_list", "bulleted_list"):
+            with self.subTest(list=kind), tempfile.TemporaryDirectory() as temporary_directory:
+                document = self._layout_document(Path(temporary_directory), [
+                    Content(type="description", fragments=[
+                        ListFragment(frag_id="f_list", type=kind, items=[ListItem(runs=[Run(text="Last item")])]),
+                    ]),
+                ])
+                last = next(
+                    item for item in document.element.body.iterchildren()
+                    if item.tag == qn("w:p") and "".join(node.text or "" for node in item.iter(qn("w:t"))) == "Last item"
+                )
+                blanks = 0
+                following = last.getnext()
+                while following is not None and _is_blank_paragraph(following):
+                    blanks += 1
+                    following = following.getnext()
+                self.assertEqual(blanks, 1, "a list ending a section kept its spacer on top of the template's blank")
 
     def test_only_the_generated_instance_label_is_bold(self) -> None:
         """The component is bold throughout and run formatting is additive, so the tester's words

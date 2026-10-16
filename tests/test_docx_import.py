@@ -1040,6 +1040,29 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual([len(fragment["items"]) for fragment in lists], [2, 1, 1])
             self.assertEqual([fragment.get("continue_numbering", False) for fragment in lists], [False, True, False])
 
+    def test_the_blank_line_after_a_bulleted_list_is_not_imported(self) -> None:
+        """A generated list is followed by an empty paragraph. Read back as a fragment it would be text the
+        tester never wrote, and it would stand between a list and the one after it."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+            description.fragments = [
+                ListFragment(frag_id="f_first", type="bulleted_list", items=[
+                    ListItem(runs=[Run(text="One.")]), ListItem(runs=[Run(text="Two.")]),
+                ]),
+                ListFragment(frag_id="f_second", type="bulleted_list", items=[ListItem(runs=[Run(text="Three.")])]),
+                ParagraphFragment(frag_id="f_after", type="paragraph", runs=[Run(text="After the lists.")]),
+            ]
+
+            payload, _evidence, _summary = parse_report_docx(
+                render_report_docx(report, TEMPLATE, folder), mode="editable",
+            )
+
+            imported = payload["vulnerabilities"][0]["contents"][0]["fragments"]
+            self.assertEqual([fragment["type"] for fragment in imported], ["bulleted_list", "bulleted_list", "paragraph"])
+            self.assertEqual([len(fragment["items"]) for fragment in imported[:2]], [2, 1])
+
     def test_editable_image_preserves_embedded_png_bytes_and_display_width(self) -> None:
         data = base_render()
         document = Document(BytesIO(data))

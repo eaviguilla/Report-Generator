@@ -425,7 +425,11 @@ or image/caption pair using its corresponding document under
 element of `table_fragment.docx` is used and every paragraph in it is discarded,
 so the renderer appends one empty paragraph after each table. Without it two
 consecutive table fragments become adjacent `w:tbl` siblings, which Word merges
-into a single table. Rich-text bold, italic, and underline values are layered
+into a single table. A list is cloned once per item and has no blank of its own,
+so the renderer also appends one empty paragraph after the last item of every
+numbered or bulleted list. The importer drops it with every other empty
+paragraph, and a list that ends a content section loses it with the other
+trailing blanks. Rich-text bold, italic, and underline values are layered
 onto the formatting supplied by the fragment document. Numbered lists restart
 for each list fragment and increment within that list.
 

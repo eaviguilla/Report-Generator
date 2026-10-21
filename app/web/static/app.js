@@ -94,6 +94,44 @@
   // close to prose to strip, and a wrong strip deletes text silently.
   const LIST_MARKER_PREFIX = /^\s*(\d{1,3}[.)]|\(\d{1,3}\)|[-*+•–—])\s+/;
   let updateSetupFieldIssues = () => {};
+  // The Setup fields a save will not leave blank, by the issue code that names each one. The same
+  // list highlights a field after Next and draws its * before anything is wrong. Twin: the missing_*
+  // codes in setupResults (rules.js).
+  const REQUIRED_SETUP_FIELDS = {
+    missing_segment:"engagement.segment",
+    missing_app_name:"engagement.app_name",
+    missing_report_type:"engagement.report_type",
+    missing_network:"engagement.network",
+    missing_tester:"engagement.tester",
+    missing_report_date:"engagement.report_date",
+  };
+  // A required field's label gets the `is-required` class and CSS draws the star, so the label's
+  // text stays exactly the field's name. A star typed into the label would turn "Application Name"
+  // into "Application Name*": tests and the undo history find fields by that text. Headings are
+  // not looked up that way, so they take a real star after their text. The coverage dates are drawn
+  // per environment and carry the class themselves.
+  const requiredStar = () => {
+    const star = document.createElement("span");
+    star.className = "required-star";
+    star.setAttribute("aria-hidden", "true");
+    star.textContent = "*";
+    return star;
+  };
+  const markRequiredSetupFields = () => {
+    if (root.dataset.step !== "setup") return;
+    Object.values(REQUIRED_SETUP_FIELDS).forEach(path => {
+      const control = root.querySelector(`[data-path="${path}"]`);
+      control?.setAttribute("aria-required", "true");
+      control?.closest("label")?.classList.add("is-required");
+    });
+    // no_tested_environment and missing_scope_target
+    [root.querySelector("#test-windows")?.closest("section")?.querySelector(":scope > h2"), root.querySelector(".scope-heading h2")]
+      .forEach(heading => heading?.firstChild?.after(requiredStar()));
+    const legend = document.createElement("p");
+    legend.className = "required-legend";
+    legend.append(requiredStar(), " Required");
+    root.querySelector("h1")?.after(legend);
+  };
   let updateFindingSummary = () => {};
   const expandedFindingIds = new Set();
   // Tells "nothing opened yet" apart from "the tester closed them all"; an empty set alone would
@@ -155,7 +193,12 @@
         input.removeAttribute("aria-activedescendant");
       }
     };
-    new MutationObserver(() => setActive(0)).observe(listbox, {childList:true});
+    // A list that opens with nothing highlighted (data-quiet-list) leaves the first option alone,
+    // unless data-retry-id names the entry a failed pick should offer again.
+    new MutationObserver(() => {
+      const retry = input.dataset.retryId ? options().findIndex(option => option.dataset.id === input.dataset.retryId) : -1;
+      setActive(retry >= 0 ? retry : input.dataset.quietList ? -1 : 0);
+    }).observe(listbox, {childList:true});
     input.addEventListener("keydown", event => {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         const count = options().length;
@@ -630,6 +673,9 @@
     return true;
   }
   const scopeTargetIds = scope => scope?.target_ids || [];
+  // Twin of report_service.scope_of_every_target: a finding added on the Findings page starts with
+  // every place the engagement tests selected, and the tester unticks what it does not touch.
+  const allTargetsScope = () => ({mode:"custom", target_ids:report.scope_targets.map(target => target.target_id), location_values:{}, custom_locations:{}});
   // Twin of report_service.location_lines: blanks are nothing, a "#" line is a note to the tester,
   // and a repeat is the same place said twice. The raw text stays in the draft; it just never counts.
   const locationLines = values => {
@@ -924,6 +970,25 @@
     if (variants.length) offers.push({type:"proof_of_concept", entry, variants});
     return offers;
   };
+  // A finding that comes from the library starts with the entry's Description and Remediation and the
+  // proof-of-concept steps for every app type it touches, web first, so the Content page has no
+  // banner to click. A section the tester has already written is left alone and keeps its banner.
+  // In Conclusion is never filled: it holds the tester's own words. Twin: insert_library in main.py.
+  // The finding's library_ref must be set first, because the steps are read through it.
+  const installLibraryContent = (finding, entry) => {
+    provision(finding);
+    ["description", "recommended_remediation"].forEach(type => {
+      const section = finding.contents.find(content => content.type === type);
+      const fragments = libraryContentFor(entry, type);
+      // A resolved finding's remediation is a sentence of its own, which no library text replaces.
+      if (!section || !fragments.length || (type === "recommended_remediation" && finding.status === "resolved")) return;
+      if (section.fragments.some(fragmentHasContent)) return;
+      section.fragments = remintFragments(fragments);
+      (finding.content_offer_resolved ||= {})[type] = entry.library_id;
+    });
+    const variants = applicablePocVariants(finding);
+    if (variants.length && !pocHasWrittenSteps(finding)) applyPocVariant(finding, variants.flatMap(variant => pocStepsFor(finding, variant) || []), variants);
+  };
   // One shape for every library prompt, quieter than the section it offers to rewrite.
   // Module scope, not inside continuousEditor: the Setup page needs it too, and the dispatch at the
   // bottom of this file runs one or the other, never both.
@@ -1120,19 +1185,11 @@
       return control;
     };
     updateSetupFieldIssues = show => {
-      const issuePaths = {
-        missing_segment:"engagement.segment",
-        missing_app_name:"engagement.app_name",
-        missing_report_type:"engagement.report_type",
-        missing_network:"engagement.network",
-        missing_tester:"engagement.tester",
-        missing_report_date:"engagement.report_date",
-      };
       const byPath = new Map();
       const results = show ? window.vrRules.setupResults(report, vocabulary) : [];
       if (show) {
         results.forEach(result => {
-          const path = issuePaths[result.code];
+          const path = REQUIRED_SETUP_FIELDS[result.code];
           if (path && !byPath.has(path)) byPath.set(path, window.vrRules.formatRuleMessage(result, report, vocabulary));
         });
       }
@@ -1694,7 +1751,7 @@
           ? `<select class="coverage-name" aria-label="Non-Production name" title="Labels the Proof of Concept evidence in the generated report" ${isSelected ? "" : "disabled"}>${options}</select>`
             + (showCustom ? `<input type="text" class="coverage-name-custom" aria-label="Non-Production name, typed" maxlength="40" value="${escape(stored)}" placeholder="Name it" ${isSelected ? "" : "disabled"}>` : "")
           : label;
-        panel.innerHTML = `<label class="coverage-option"><input type="checkbox" value="${environment}" aria-label="${label}" ${isSelected ? "checked" : ""}>${name}</label>${isSelected ? `<div class="date-pair"><label>Start<input type="date" aria-label="${label} start date"></label><label>End<input type="date" aria-label="${label} end date"></label><label>Time<input type="text" aria-label="${label} time"></label></div>` : ""}`;
+        panel.innerHTML = `<label class="coverage-option"><input type="checkbox" value="${environment}" aria-label="${label}" ${isSelected ? "checked" : ""}>${name}</label>${isSelected ? `<div class="date-pair"><label class="is-required">Start<input type="date" aria-required="true" aria-label="${label} start date"></label><label class="is-required">End<input type="date" aria-required="true" aria-label="${label} end date"></label><label>Time<input type="text" aria-label="${label} time"></label></div>` : ""}`;
         const coverageName = panel.querySelector(".coverage-name");
         if (coverageName) {
           coverageName.onchange = event => {
@@ -2134,8 +2191,9 @@
       syncEvidenceImageSlots(finding);
       return true;
     };
-    // A title match applies the finding's non-content fields immediately and silently; each content
-    // section offers its own keep/replace/add banner on the Content page instead of one whole-finding confirm.
+    // A title match applies the finding's non-content fields immediately and silently, and fills any
+    // section the tester has not written yet (installLibraryContent). A section they have written keeps
+    // its own keep/replace/add banner on the Content page instead of one whole-finding confirm.
     const replaceFromLibrary = (finding, entry) => {
       applyLibraryEntry(finding, entry);
       return true;
@@ -2149,10 +2207,12 @@
         // against the old entry would go on suppressing the new one's offer.
         finding.content_offer_dismissed = {};
       }
-      Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || "informational", library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}});
+      // Severity stays blank when the entry gives none: the tester rates the finding, and Next waits for it.
+      Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || null, library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}});
       // The only title write that did not re-derive the sentence. Harmless while the server fixed it
       // on the next save; not harmless now the tester is prompted about that sentence right here.
       syncConclusion(finding);
+      installLibraryContent(finding, entry);
     };
     const foldAllFindings = document.querySelector("#fold-all-findings");
     const anyFindingExpanded = () => report.vulnerabilities.some(finding => expandedFindingIds.has(finding.uid));
@@ -2373,6 +2433,13 @@
     };
     const renderFindings = () => {
     rememberFocusedField();
+    // An empty list starts the default over: its first finding opens, as the first finding of a page
+    // does. Without this the default stays spent once any list has been shown, so after the last
+    // finding goes every new one starts folded.
+    if (!report.vulnerabilities.length) {
+      findingFoldDefaulted = false;
+      expandedFindingIds.clear();
+    }
     findingBody.innerHTML = "";
     report.vulnerabilities.forEach((finding, index) => {
       const row = document.createElement("tr");
@@ -2477,7 +2544,7 @@
     updateFindingSummary();
     new MutationObserver(() => { enhanceFindingRows(); labelAssessmentPlaceholders(); showFindingValidationErrors(); updateFindingSummary(); }).observe(findingBody, {childList:true});
     const addFinding = () => {
-      const finding = {uid:id("v"),title:"",severity:null,status:"open_new",scope:{mode:"custom",target_ids:[],location_values:{},custom_locations:{}},contents:[]};
+      const finding = {uid:id("v"),title:"",severity:null,status:"open_new",scope:allTargetsScope(),contents:[]};
       report.vulnerabilities.push(finding);
       renderFindings();
       // Before the step is recorded, so the step names the new finding.
@@ -2526,10 +2593,13 @@
           selected = true;
           const selectedQuery = search.value;
           const selectionRevision = ++librarySelectionRevision;
+          delete search.dataset.retryId;
           search.value = "";
           search.focus();
-          results.innerHTML = "";
-          search.setAttribute("aria-expanded", "false");
+          // The list stays open for the next pick, and nothing in it is highlighted, so a stray
+          // Enter adds nothing. It closes when the tester clicks outside or presses Escape.
+          search.dataset.quietList = "true";
+          renderLibraryResults();
           trackMutation(async () => {
             let inserted = false;
             try {
@@ -2552,6 +2622,13 @@
             } finally {
               if (!inserted && selectionRevision === librarySelectionRevision && !search.value) {
                 search.value = selectedQuery;
+                if (selectedQuery) {
+                  // The query is back, so its first match is highlighted again as it was before the pick.
+                  delete search.dataset.quietList;
+                } else {
+                  // An unfiltered pick has no query to bring back, so the failed entry is what a retry highlights.
+                  search.dataset.retryId = item.dataset.id;
+                }
                 renderLibraryResults();
               }
             }
@@ -2559,15 +2636,23 @@
         };
       });
     };
-    search.oninput = renderLibraryResults;
+    const closeLibraryResults = () => {
+      delete search.dataset.quietList;
+      results.innerHTML = "";
+      search.setAttribute("aria-expanded", "false");
+    };
+    // A click in the list must not take the focus out of the bar, or the list would close under the pick.
+    results.onmousedown = event => event.preventDefault();
+    search.oninput = () => {
+      delete search.dataset.quietList;
+      delete search.dataset.retryId;
+      renderLibraryResults();
+    };
     search.onfocus = renderLibraryResults;
     search.onkeydown = event => {
-      if (event.key === "Escape") {
-        results.innerHTML = "";
-        search.setAttribute("aria-expanded", "false");
-      }
+      if (event.key === "Escape") closeLibraryResults();
     };
-    search.onblur = () => setTimeout(() => { if (document.activeElement === search) return; results.innerHTML = ""; search.setAttribute("aria-expanded", "false"); }, 150);
+    search.onblur = () => setTimeout(() => { if (document.activeElement !== search) closeLibraryResults(); }, 150);
     }
     const validateSetupPage = reveal => {
       const results = window.vrRules.setupResults(report, vocabulary);
@@ -3780,8 +3865,8 @@
       nav.append(navHeading);
       findings.forEach(finding => {
         const jump = document.createElement("button");
-        jump.className = `finding-nav severity-${finding.severity || "informational"}${finding.uid === selectedFindingUid ? " active" : ""}`;
-        jump.innerHTML = `<span class="finding-nav-title">${escape(finding.title || "Untitled finding")}</span><span class="finding-nav-meta"><em>${escape(finding.severity || "informational")}</em><i aria-hidden="true">&middot;</i><span>${escape(finding.display_id || "No ID")}</span></span>`;
+        jump.className = `finding-nav severity-${finding.severity || "unset"}${finding.uid === selectedFindingUid ? " active" : ""}`;
+        jump.innerHTML = `<span class="finding-nav-title">${escape(finding.title || "Untitled finding")}</span><span class="finding-nav-meta"><em>${escape(finding.severity || "not set")}</em><i aria-hidden="true">&middot;</i><span>${escape(finding.display_id || "No ID")}</span></span>`;
         jump.onclick = () => { selectedFindingUid = finding.uid; expandedContentTypes = undefined; render(); };
         nav.append(jump);
         // A long list can leave the open finding scrolled out of the rail, which is the other half
@@ -3836,7 +3921,7 @@
             return `<span class="fchip fchip-locations" tabindex="0" aria-label="${escape(label)}: ${escape(values.join(", "))}">${label} &middot; ${summary}<span class="fchip-pop" aria-hidden="true"><b>${label}</b><ul>${values.map(value => `<li>${escape(value)}</li>`).join("")}</ul></span></span>`;
           })
           .join("");
-        const severityWord = finding.severity || "informational";
+        const severityWord = finding.severity || "not set";
         const statusWord = statuses.find(status => status[0] === finding.status)?.[1] || finding.status;
         box.innerHTML = `<header class="finding-header"><div class="section-title finding-title"><h1>${escape(finding.title || "Untitled finding")}</h1></div><div class="finding-chips"><span class="fchip fchip-sev" data-severity="${escape(severityWord)}"><i aria-hidden="true"></i>${escape(severityWord)}</span><span class="fchip">Likelihood <b>${escape(finding.likelihood || "not set")}</b></span><span class="fchip">Impact <b>${escape(finding.impact || "not set")}</b></span><span class="fchip">${escape(statusWord)}</span><span class="fchip fchip-mono">${escape(finding.display_id || "No ID")}</span>${locationGroups || '<span class="fchip">No locations</span>'}</div></header>`;
         const titleHeading = box.querySelector(".finding-title h1");
@@ -3893,8 +3978,10 @@
         // replace only the banners without redrawing the section around them.
         contentOffersFor = (finding, content) => {
           const nodes = [];
-          // Both can show at once. Order mirrors the paragraphs they produce: quoted step above,
-          // standard sentence below, so the pair reads as a preview of the finished section.
+          // An empty field with a step to quote gets one suggestion that writes the step and the
+          // standard sentence into the one text box. Otherwise the step and the sentence are offered
+          // separately, and both can show at once: the step above, the sentence below, so the pair
+          // reads as a preview of the finished section.
           if (content.type === "in_conclusion" && contentTypesForStatus(finding.status).includes("in_conclusion")) {
             const resolved = finding.conclusion_offer_resolved || [];
             const lastStep = pocLastStep(finding);
@@ -3902,55 +3989,88 @@
             // chose, so a step they answered against an older conclusion no longer describes anything.
             const onlyDefault = content.fragments.length === 1 && hasDefaultStatusConclusion(content.fragments[0]) && isDefaultStatusConclusion(content.fragments[0]);
             const stepKey = `${finding.uid}|${lastStep}`;
-            if (lastStep && !dismissedStepOffers.has(stepKey) && (onlyDefault || !resolved.includes(lastStep))) {
-              const first = content.fragments.find(fragment => fragment.type === "paragraph");
-              const firstText = first ? conclusionText(first) : "";
-              const sentenceStart = first ? defaultConclusionStart(firstText) : -1;
-              const prefix = sentenceStart >= 0 ? firstText.slice(0, sentenceStart).trimEnd() : firstText;
-              // Only a paragraph still holding a line this banner wrote is replaced; once the tester
-              // edits it, it is theirs and a corrected step is inserted as a new one instead.
-              const quoted = first && resolved.includes(prefix) ? first : null;
-              const resolve = write => {
-                if (write && first && sentenceStart >= 0 && (!prefix || quoted)) {
-                  first.runs = [{text:`${lastStep} `}, ...runsAfter(first.runs || [], sentenceStart)];
-                }
-                else if (write && quoted) quoted.runs = [{text:lastStep}];
-                else if (write) content.fragments.unshift(Object.assign(newFragment("paragraph"), {runs:[{text:lastStep}]}));
-                if (!write) dismissedStepOffers.add(stepKey);
-                finding.conclusion_offer_resolved = [...new Set([...resolved, lastStep])];
-                render();
-                scheduleSave();
-              };
-              const {banner, actions} = buildOffer("content-offer", `Start the conclusion with your last step: "${lastStep}"`);
+            const stepOffered = Boolean(lastStep) && !dismissedStepOffers.has(stepKey) && (onlyDefault || !resolved.includes(lastStep));
+            // Taking the step and dismissing it both answer it, so it is not offered again; a dismissal
+            // also holds for this sitting, which is what keeps a standing offer from redrawing itself.
+            const answerStep = dismissed => {
+              if (dismissed) dismissedStepOffers.add(stepKey);
+              finding.conclusion_offer_resolved = [...new Set([...resolved, lastStep])];
+              render();
+              scheduleSave();
+            };
+            // The focused block keeps its banner while the tester types (refreshContentOffers), so a
+            // button can outlive the paragraph state it was drawn for. Each one asks again when
+            // clicked, and a stale one redraws the banners and writes nothing.
+            const paragraphIsEmpty = fragment => content.fragments.includes(fragment) && !fragmentHasText(fragment);
+            const paragraphReads = (fragment, text) => content.fragments.includes(fragment) && conclusionText(fragment) === text;
+            const emptied = content.fragments.filter(fragment => fragment.type === "paragraph" && !fragmentHasText(fragment));
+            const writtenParagraphs = content.fragments.filter(fragment => fragment.type === "paragraph" && fragmentHasText(fragment));
+            const sentenceMissing = emptied.length > 0 && !content.fragments.some(hasDefaultStatusConclusion);
+            if (stepOffered && sentenceMissing && !writtenParagraphs.length) {
+              const target = emptied[0];
+              const {banner, actions} = buildOffer("content-offer", `Start the conclusion with your last step, then the standard closing sentence: "${lastStep}"`);
               banner.dataset.conclusionStep = lastStep;
+              banner.dataset.conclusionRestore = "";
               actions.append(
-                offerButton(quoted ? "Update the quoted step" : "Use it", "primary", () => resolve(true)),
-                offerButton("Dismiss", "dismiss", () => resolve(false)),
+                offerButton("Use it", "primary", () => {
+                  if (!paragraphIsEmpty(target)) return render();
+                  target.runs = [{text:`${lastStep} `}, ...statusConclusionRuns(finding.title, statusConclusionWord(finding.status))];
+                  answerStep(false);
+                }),
+                offerButton("Dismiss", "dismiss", () => answerStep(true)),
               );
               nodes.push(banner);
+            } else {
+              if (stepOffered) {
+                const first = content.fragments.find(fragment => fragment.type === "paragraph");
+                const firstText = first ? conclusionText(first) : "";
+                const sentenceStart = first ? defaultConclusionStart(firstText) : -1;
+                const prefix = sentenceStart >= 0 ? firstText.slice(0, sentenceStart).trimEnd() : firstText;
+                // Only a paragraph still holding a line this banner wrote is replaced; once the tester
+                // edits it, it is theirs and a corrected step is inserted as a new one instead.
+                const quoted = first && resolved.includes(prefix) ? first : null;
+                const resolve = write => {
+                  if (write && first && (sentenceStart >= 0 && (!prefix || quoted) || quoted) && !paragraphReads(first, firstText)) return render();
+                  if (write && first && sentenceStart >= 0 && (!prefix || quoted)) {
+                    first.runs = [{text:`${lastStep} `}, ...runsAfter(first.runs || [], sentenceStart)];
+                  }
+                  else if (write && quoted) quoted.runs = [{text:lastStep}];
+                  else if (write) content.fragments.unshift(Object.assign(newFragment("paragraph"), {runs:[{text:lastStep}]}));
+                  answerStep(!write);
+                };
+                const {banner, actions} = buildOffer("content-offer", `Start the conclusion with your last step: "${lastStep}"`);
+                banner.dataset.conclusionStep = lastStep;
+                actions.append(
+                  offerButton(quoted ? "Update the quoted step" : "Use it", "primary", () => resolve(true)),
+                  offerButton("Dismiss", "dismiss", () => resolve(false)),
+                );
+                nodes.push(banner);
+              }
+              if (sentenceMissing) {
+                const {banner, actions} = buildOffer("content-offer", "The standard closing sentence is missing. Put it back as a starting point; you will still need to replace it with your own wording before generating.");
+                banner.dataset.conclusionRestore = "";
+                const restoreTarget = emptied[emptied.length - 1];
+                actions.append(offerButton("Put it back", "primary", () => {
+                  if (!paragraphIsEmpty(restoreTarget)) return render();
+                  restoreTarget.runs = statusConclusionRuns(finding.title, statusConclusionWord(finding.status));
+                  // Back to boilerplate means the conclusion holds nothing the tester chose, so an
+                  // earlier "not that step" no longer describes anything and the offer starts over.
+                  finding.conclusion_offer_resolved = [];
+                  render();
+                  scheduleSave();
+                }));
+                nodes.push(banner);
+              }
             }
-            const emptied = content.fragments.filter(fragment => fragment.type === "paragraph" && !fragmentHasText(fragment));
-            if (emptied.length && !content.fragments.some(hasDefaultStatusConclusion)) {
-              const {banner, actions} = buildOffer("content-offer", "The standard closing sentence is missing. Put it back as a starting point; you will still need to replace it with your own wording before generating.");
-              banner.dataset.conclusionRestore = "";
-              actions.append(offerButton("Put it back", "primary", () => {
-                emptied[emptied.length - 1].runs = statusConclusionRuns(finding.title, statusConclusionWord(finding.status));
-                // Back to boilerplate means the conclusion holds nothing the tester chose, so an
-                // earlier "not that step" no longer describes anything and the offer starts over.
-                finding.conclusion_offer_resolved = [];
-                render();
-                scheduleSave();
-              }));
-              nodes.push(banner);
-            }
-            const writtenParagraphs = content.fragments.filter(fragment => fragment.type === "paragraph" && fragmentHasText(fragment));
             // Written, but not stating where the finding landed. Offered, never written for them:
             // their wording is the conclusion, and only they can say whether it is kept.
             if (!emptied.length && writtenParagraphs.length && !content.fragments.some(hasDefaultStatusConclusion) && !dismissedSentenceOffers.has(finding.uid)) {
               const {banner, actions} = buildOffer("content-offer", "This conclusion does not state whether the finding is open or resolved.");
               banner.dataset.conclusionSentence = "";
               const target = writtenParagraphs[writtenParagraphs.length - 1];
+              const targetText = conclusionText(target);
               const apply = mode => {
+                if (!paragraphReads(target, targetText)) return render();
                 const sentence = statusConclusionRuns(finding.title, statusConclusionWord(finding.status));
                 target.runs = mode === "replace" ? sentence : [...(target.runs || []), {text:" "}, ...sentence];
                 if (mode === "replace") finding.conclusion_offer_resolved = [];
@@ -4228,6 +4348,7 @@
   }
   root.id === "setup" ? setup() : continuousEditor();
   if (changedField && page === "setup") pointAtSetupField(changedField);
+  markRequiredSetupFields();
   updateSetupSectionSummaries();
   updateEngagementName(serverReport);
 })();

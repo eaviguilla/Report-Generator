@@ -4112,6 +4112,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.vulnerabilities[0].scope = Scope(mode="custom", target_ids=["tgt_browser"])
         report.vulnerabilities[0].likelihood = report.vulnerabilities[0].likelihood or "low"
         report.vulnerabilities[0].impact = report.vulnerabilities[0].impact or "low"
+        report.vulnerabilities[0].severity = report.vulnerabilities[0].severity or "low"
         main.workspace.save(report)
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         description = page.locator(".content-block").filter(has_text="Description")

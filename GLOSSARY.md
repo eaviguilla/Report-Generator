@@ -103,6 +103,10 @@ _Avoid_: detail table, detail section, finding detail
 One of the labelled parts of a finding in the Word report: Description, Recommended Remediation, Previous Proof of Concept, Proof of Concept and In Conclusion. The finding's status decides which it prints.
 _Avoid_: detail section, block
 
+**Fragment**:
+One piece of a section's content, such as a paragraph, numbered list, bulleted list, table, image, note, code block or instance title. A section holds its fragments in order.
+_Avoid_: element, component
+
 **Editable copy**:
 A new report the app builds from a Word report so that it reads the same: every finding, status, printed section and engagement detail. What the Word report does not print starts fresh.
 _Avoid_: editable draft, editable import, restored report

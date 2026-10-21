@@ -278,6 +278,23 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(renamed.status_code, 200, renamed.text)
         self.assertEqual(main.workspace.load(report_id).engagement.app_name, name)
 
+    def test_an_application_name_with_brackets_and_a_hash_is_saved_listed_and_reloaded(self) -> None:
+        """The name becomes a folder segment, and [ ] are glob characters: the report must still be
+        found by the manager's listing and by a reload, and a rename to another such name must work."""
+        report_id = self.new_report()
+        name = "[Acme] Portal #2"
+        report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
+        report["engagement"]["app_name"] = name
+        saved = self.client.put(f"/reports/{report_id}", json=report)
+        self.assertEqual(saved.status_code, 200, saved.text)
+
+        listed = {item["report_id"]: item for item in self.client.get("/reports").json()}
+        self.assertEqual(listed[report_id]["app_name"], name)
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, name)
+        renamed = self.client.patch(f"/reports/{report_id}/name", json={"app_name": "#3 [EU] Portal"})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, "#3 [EU] Portal")
+
     def test_additional_information_input_validation_rejects_unapproved_characters(self) -> None:
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
@@ -1875,29 +1892,95 @@ class ReportApiTests(unittest.TestCase):
                 f"{content_type} would be offered content it already holds",
             )
 
-    def test_a_library_finding_still_needs_an_affected_location(self) -> None:
-        """Scope defaults to "all", which would read as a deliberate every-target choice and walk
-        a freshly inserted finding straight past the affected-location gate."""
+    LIBRARY_TARGET_VALUES = {"web": "https://prod.example.test", "api": "POST /v1/pay"}
+
+    def _library_ready_report(self, channels: tuple[str, ...] = ("web",)) -> str:
+        """A report whose Setup passes, with one production target for each app type in `channels`."""
         report_id = self.new_report()
         report = main.workspace.load(report_id)
         report.engagement.segment = "JH"
-        report.engagement.app_name = "Gate"
+        report.engagement.app_name = "Library"
         report.engagement.report_type = "annual_pentest"
         report.engagement.tester = "QA Tester"
         report.engagement.network = "Internal"
         report.engagement.report_date = date(2026, 1, 3)
         report.engagement.tested_environments = ["production"]
+        report.engagement.tested_channels = list(channels)
         report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
-        report.scope_targets = [ScopeTarget(target_id="tgt_gate", environment="production", channel="web", value="https://prod.example.test")]
+        report.scope_targets = [
+            ScopeTarget(target_id=f"tgt_{channel}", environment="production", channel=channel, value=self.LIBRARY_TARGET_VALUES[channel])
+            for channel in channels
+        ]
         main.workspace.save(report)
+        return report_id
 
-        inserted = self.client.post(f"/reports/{report_id}/library/VDB-047")
-        self.assertEqual(inserted.status_code, 200)
-        self.assertEqual(inserted.json()["finding"]["scope"]["mode"], "custom")
+    def test_a_library_finding_arrives_with_every_location_selected(self) -> None:
+        """The tester unticks the places a finding does not touch, instead of ticking every place it does."""
+        report_id = self._library_ready_report(("web", "api"))
+        finding = self.client.post(f"/reports/{report_id}/library/VDB-047").json()["finding"]
 
-        editor = self.client.get(f"/reports/{report_id}/edit", follow_redirects=False)
-        self.assertEqual(editor.status_code, 303)
-        self.assertIn("incomplete=findings", editor.headers["location"])
+        self.assertEqual(finding["scope"]["mode"], "custom")
+        self.assertEqual(finding["scope"]["target_ids"], ["tgt_web", "tgt_api"])
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].scope.target_ids, ["tgt_web", "tgt_api"])
+
+    def test_a_library_finding_has_no_assessment_the_entry_did_not_give_it(self) -> None:
+        """Severity used to fall back to Informational, which printed a rating nobody had chosen."""
+        report_id = self._library_ready_report()
+        blank = self.client.post(f"/reports/{report_id}/library/VDB-047").json()["finding"]
+        self.assertEqual((blank["likelihood"], blank["impact"], blank["severity"]), (None, None, None))
+
+        given = self.client.post(f"/reports/{report_id}/library/VDB-023").json()["finding"]
+        self.assertEqual((given["likelihood"], given["impact"], given["severity"]), ("low", "low", "low"))
+
+    def test_a_library_finding_opens_the_editor_only_once_severity_is_set(self) -> None:
+        report_id = self._library_ready_report()
+        self.client.post(f"/reports/{report_id}/library/VDB-047")
+        editor = f"/reports/{report_id}/edit"
+
+        def edit_gate() -> int:
+            return self.client.get(editor, follow_redirects=False).status_code
+
+        self.assertEqual(edit_gate(), 303)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        finding.likelihood = finding.impact = "low"
+        main.workspace.save(report)
+        self.assertEqual(edit_gate(), 303, "a finding with no severity got past the gate")
+        self.assertIn("incomplete=findings", self.client.get(editor, follow_redirects=False).headers["location"])
+
+        report = main.workspace.load(report_id)
+        report.vulnerabilities[0].severity = "low"
+        main.workspace.save(report)
+        self.assertEqual(edit_gate(), 200)
+
+    def test_a_library_insert_installs_the_steps_of_every_app_type_tested_web_first(self) -> None:
+        report_id = self._library_ready_report(("web", "api"))
+        finding = self.client.post(f"/reports/{report_id}/library/VDB-015").json()["finding"]
+
+        def step_texts(steps) -> list[str]:
+            return ["".join(run["text"] for run in item["runs"]) for step in steps for item in step["items"]]
+
+        steps = main.library.get("VDB-015")["proof_of_concept"]
+        proof = next(content for content in finding["contents"] if content["type"] == "proof_of_concept")
+        lists = [fragment for fragment in proof["fragments"] if fragment["type"] == "numbered_list"]
+        self.assertEqual(finding["poc_variants"], ["web", "api"])
+        self.assertEqual(len(lists), 1, "web and API steps arrive as one list, as the Content page's offer joins them")
+        self.assertEqual(step_texts(lists), step_texts(steps["web"]) + step_texts(steps["api"]))
+
+    def test_a_library_insert_installs_only_the_steps_of_the_app_types_tested(self) -> None:
+        report_id = self._library_ready_report(("api",))
+        finding = self.client.post(f"/reports/{report_id}/library/VDB-015").json()["finding"]
+
+        proof = next(content for content in finding["contents"] if content["type"] == "proof_of_concept")
+        first_list = next(fragment for fragment in proof["fragments"] if fragment["type"] == "numbered_list")
+        api_steps = main.library.get("VDB-015")["proof_of_concept"]["api"][0]["items"]
+        self.assertEqual(finding["poc_variants"], ["api"])
+        self.assertEqual(len(first_list["items"]), len(api_steps))
+
+    def test_a_library_entry_without_steps_installs_none(self) -> None:
+        report_id = self._library_ready_report(("web", "api"))
+        finding = self.client.post(f"/reports/{report_id}/library/VDB-047").json()["finding"]
+        self.assertEqual(finding["poc_variants"], [])
 
     def _component_scope_report(self, report_id: str, channel: str, description: str) -> Report:
         report = main.workspace.load(report_id)

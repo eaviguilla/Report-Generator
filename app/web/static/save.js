@@ -179,6 +179,8 @@
     let pendingSave = false;
     let saveRevision = 0;
     let savedRevision = 0;
+    // The revision of a pending save the app queued by itself; any edit or recovery moves saveRevision past it.
+    let automaticSaveRevision = -1;
     let saveRetryCount = 0;
     const maxSaveRetries = 3;
     let saveInFlight = null;
@@ -564,6 +566,12 @@
       setSaveState(SAVE_STATES.UNSAVED);
       queueReportChange();
     }
+    // Queues a save for a change the app made on arrival, not the tester. Only a save that nothing else has touched stays app-only.
+    function scheduleAutomaticSave() {
+      const testerEditsPending = hasUnsavedEdits();
+      scheduleSave();
+      if (!testerEditsPending) automaticSaveRevision = saveRevision;
+    }
     function holdSaves(held) {
       pendingScopeDecision = held;
     }
@@ -681,7 +689,17 @@
       await waitForMutations();
       if (await save()) window.location.assign(link.dataset.href);
     }));
-    const undo = async () => {
+    // A library insert or upload adds its own history step when it settles, and reloading would
+    // abandon it, so history navigation picks its step only after pending mutations settle.
+    // A second request during that wait is dropped rather than stepping twice.
+    let historyStepWaiting = false;
+    const settleThenStep = async step => {
+      if (historyStepWaiting) return;
+      historyStepWaiting = true;
+      try { await waitForMutations(); } finally { historyStepWaiting = false; }
+      await step();
+    };
+    const undo = () => settleThenStep(async () => {
       finalizeTextTransaction();
       const action = undoHistory.pop();
       if (!action) return;
@@ -691,8 +709,8 @@
         undoHistory.push(action);
         storeHistory();
       }
-    };
-    const redo = async () => {
+    });
+    const redo = () => settleThenStep(async () => {
       const action = redoHistory.pop();
       if (!action) return;
       undoHistory.push(action);
@@ -701,7 +719,7 @@
         redoHistory.push(action);
         storeHistory();
       }
-    };
+    });
     document.querySelector("#undo-button")?.addEventListener("click", undo);
     document.querySelector("#redo-button")?.addEventListener("click", redo);
     document.addEventListener("keydown", event => {
@@ -712,10 +730,19 @@
     updateHistoryControls();
     window.addEventListener("pageshow", event => {
       const historyRestore = event.persisted || performance.getEntriesByType("navigation")[0]?.type === "back_forward";
-      if (!historyRestore || pendingSave) return;
+      const appOnlyPending = pendingSave && !saveInFlight && !saveConflict && saveRevision === automaticSaveRevision;
+      if (!historyRestore || (pendingSave && !appOnlyPending)) return;
       try {
         const latest = sessionStorage.getItem(tabRevisionKey);
-        if (latest && timestampMicros(latest) > timestampMicros(report.saved_at)) window.location.reload();
+        if (!latest || timestampMicros(latest) <= timestampMicros(report.saved_at)) return;
+        if (appOnlyPending) {
+          // The stale page's own sort would otherwise be saved, or kept as a recovery copy, over the newer report.
+          clearTimeout(autoSaveTimer);
+          if (!clearLocalDraft()) return;
+          pendingSave = false;
+          allowUnsavedUnload = true;
+        }
+        window.location.reload();
       } catch (error) { showRecoveryStorageWarning(error); }
     });
     window.addEventListener("pagehide", () => {
@@ -741,7 +768,7 @@
     } else if (recoveryCandidate) {
       showLocalRecovery(recoveryCandidate);
     }
-    return {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
+    return {report, changedField, scheduleSave, scheduleAutomaticSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
   }
   window.vrSave = {start, reconcileCanonicalObject, isRecord, activeTextEntry};
 })();

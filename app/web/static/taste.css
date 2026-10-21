@@ -889,13 +889,28 @@ label,
 
 #setup[data-step="findings"] th:nth-child(4),
 #setup[data-step="findings"] td:nth-child(4) {
-  width: 124px;
+  width: 164px;
+}
+
+/* A select clipped to "Likelih…" or "Informationa" hides the value it holds. Each assessment column
+   keeps a floor wide enough for its longest option, so a narrow table scrolls instead of cutting
+   the value off. */
+#setup[data-step="findings"] th:nth-child(2),
+#setup[data-step="findings"] td:nth-child(2),
+#setup[data-step="findings"] th:nth-child(3),
+#setup[data-step="findings"] td:nth-child(3) {
+  width: 132px;
+}
+
+#setup[data-step="findings"] td:nth-child(2) select,
+#setup[data-step="findings"] td:nth-child(3) select {
+  min-width: 108px !important;
 }
 
 #setup[data-step="findings"] td:nth-child(4) select {
   width: 100% !important;
   max-width: 100% !important;
-  min-width: 0 !important;
+  min-width: 140px !important;
   padding: 3px 10px 3px 21px !important;
   border: 1px solid currentColor !important;
   border-radius: var(--radius-pill) !important;
@@ -3266,14 +3281,12 @@ button.finding-nav.active:not(:disabled)::after {
 }
 .review-content small {
   display: block;
-  overflow: hidden;
   margin-left: 11px;
   color: var(--muted);
   font-family: "Cascadia Code", Consolas, monospace !important;
   font-size: 8px;
   font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .review-arrow {
@@ -3445,4 +3458,44 @@ button.finding-nav.active:not(:disabled)::after {
   font-size: 10.5px;
   font-weight: 600;
   appearance: none;
+}
+
+/* Setup marks the fields its rules require; the legend says what the star means. A label's star is
+   generated content in the label's own grid, so it is not part of the label's text. The alternative
+   after the slash keeps it out of the accessible name, where aria-required already says it. */
+label.is-required {
+  grid-template-columns: max-content 1fr;
+  column-gap: 0;
+}
+
+label.is-required > :is(input, select, textarea) {
+  grid-column: 1 / -1;
+}
+
+label.is-required::after {
+  grid-column: 2;
+  grid-row: 1;
+  margin-left: 2px;
+  color: var(--danger);
+  content: "*";
+  content: "*" / "";
+  font-weight: 600;
+}
+
+.required-star {
+  margin-left: 2px;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* A section strip is a flex row with a 14px gap; pull the star back against its heading. */
+#setup[data-step="setup"] > section > h2 > .required-star {
+  margin-left: calc(2px - 14px);
+}
+
+.required-legend {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
 }

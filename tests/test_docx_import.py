@@ -596,6 +596,27 @@ class FragmentRecognitionTests(unittest.TestCase):
             "a fragment type never appeared in the rendered document",
         )
 
+    def test_a_code_block_directly_under_its_steps_is_still_read_as_code(self) -> None:
+        """A proof of concept now prints a code block right under the step before it, with no blank
+        paragraph between. The importer tells a code block by its shading, so it must not need one."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = self._report(folder)
+            proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+            screenshot = next(fragment for fragment in proof.fragments if fragment.type == "image")
+            proof.fragments = [
+                ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])]),
+                CodeFragment(frag_id="f_code", type="code_block", caption=None, text="GET /accounts/123"),
+                screenshot,
+            ]
+            document = Document(BytesIO(render_report_docx(report, TEMPLATE, folder)))
+        formats = numbering_formats(document)
+        paragraphs = document.paragraphs
+        index = next(position for position, paragraph in enumerate(paragraphs) if paragraph.text.strip() == "GET /accounts/123")
+        self.assertEqual(classify_paragraph(paragraphs[index], formats), "code_block")
+        self.assertEqual(paragraphs[index - 1].text.strip(), "Send the request.", "a blank paragraph still sits above the code block")
+        self.assertEqual(classify_paragraph(paragraphs[index - 1], formats), "numbered_list")
+
     def test_a_table_is_a_body_element_not_a_paragraph(self) -> None:
         """``table_fragment.docx`` adds no paragraph style of its own, so a table is only ever found
         structurally."""

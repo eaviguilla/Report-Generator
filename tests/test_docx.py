@@ -1132,6 +1132,61 @@ class DocxReportTests(unittest.TestCase):
             self.assertNotIn("Severity Review Ticket", body, "new_finding.docx carries no such label")
             self.assertNotIn("GRIMPEN-", body, "a value on an Open (New) finding must reach nothing")
 
+    def _code_block_above(self, fragments, *, section: str = "proof_of_concept", status: str = "open_new"):
+        """Render `fragments` as one section of a finding and return the element directly above the
+        code block that says GET /accounts/123, plus the document body for further looking."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            contents = [
+                Content(type="description", fragments=[ParagraphFragment(frag_id="f_d", type="paragraph", runs=[Run(text="Description text")])]),
+                Content(type="recommended_remediation", fragments=[ParagraphFragment(frag_id="f_r", type="paragraph", runs=[Run(text="Remediation text")])]),
+                Content(type="proof_of_concept", fragments=[ListFragment(frag_id="f_s", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])])]),
+            ]
+            contents = [content for content in contents if content.type != section] + [Content(type=section, fragments=fragments)]
+            document = self._layout_document(Path(temporary_directory), contents, status=status)
+            body = list(document.element.body.iterchildren())
+        text_of = lambda element: "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
+        code = next(item for item in body if item.tag == qn("w:p") and text_of(item) == "GET /accounts/123")
+        return code.getprevious(), body, text_of
+
+    def test_a_code_block_in_a_proof_of_concept_has_no_blank_line_above_it(self) -> None:
+        """Whatever introduces a code block leaves a spacer paragraph behind it, which put an empty
+        line between the steps and the command they lead into."""
+        steps = ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])])
+        for name, introduction in (
+            ("a numbered list", steps),
+            ("a paragraph", ParagraphFragment(frag_id="f_p", type="paragraph", runs=[Run(text="The request is:")])),
+            ("a note", NoteFragment(frag_id="f_n", type="note", runs=[Run(text="Use a valid session.")])),
+        ):
+            for section, status in (("proof_of_concept", "open_new"), ("previous_proof_of_concept", "open_previously_discovered")):
+                with self.subTest(after=name, section=section):
+                    code = CodeFragment(frag_id="f_code", type="code_block", caption=None, text="GET /accounts/123")
+                    above, body, text_of = self._code_block_above([introduction, code], section=section, status=status)
+                    self.assertFalse(_is_blank_paragraph(above), f"an empty line sits between {name} and its code block")
+                    self.assertTrue(text_of(above), "the element above the code block is not the text that introduces it")
+
+    def test_a_captioned_code_block_keeps_the_space_above_its_caption_and_loses_the_one_below_it(self) -> None:
+        steps = ListFragment(frag_id="f_steps", type="numbered_list", items=[ListItem(runs=[Run(text="Send the request.")])])
+        code = CodeFragment(frag_id="f_code", type="code_block", caption="Request", text="GET /accounts/123")
+        above, body, text_of = self._code_block_above([steps, code])
+        self.assertEqual(text_of(above), "Request", "the caption must sit directly on its code block")
+        self.assertTrue(_keeps_next(above), "the caption must stay with the code block under it")
+        self.assertTrue(_is_blank_paragraph(above.getprevious()), "the caption lost the space that separates it from the steps")
+
+    def test_two_code_blocks_in_a_proof_of_concept_are_laid_out_as_they_were(self) -> None:
+        """Adjacent code blocks never had a spacer between them; removing the one above a code block
+        must not start eating the first block's own paragraph."""
+        first = CodeFragment(frag_id="f_first", type="code_block", caption=None, text="POST /login")
+        second = CodeFragment(frag_id="f_code", type="code_block", caption=None, text="GET /accounts/123")
+        above, body, text_of = self._code_block_above([first, second])
+        self.assertEqual(text_of(above), "POST /login")
+
+    def test_a_code_block_outside_the_proof_of_concept_keeps_its_blank_line(self) -> None:
+        """The request was about the proof of concept; a Description keeps the layout it has."""
+        intro = ParagraphFragment(frag_id="f_p", type="paragraph", runs=[Run(text="The request is:")])
+        code = CodeFragment(frag_id="f_code", type="code_block", caption=None, text="GET /accounts/123")
+        above, body, text_of = self._code_block_above([intro, code], section="description")
+        self.assertTrue(_is_blank_paragraph(above))
+
     def test_labels_titles_and_lead_ins_are_kept_with_what_they_introduce(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_folder = Path(temporary_directory)

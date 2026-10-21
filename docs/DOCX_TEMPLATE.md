@@ -450,7 +450,16 @@ Word's to decide and nothing in the file records it, so this was left alone
 rather than guessed at.
 
 Fragment-template blank paragraphs are preserved between fragments and trimmed
-at content-section boundaries. Generated evidence images clone the centered
+at content-section boundaries. The exception is a code block in a proof-of-concept
+section (`poc-fragments-here` and `prev-poc-fragments-here`): the spacer a
+paragraph, list or note leaves behind comes off when an uncaptioned code block
+follows, so the code sits directly under the step that introduces it, and the
+blank the caption component ships with comes off between a caption and its code.
+The blank above a caption stays. Two code blocks in a row never had a spacer, and
+a code block in a Description or a Remediation keeps the one it has. The importer
+tells a code block by its shading, not by a blank above it, so it reads the tight
+layout back unchanged (`test_a_code_block_directly_under_its_steps_is_still_read_as_code`).
+Generated evidence images clone the centered
 paragraph alignment from `resources/fragments/image_fragment.docx` and embed
 its effective 0.75 pt black border into an in-memory PNG copy so all four edges
 render consistently. Source evidence files and static template artwork remain

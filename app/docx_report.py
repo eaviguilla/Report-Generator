@@ -812,6 +812,7 @@ def _render_finding_component(
             "conclusion-fragments-here": contents.get("in_conclusion"),
         })
     for anchor, content in anchors.items():
+        proof_section = anchor in {"poc-fragments-here", "prev-poc-fragments-here"}
         rendered = _render_component_content(
             document,
             content,
@@ -820,7 +821,8 @@ def _render_finding_component(
             component_root,
             allow_incomplete,
             finding=finding,
-            label_images=anchor in {"poc-fragments-here", "prev-poc-fragments-here"},
+            label_images=proof_section,
+            tight_code=proof_section,
         )
         # Before the splice: the anchor has to still be present, and re-located each pass because
         # an earlier replacement has already shifted the indices.
@@ -905,7 +907,11 @@ def _render_component_content(
     *,
     finding: Vulnerability | None = None,
     label_images: bool = False,
+    tight_code: bool = False,
 ) -> list:
+    """Render one section's fragments. `tight_code` sits a code block directly under whatever
+    introduces it: a paragraph, list or note leaves a spacer behind it, and that spacer comes off
+    when a code block follows. Only the proof-of-concept sections ask for it."""
     fragments = [] if content is None else [
         fragment
         for fragment in content.fragments
@@ -926,6 +932,7 @@ def _render_component_content(
         # can never continue one from another section or another finding.
         numbering_carry: dict[tuple[Path, int], int] | None = None
         instance_number = 0
+        previous_fragment = None
         for fragment in fragments:
             # Numbered here rather than in the fragment renderer, so the count is confined to this
             # section the same way the numbered-list chain above is.
@@ -934,6 +941,7 @@ def _render_component_content(
                 rendered.extend(_render_instance_title(document, component_root, fragment, instance_number))
                 # Each instance names its own environment, even when it matches the one before.
                 labelled_environment = None
+                previous_fragment = fragment
                 continue
             # One label per run of images.
             if (
@@ -952,6 +960,11 @@ def _render_component_content(
                 fragment_numbering = numbering_carry
             else:
                 fragment_numbering = None
+            # A captioned code block keeps the space above its caption; an uncaptioned one sits right
+            # under the text before it. A code block after another has no spacer to take off.
+            if tight_code and isinstance(fragment, CodeFragment) and not fragment.caption and not isinstance(previous_fragment, CodeFragment):
+                while rendered and _is_empty_component_paragraph(rendered[-1]):
+                    rendered.pop()
             rendered.extend(
                 _render_component_fragment(
                     document,
@@ -961,8 +974,10 @@ def _render_component_content(
                     component_root,
                     allow_incomplete,
                     numbering_ids=fragment_numbering,
+                    tight_code=tight_code,
                 )
             )
+            previous_fragment = fragment
     rendered = _trim_trailing_empty_paragraphs(rendered)
     _keep_tables_with_lead_in(rendered)
     return rendered
@@ -979,6 +994,7 @@ def _render_component_fragment(
     # Never `{}`: a mutable default is built once at import and would join every list in the report
     # into one chain. None means "your own cache", which is what makes each list restart.
     numbering_ids: dict[tuple[Path, int], int] | None = None,
+    tight_code: bool = False,
 ) -> list:
     if isinstance(fragment, ParagraphFragment):
         return _render_multiline_text_component(document, component_root, "paragraph", fragment.runs)
@@ -1006,6 +1022,10 @@ def _render_component_fragment(
         return rendered
     if isinstance(fragment, CodeFragment):
         rendered = _render_caption_component(document, component_root, fragment.caption)
+        # The caption component ships with a trailing blank, which would sit between the caption and
+        # the code it names.
+        if tight_code:
+            rendered = _trim_trailing_empty_paragraphs(rendered)
         for element in rendered:
             if element.tag == qn("w:p"):
                 _keep_with_next(element)

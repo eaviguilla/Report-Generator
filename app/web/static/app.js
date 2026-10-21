@@ -250,7 +250,17 @@
   const rememberFocusedField = () => keepFieldName(pageFieldName(document.activeElement));
   const nameField = element => pageFieldName(element) || fieldBeforeRebuild;
   const {isRecord, activeTextEntry, TEXT_ENTRY_SELECTOR} = window.vrSave;
-  const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
+  // Content lists findings by severity, then title. Opening it puts the stored order the same way, so Findings shows it too.
+  const compareFindings = (left, right) => severity.indexOf(left.severity) - severity.indexOf(right.severity) || left.title.localeCompare(right.title);
+  const sortFindings = findings => {
+    const stored = findings.slice();
+    findings.sort(compareFindings);
+    return stored.some((finding, index) => finding !== findings[index]);
+  };
+  const sortedOnArrival = page === "edit" && sortFindings(serverReport.vulnerabilities);
+  const {report, changedField, scheduleSave, scheduleAutomaticSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
+  // The order is in place before start() takes its baseline, so sorting is no Undo step. A recovery copy keeps its own order.
+  if (sortedOnArrival && report === serverReport) scheduleAutomaticSave();
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
     const notice = document.querySelector("#setup-validation-note");
@@ -3447,7 +3457,7 @@
       if (!target) return;
       target.classList.add("is-review-target");
     };
-    const ordered = () => report.vulnerabilities.slice().sort((left, right) => severity.indexOf(left.severity) - severity.indexOf(right.severity) || left.title.localeCompare(right.title));
+    const ordered = () => report.vulnerabilities.slice().sort(compareFindings);
     const updateReadinessPanel = () => {
       const panel = document.querySelector("#editor-notifications");
       const count = document.querySelector("#issue-count");

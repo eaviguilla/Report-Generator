@@ -4130,6 +4130,149 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator("#save-button").get_attribute("data-save-state"), "recovered")
         page.unroute(f"**/reports/{report_id}", interrupt_put)
 
+    def _report_with_findings(self, findings: list[tuple[str, str]]) -> str:
+        """A ready report whose complete findings are stored in the order given, as (title, severity)."""
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        for number, (title, severity) in enumerate(findings):
+            finding = Vulnerability(
+                uid=f"v_order_{number}", title=title, likelihood="low", impact="low", severity=severity, status="open_new",
+                scope={"mode": "custom", "target_ids": ["tgt_browser"]},
+            )
+            main.provision(finding)
+            report.vulnerabilities.append(finding)
+            main.sync_evidence_image_slots(finding, report)
+        main.workspace.save(report)
+        return report_id
+
+    def test_findings_take_the_order_content_lists_them_in_only_once_content_is_opened(self) -> None:
+        stored = ["Zeta low", "Beta medium", "Eta critical", "Alpha medium"]
+        report_id = self._report_with_findings(list(zip(stored, ["low", "medium", "critical", "medium"])))
+        page = self.page
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        titles = rows.locator(".finding-title-display")
+
+        def make_critical(row) -> None:
+            with page.expect_response(lambda response: response.request.method == "PUT"):
+                row.get_by_label("Severity", exact=True).select_option("critical")
+
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        expect(titles).to_have_text(stored)
+
+        # Changing a severity here moves nothing: this page never sorts itself.
+        make_critical(rows.first)
+        expect(titles).to_have_text(stored)
+
+        page.get_by_role("button", name="Next: Content").click()
+        page.wait_for_url("**/edit")
+        in_content_order = ["Eta critical", "Zeta low", "Alpha medium", "Beta medium"]
+        expect(page.locator(".finding-nav .finding-nav-title")).to_have_text(in_content_order)
+
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url("**/findings")
+        expect(titles).to_have_text(in_content_order)
+        self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], in_content_order)
+
+        # Back on Findings, a change moves nothing again until Content is opened.
+        make_critical(rows.last)
+        expect(titles).to_have_text(in_content_order)
+
+    def test_the_arrival_sort_is_no_undo_step_and_is_saved_only_when_it_changed_the_order(self) -> None:
+        report_id = self._report_with_findings([("Low one", "low"), ("Critical one", "critical")])
+        page = self.page
+        in_content_order = ["Critical one", "Low one"]
+        nav_titles = page.locator(".finding-nav .finding-nav-title")
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        expect(nav_titles).to_have_text(in_content_order)
+        # An Undo that restored the old order would reload this page, and the reload would sort it again.
+        expect(page.locator("#undo-button")).to_be_disabled()
+        expect(page.locator('#save-button[data-save-state="saved"]')).to_be_visible()
+        self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], in_content_order)
+
+        # Opened again the order already matches. Back saves whatever is pending, so an unchanged
+        # save time shows that the arrival queued nothing.
+        saved_at = main.workspace.load(report_id).saved_at
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        expect(nav_titles).to_have_text(in_content_order)
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url("**/findings")
+        self.assertEqual(main.workspace.load(report_id).saved_at, saved_at)
+
+    def test_native_forward_to_content_reloads_stale_html_instead_of_saving_its_arrival_sort(self) -> None:
+        report_id = self._report_with_findings([("Low", "low"), ("Critical", "critical")])
+        page = self.page
+        nav_titles = page.locator(".finding-nav .finding-nav-title")
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        page.get_by_role("button", name="Next: Content").click()
+        page.wait_for_url("**/edit")
+        expect(page.locator('#save-button[data-save-state="saved"]')).to_be_visible()
+        page.go_back(wait_until="domcontentloaded")
+        page.wait_for_url("**/findings")
+        titles = page.locator(".finding-title-display")
+        expect(titles).to_have_text(["Critical", "Low"])
+        page.locator("#findings > tr:not(.finding-location-row)").first.get_by_label("Severity", exact=True).select_option("informational")
+        page.locator("#save-button").click()
+        expect(page.locator('#save-button[data-save-state="saved"]')).to_be_visible()
+
+        # The cached Content page still lists Critical first. Its arrival sort is the app's, not the tester's.
+        page.go_forward(wait_until="domcontentloaded")
+        page.wait_for_url("**/edit")
+        expect(nav_titles).to_have_text(["Low", "Critical"])
+        expect(page.locator('#save-button[data-save-state="saved"]')).to_be_visible()
+        self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], ["Low", "Critical"])
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[1].severity, "informational")
+
+    def test_a_history_restore_does_not_reload_over_a_real_unsaved_edit(self) -> None:
+        report_id, _report = self._finding_in_both_environments(["prod", "uat"])
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
+        caption = proof.locator(".evidence-caption").first
+        caption.fill("Typed before leaving")
+        expect(page.locator('#save-button[data-save-state="unsaved"]')).to_be_visible()
+
+        # A newer revision exists elsewhere in this tab, then the page is shown again from history.
+        page.evaluate("""() => {
+            window.keptMarker = true;
+            sessionStorage.setItem(`vulnreport-saved-at:${location.pathname.split("/")[2]}`, "2999-01-01T00:00:00.000000+00:00");
+            window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+        }""")
+        # Nothing signals a reload that does not happen, so this waits long enough for one to have started.
+        page.wait_for_timeout(500)
+
+        self.assertTrue(page.evaluate("window.keptMarker === true"))
+        expect(caption).to_have_value("Typed before leaving")
+        expect(page.locator('#save-button[data-save-state="unsaved"]')).to_be_visible()
+
+    def test_undo_on_content_after_the_arrival_sort_undoes_the_findings_edit_and_content_sorts_again(self) -> None:
+        report_id = self._report_with_findings([("Low one", "low"), ("Critical one", "critical")])
+        page = self.page
+        rows = page.locator("#findings > tr:not(.finding-location-row)")
+        titles = rows.locator(".finding-title-display")
+        nav_titles = page.locator(".finding-nav .finding-nav-title")
+        page.goto(f"{self.base_url}/reports/{report_id}/findings")
+        rows.first.get_by_label("Severity", exact=True).select_option("medium")
+        page.get_by_role("button", name="Next: Content").click()
+        page.wait_for_url("**/edit")
+        expect(nav_titles).to_have_text(["Critical one", "Low one"])
+
+        # The sort is no step of its own, so the step Undo finds is the severity changed on Findings.
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        page.wait_for_url("**/findings")
+        expect(titles).to_have_text(["Low one", "Critical one"])
+        expect(rows.first.get_by_label("Severity", exact=True)).to_have_value("low")
+        expect(page.locator("#undo-button")).to_be_disabled()
+        expect(page.locator('#save-button[data-save-state="saved"]')).to_be_visible()
+
+        page.get_by_role("button", name="Next: Content").click()
+        page.wait_for_url("**/edit")
+        expect(nav_titles).to_have_text(["Critical one", "Low one"])
+        expect(page.locator('#save-button[data-save-state="saved"]')).to_be_visible()
+        self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], ["Critical one", "Low one"])
+
     def test_keyboard_library_selection_and_fragment_movement(self) -> None:
         report_id = self.ready_report()
         page = self.page

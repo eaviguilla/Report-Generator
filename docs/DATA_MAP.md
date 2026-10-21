@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-21**, after the Content page's "Add a fragment" dropdown became an add row of one-click buttons whose new fragment takes the cursor.
+> Last verified against source: **2026-10-21**, after Content's arrival sort of the stored findings was put back in `app.js` and the Content page's "Add a fragment" dropdown became an add row.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -588,7 +588,11 @@ Three server-rendered documents (`page1_setup`, `page2_findings`, `page2_editor`
   Otherwise Restore points `sessionStorage["vulnreport-recovery:{reportId}"]` at the copy and opens the copy's page, and that page edits the copy and saves it after the idle time.
   When the copy's page is not the current one the button names it, with the page's name from `pageNames`, for example "Restore on Content"; on its own page, or for a copy with no `page`, it reads "Restore" and reloads.
   Discard removes the copy, and marks the page Saved only when it has no unsaved edits.
-- `pageshow` compares a clean history-restored document with the newest revision saved in this tab and reloads stale cached HTML before it can create a false self-conflict. A restored page with pending edits is not reloaded into data loss; it retains the ordinary recovery/conflict path.
+- `pageshow` compares a history-restored document with the newest revision saved in this tab and reloads stale cached HTML before it can create a false self-conflict.
+  A restored page with pending edits is not reloaded into data loss; it retains the ordinary recovery/conflict path.
+  A pending save that is only Content's arrival sort counts as clean. That means `automaticSaveRevision` equals `saveRevision`, with no save in flight and no conflict.
+  A native Forward to cached Content HTML re-runs the sort on stale data, so the handler drops that pending save and its local draft, sets `allowUnsavedUnload`, and reloads.
+  Any tester edit, Undo step or recovery copy moves `saveRevision` past the marker and keeps the page.
 - `beforeunload` prompts when `saveRevision > savedRevision` or `pendingMutation` is set, unless `allowUnsavedUnload` is set. Native Back, reload and tab close can otherwise abandon a screenshot after the report save finishes but before the upload reaches the server. Dismissing the prompt keeps the upload running; in-app Back drains the mutation queue first.
 - `visibilitychange` to hidden forces an immediate save when one is pending.
 
@@ -622,6 +626,16 @@ A field among the locations unfolds the finding's locations first, through the r
 A name or Vuln ID that holds text shows as a button with its box hidden, so the button takes the mark.
 The field is scrolled to the middle of the view and marked as on Setup.
 When the field is gone the finding's row is scrolled to, and when the finding is gone, for example one the Undo removed, the list of findings is scrolled to its top.
+
+**Opening Content sorts the stored findings, and nothing else does.** Content lists findings by severity, then title (`compareFindings`).
+Findings draws `report.vulnerabilities` as stored, so it shows that order only after Content has sorted the stored array.
+When Content loads the server's copy, `app.js` sorts `serverReport.vulnerabilities` in place before `start` takes its baseline.
+The sort is therefore no Undo step, and an Undo cannot reload the page into sorting it again.
+When the order changed, `scheduleAutomaticSave` (`save.js`, a `scheduleSave` that records the revision as app-only) is called straight after `start` and before `continuousEditor()`, whose automatic changes (`syncConclusion`, `syncEvidenceImageSlots`) a later call would pull into an Undo step.
+The ordinary autosave, or Back, then writes the sorted array.
+A page opened from a recovery copy (Undo, Redo or Restore) keeps the copy's order, and a report already in order saves nothing on arrival.
+Findings never sorts, so a finding added, retitled or re-rated there stays where it is until Content opens again.
+A title changed on Content moves its nav entry at once, but the stored order waits for the next arrival.
 
 **Server-side gates can bounce a direct URL:** `/findings` redirects to `/setup?incomplete=setup` when setup is incomplete; `/edit` redirects to `/findings?incomplete=findings` when any finding is incomplete.
 A report with no findings passes `/edit`, because it can be generated (ADR-0002); the Content page then shows a no-findings notice in place of the finding list and offers no way to add a finding.
@@ -742,6 +756,7 @@ A stored value that breaks a rule is a Setup issue (`setup_issues` words every r
 | which conclusion paragraph the app may write into | the two-arm selection in `provision`'s conclusion block | the same two arms in `syncConclusion` |
 | a printed section that must never be empty | the `{description, recommended_remediation, in_conclusion}` set in `generation_issues` | `requiresFragment` |
 | a conclusion still holding the app's own sentence | `generation_issues` | `fragmentIssues` |
+| the order findings are listed in: severity, then title | the Word summary table and the finding sections sort by `SEVERITY_ORDER`, then `title.casefold()`, and never touch the stored order. A blank severity counts as informational in the summary table | `compareFindings`, read by Content's `ordered()` and by `sortFindings` when Content opens (§10). It compares titles with `localeCompare`, not `casefold`, and puts a blank severity first, which the `/edit` gate keeps from arriving. No test compares the two sides |
 
 The sentence now has **one status word, one builder and one recogniser per side**, named so the set is visible: `status_conclusion_word` / `status_conclusion_runs` / `STATUS_CONCLUSION_PATTERN` in Python, `statusConclusionWord` / `statusConclusionRuns` / `STATUS_CONCLUSION_PATTERN` in JavaScript.
 It reads `The finding "<title>" `, then `is ` / `is still ` / `is now `, then a bold `Open` / `Resolved` / `CLOSED`, then `.`.

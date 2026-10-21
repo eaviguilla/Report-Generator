@@ -1,6 +1,6 @@
 # One-click fragment buttons on the Content page
 
-> **Status:** done · 2026-10-21 · `5e63b3d`
+> **Status:** done · 2026-10-22 · `5e63b3d`, and the look changed in `8dc5afe`
 
 ## Request
 
@@ -67,4 +67,4 @@ The shipped row did not match the page around it. The page's own controls are 20
 
 What it is now: a 32 px dashed strip with 24 px buttons and 14 px icons, which is the WCAG 2.2 minimum target size. It is centred with `justify-self: center`. The space above it and the space below it are both 11 px. The name is 9.5 px monospace and out of the layout, so it moves nothing. At the narrowest two-column width (444 px) the longest name ends 21 px inside the section, which clips at its padding box. A section narrower than about 400 px, which is a window under about 430 px, clips the longest names. The old row wrapped its name there, and wrapping was what the new look gave up. The tray's border, fill and radius, the 34 px buttons and the name slot that sat in the row's flow, all in Q8, are gone. The `.add-row-tray` element stays as a plain wrapper for the button groups. The behaviour of the buttons, the cursor, the Tab stop and the arrow keys did not change.
 
-The three looks are on the branch `prototype/add-row-matches-content-page` (`3621b9e`). They restyle the row of `5e63b3d`, so they run against `fe9f953`.
+The change is in `8dc5afe`. The three looks are on the branch `prototype/add-row-matches-content-page` (`3621b9e`). They restyle the row of `5e63b3d`, so they run against `fe9f953`.

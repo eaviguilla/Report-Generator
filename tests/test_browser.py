@@ -26,7 +26,8 @@ from app.docx_import import NO_FINDINGS_TITLE
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import finding_input_issues, format_rule_message, setup_input_issues, setup_issues, setup_refusal_message, scope_text_refusals, status_conclusion_runs
 from app.storage import atomic_write_json, read_json
-from tests.support import png_bytes, use_temp_workspace
+from app.vocabulary import client_vocabulary
+from tests.support import SEGMENTS_WITHOUT_OWN_REPORT_NAME, png_bytes, use_temp_workspace
 from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
 
 
@@ -61,6 +62,9 @@ def setup_issue(field_name: str, value: str, environment: str = "production") ->
     """The server's message for one invalid Setup value, which the browser must show word for word."""
     windows = {environment: TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2)) for environment in ("production", "non_production")}
     engagement = Engagement(tested_environments=["production", "non_production"], test_windows=windows, test_accounts=[TestAccount(user_role="N/A", username="N/A")])
+    # The report name is checked only under a segment that types its own.
+    if field_name == "report_name":
+        engagement.segment = "GWAM"
     target = windows[environment] if field_name == "test_time" else engagement.test_accounts[0] if field_name in ("user_role", "username") else engagement
     setattr(target, field_name, value)
     [issue] = setup_input_issues(engagement)
@@ -327,6 +331,146 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#setup-validation-note:not([hidden])")
         flagged = set(page.eval_on_selector_all("[data-path].validation-error", "controls => controls.map(c => c.dataset.path)"))
         self.assertEqual(flagged, starred)
+
+    def test_the_report_name_field_shows_for_gwam_only_and_is_starred_while_it_shows(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{self.ready_report()}/setup")
+        segment = page.get_by_label("Segment")
+        report_name = page.get_by_label("Report Name", exact=True)
+        holder = page.locator('.setup-field-wrap:has([data-path="engagement.report_name"])')
+        star = page.locator('label.is-required:has([data-path="engagement.report_name"])')
+
+        for other in (*SEGMENTS_WITHOUT_OWN_REPORT_NAME, ""):
+            with self.subTest(segment=other):
+                segment.select_option(other)
+                expect(report_name).to_be_hidden()
+                # The wrapper goes too, or an empty cell would be left in the grid.
+                expect(holder).to_be_hidden()
+                expect(star).to_have_count(0)
+                self.assertIsNone(report_name.get_attribute("aria-required"))
+
+        segment.select_option("GWAM")
+        expect(report_name).to_be_visible()
+        self.assertEqual(report_name.get_attribute("aria-required"), "true")
+        expect(star).to_have_count(1)
+        # The star is the label's CSS, so the label's own text stays the field's name.
+        self.assertEqual(star.evaluate("el => el.firstChild.nodeValue"), "Report Name")
+        self.assertEqual(report_name.get_attribute("maxlength"), str(client_vocabulary()["character_rules"]["report_name"]["max_length"]))
+        self.assertEqual(
+            page.eval_on_selector_all("#setup [data-path]", "controls => controls.slice(0, 4).map(control => control.dataset.path)"),
+            ["engagement.segment", "engagement.app_name", "engagement.report_name", "engagement.report_type"],
+        )
+
+        segment.select_option("Asia")
+        expect(report_name).to_be_hidden()
+        expect(star).to_have_count(0)
+
+    def test_the_application_card_counts_only_the_fields_it_shows(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{self.ready_report()}/setup")
+        count = page.locator("#setup > section").first.locator(".section-count")
+        expect(count).to_have_text(re.compile(r"^\d+ of 9$"))
+
+        page.get_by_label("Segment").select_option("GWAM")
+        expect(count).to_have_text(re.compile(r"^\d+ of 10$"))
+
+        page.get_by_label("Segment").select_option("JH")
+        expect(count).to_have_text(re.compile(r"^\d+ of 9$"))
+
+    def test_a_gwam_report_cannot_leave_setup_until_its_report_name_is_typed(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{self.ready_report()}/setup")
+        page.get_by_label("Segment").select_option("GWAM")
+        report_name = page.get_by_label("Report Name", exact=True)
+
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_selector("#setup-validation-note:not([hidden])")
+
+        self.assertIn("validation-error", report_name.get_attribute("class"))
+        message = page.locator('.setup-field-wrap:has([data-path="engagement.report_name"]) .setup-field-message')
+        expect(message).to_have_text(format_rule_message({"code": "missing_report_name"}))
+        self.assertTrue(page.url.endswith("/setup"))
+
+        report_name.fill("GWAM - Browser QA - Annual Pentest 2026")
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_url("**/findings")
+
+    def test_a_report_name_takes_a_slash_and_an_en_dash_saves_and_comes_back(self) -> None:
+        page = self.page
+        report_id = self.ready_report()
+        typed = "GWAM \u2013 Retail/Wealth [Q4] #2 - Annual Pentest 2026"
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        page.get_by_label("Segment").select_option("GWAM")
+        report_name = page.get_by_label("Report Name", exact=True)
+
+        report_name.fill(typed)
+        self.assertEqual(report_name.evaluate("input => input.validationMessage"), "")
+        page.get_by_role("button", name="Save").click()
+        page.get_by_role("button", name="Saved").wait_for()
+        self.assertEqual(main.workspace.load(report_id).engagement.report_name, typed)
+        page.reload()
+        expect(page.get_by_label("Report Name", exact=True)).to_have_value(typed)
+
+    def test_a_report_name_is_kept_but_not_checked_once_the_segment_is_not_gwam(self) -> None:
+        page = self.page
+        report_id = self.ready_report()
+        refused = "GWAM - Q&A - Annual Pentest 2026"
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        segment = page.get_by_label("Segment")
+        report_name = page.get_by_label("Report Name", exact=True)
+        segment.select_option("GWAM")
+        report_name.fill(refused)
+        self.assertEqual(report_name.evaluate("input => input.validationMessage"), setup_issue("report_name", refused))
+
+        # The text no longer prints, so it no longer blocks. Next goes on and the save keeps it.
+        segment.select_option("JH")
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_url("**/findings")
+        self.assertEqual(main.workspace.load(report_id).engagement.report_name, refused)
+
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        expect(report_name).to_be_hidden()
+        page.get_by_label("Segment").select_option("GWAM")
+        expect(report_name).to_have_value(refused)
+        self.assertEqual(report_name.evaluate("input => input.validationMessage"), setup_issue("report_name", refused))
+
+    def test_a_refused_report_name_nobody_can_see_does_not_take_the_focus_from_the_next_problem(self) -> None:
+        refused = "GWAM - Q&A - Annual Pentest 2026"
+        for how in ("typed, then hidden by another segment", "stored under another segment"):
+            with self.subTest(how):
+                page = self.page
+                report_id = self.ready_report()
+                if how.startswith("stored"):
+                    report = main.workspace.load(report_id)
+                    report.engagement.report_name = refused
+                    main.workspace.save(report)
+                page.goto(f"{self.base_url}/reports/{report_id}/setup")
+                if how.startswith("typed"):
+                    page.get_by_label("Segment").select_option("GWAM")
+                    page.get_by_label("Report Name", exact=True).fill(refused)
+                    page.get_by_label("Segment").select_option("JH")
+                tester = page.get_by_label("Tester", exact=True)
+                tester.fill("")
+
+                page.get_by_role("button", name="Next: Findings").click()
+                page.wait_for_selector("#setup-validation-note:not([hidden])")
+
+                expect(tester).to_be_focused()
+
+    def test_undo_and_redo_of_a_segment_change_hide_and_show_the_report_name_field(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{self.ready_report()}/setup")
+        page.get_by_label("Segment").select_option("GWAM")
+        expect(page.get_by_label("Report Name", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Save").click()
+        page.get_by_role("button", name="Saved").wait_for()
+
+        with page.expect_navigation():
+            page.get_by_role("button", name="Undo last change").click()
+        expect(page.get_by_label("Report Name", exact=True)).to_be_hidden()
+        with page.expect_navigation():
+            page.get_by_role("button", name="Redo last change").click()
+        expect(page.get_by_label("Report Name", exact=True)).to_be_visible()
 
     def test_setup_accepts_brackets_and_a_hash_in_the_application_name_and_saves_them(self) -> None:
         page = self.page
@@ -1338,6 +1482,8 @@ class BrowserWorkflowTests(unittest.TestCase):
             self.assertIn(field, message.lower())
 
         page.get_by_label("Segment").select_option("GWAM")
+        # A segment that types its own report name cannot go on without it.
+        page.get_by_label("Report Name", exact=True).fill("GWAM - Required Fields - New Test 2026")
         page.get_by_label("Report Type").select_option("new_test")
         self.choose_required_engagement_details()
         page.get_by_role("button", name="Next: Findings").click()

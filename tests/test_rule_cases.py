@@ -8,6 +8,7 @@ from pathlib import Path
 from app import report_service
 from app.report_service import setup_results
 from app.vocabulary import client_vocabulary
+from tests.support import SEGMENTS_WITHOUT_OWN_REPORT_NAME
 
 try:
     from playwright.sync_api import sync_playwright
@@ -117,6 +118,22 @@ FIELD_CASES = [
     ("a letter outside ASCII in the application name", setup_report(app_name="Café Portal-2: (Web)"), []),
     ("square brackets and a hash in the application name", setup_report(app_name="[Acme] Portal #2"), []),
     ("an angle bracket in the application name stays refused", setup_report(app_name="Acme <Portal>"), [bad_field("app_name", "<", ">")]),
+    ("a GWAM report name character", setup_report(segment="GWAM", report_name="GWAM - Bad&Name"), [bad_field("report_name", "&")]),
+    (
+        "a GWAM report name takes the application name's symbols, a slash and an en dash",
+        setup_report(segment="GWAM", report_name="GWAM \u2013 Retail/Wealth [Q4] #2: (Web); v1.0 - Annual Pentest 2026"),
+        [],
+    ),
+    ("an em dash in a GWAM report name is refused", setup_report(segment="GWAM", report_name="GWAM \u2014 Northstar"), [bad_field("report_name", "\u2014")]),
+    ("a GWAM report name at its limit", setup_report(segment="GWAM", report_name="r" * 200), []),
+    ("a GWAM report name one past its limit", setup_report(segment="GWAM", report_name="r" * 201), [too_long("report_name", 200)]),
+    ("a GWAM report name counts UTF-16 units", setup_report(segment="GWAM", report_name=WIDE_LETTER * 101), [too_long("report_name", 200)]),
+    ("a report name is not checked while the segment is not GWAM", setup_report(segment="Asia", report_name="Bad&Name" + "x" * 300), []),
+    (
+        "a report name is checked right after the application name",
+        setup_report(segment="GWAM", app_name="Bad/App", report_name="Bad&Name", ci_number="CI_1"),
+        [bad_field("app_name", "/"), bad_field("report_name", "&"), bad_field("ci_number", "_")],
+    ),
     ("a CI number character", setup_report(ci_number="CI_123"), [bad_field("ci_number", "_")]),
     ("a space in the BSN number", setup_report(bsn_number="BSN 1.2"), [bad_field("bsn_number", " ", ".")]),
     ("a digit in the application owner", setup_report(app_owner="Owner 2"), [bad_field("app_owner", "2")]),
@@ -351,6 +368,14 @@ MESSAGE_CASES = [
     ),
     ("a missing segment", issue("missing_segment"), setup_report(segment=None), "Choose a segment."),
     ("a missing application name", issue("missing_app_name"), setup_report(app_name=""), "Enter the application name."),
+    ("a missing report name", issue("missing_report_name"), setup_report(segment="GWAM"), "Enter the report name."),
+    ("a report name character", bad_field("report_name", "&"), setup_report(segment="GWAM", report_name="Q&A"), 'Report name cannot have "&". Remove or replace it.'),
+    (
+        "a report name over its limit",
+        too_long("report_name", 200),
+        setup_report(segment="GWAM", report_name="r" * 201),
+        "Report name has 201 characters. Shorten it to 200 or fewer.",
+    ),
     ("a missing report type", issue("missing_report_type"), setup_report(report_type=None), "Choose a report type."),
     ("a missing network access", issue("missing_network"), setup_report(network=None), "Choose the network access."),
     ("a missing tester name", issue("missing_tester"), setup_report(tester=""), "Enter the tester's name."),
@@ -423,6 +448,19 @@ SETUP_CASES = [
     ("missing app name", setup_report(app_name=""), [issue("missing_app_name")]),
     ("whitespace-only app name", setup_report(app_name=" \t "), [bad_field("app_name", "\t"), issue("missing_app_name")]),
     ("missing segment", setup_report(segment=None), [issue("missing_segment")]),
+    ("a GWAM report needs a report name", setup_report(segment="GWAM"), [issue("missing_report_name")]),
+    ("a GWAM report with a report name is complete", setup_report(segment="GWAM", report_name="GWAM - Northstar Banking - Annual Pentest 2026"), []),
+    (
+        "a whitespace-only GWAM report name is refused and missing",
+        setup_report(segment="GWAM", report_name=" \t "),
+        [bad_field("report_name", "\t"), issue("missing_report_name")],
+    ),
+    *[(f"a {segment} report needs no report name", setup_report(segment=segment), []) for segment in SEGMENTS_WITHOUT_OWN_REPORT_NAME],
+    (
+        "the missing report name comes after the missing application name and before the missing report type",
+        setup_report(app_name="", segment="GWAM", report_type=None),
+        [issue("missing_app_name"), issue("missing_report_name"), issue("missing_report_type")],
+    ),
     ("missing report type", setup_report(report_type=None), [issue("missing_report_type")]),
     ("missing network access", setup_report(network=None), [issue("missing_network")]),
     ("missing report date", setup_report(report_date=None), [issue("missing_report_date")]),

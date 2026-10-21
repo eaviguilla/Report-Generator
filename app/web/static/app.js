@@ -94,9 +94,10 @@
   // close to prose to strip, and a wrong strip deletes text silently.
   const LIST_MARKER_PREFIX = /^\s*(\d{1,3}[.)]|\(\d{1,3}\)|[-*+•–—])\s+/;
   let updateSetupFieldIssues = () => {};
-  // The Setup fields a save will not leave blank, by the issue code that names each one. The same
-  // list highlights a field after Next and draws its * before anything is wrong. Twin: the missing_*
-  // codes in setupResults (rules.js).
+  // The Setup fields a save will not leave blank whatever else is chosen, by the issue code that names
+  // each one. The same list highlights a field after Next and draws its * before anything is wrong.
+  // Twin: the missing_* codes in setupResults (rules.js), except missing_report_name, which
+  // CONDITIONAL_SETUP_FIELDS holds.
   const REQUIRED_SETUP_FIELDS = {
     missing_segment:"engagement.segment",
     missing_app_name:"engagement.app_name",
@@ -104,6 +105,12 @@
     missing_network:"engagement.network",
     missing_tester:"engagement.tester",
     missing_report_date:"engagement.report_date",
+  };
+  // Fields that are required only while another choice puts them on the page. They are highlighted
+  // after Next like the ones above, but starred by their own code, while shown, so the star never
+  // sits on a field that is not there.
+  const CONDITIONAL_SETUP_FIELDS = {
+    missing_report_name:"engagement.report_name",
   };
   // A required field's label gets the `is-required` class and CSS draws the star, so the label's
   // text stays exactly the field's name. A star typed into the label would turn "Application Name"
@@ -343,7 +350,8 @@
       const targets = window.vrRules.scopeTargets(report, vocabulary).length;
       return `${targets} target${targets === 1 ? "" : "s"}`;
     }
-    const fields = [...section.querySelectorAll(".fields input, .fields select")];
+    // A field the page hides, such as the Report Name under a segment that does not type one, is not counted.
+    const fields = [...section.querySelectorAll(".fields input, .fields select")].filter(field => !field.closest("[hidden]"));
     return fields.length ? `${fields.filter(field => field.value.trim()).length} of ${fields.length}` : "";
   };
   const updateSetupSectionSummaries = () => {
@@ -1018,6 +1026,7 @@
     const setupRule = (field, context = {}) => browserCharacterRule(vocabulary.character_rules[field], field, context);
     const setupRules = {
       app_name: setupRule("app_name"),
+      report_name: setupRule("report_name"),
       ci_number: setupRule("ci_number"),
       bsn_number: setupRule("bsn_number"),
       app_owner: setupRule("app_owner"),
@@ -1189,7 +1198,7 @@
       const results = show ? window.vrRules.setupResults(report, vocabulary) : [];
       if (show) {
         results.forEach(result => {
-          const path = REQUIRED_SETUP_FIELDS[result.code];
+          const path = REQUIRED_SETUP_FIELDS[result.code] || CONDITIONAL_SETUP_FIELDS[result.code];
           if (path && !byPath.has(path)) byPath.set(path, window.vrRules.formatRuleMessage(result, report, vocabulary));
         });
       }
@@ -1345,6 +1354,39 @@
         attachSetupCharacterLimit(input, vocabulary.character_rules[field]?.max_length, setupRules[field].label);
       }
     });
+    // A segment that types its own report name shows the Report Name field and requires it. The star
+    // and aria-required come and go with the field, because REQUIRED_SETUP_FIELDS stars its fields for good.
+    // The Findings page runs this code too, and has no such field.
+    const reportNameInput = root.querySelector('[data-path="engagement.report_name"]');
+    if (reportNameInput) {
+      const reportNameLabel = reportNameInput.closest("label");
+      // The message wrapper sits around the label, and a hidden label alone would leave it as an empty cell in the grid.
+      const reportNameHolder = reportNameLabel.closest(".setup-field-wrap") || reportNameLabel;
+      const showReportName = () => {
+        const shown = window.vrRules.hasOwnReportName(report.engagement, vocabulary);
+        // Hiding a focused field blurs it, and its blur handler checks it again. Blurring first, while it still
+        // shows, lets that check finish before the refusal is cleared below.
+        if (!shown && document.activeElement === reportNameInput) reportNameInput.blur();
+        reportNameLabel.hidden = reportNameHolder.hidden = !shown;
+        reportNameLabel.classList.toggle("is-required", shown);
+        if (shown) reportNameInput.setAttribute("aria-required", "true");
+        else reportNameInput.removeAttribute("aria-required");
+        if (shown) {
+          reportNameInput.dataset.setupValidated = "true";
+          reportNameInput.validateSetupRule(false);
+        } else {
+          // A name nothing prints is not checked, so it must not hold Next back, and a refusal left on a
+          // field nobody can see would still be the first message focusFirstSetupMessage reaches for.
+          delete reportNameInput.dataset.setupValidated;
+          reportNameInput.setCustomValidity("");
+          showRuleState(reportNameInput, false, "ruleInvalid");
+          setupMessageControllers.get(reportNameInput)?.set("refusal", "");
+        }
+      };
+      // After the input handler the loop above gave the segment, which records the new value.
+      root.querySelector('[data-path="engagement.segment"]').addEventListener("input", showReportName);
+      showReportName();
+    }
     updateSetupValidationNotice();
     // Offered, never written. A retest that covered one environment usually says so in Limitations,
     // but the wording stays the tester's to accept. Client-only: nothing server-side re-derives
@@ -1739,7 +1781,7 @@
         const panel = document.createElement("div");
         panel.className = "environment-window";
         const isSelected = selected(report.engagement.tested_environments, environment);
-        // Non-Production shows its report name as a picker; the checkbox keeps the stable environment name.
+        // Non-Production shows its environment label as a picker; the checkbox keeps the stable environment name.
         const stored = report.engagement.non_production_label || "";
         // A stored label that is not a preset -- an old draft, or an imported one -- must open the
         // text box holding its own value, or the render would show a preset and the next change
@@ -2660,7 +2702,7 @@
       const inputsValid = validateSetupInputs(reveal);
       const flagged = code => results.some(result => result.code === code);
       // In page order, so focus lands on the first highlighted field.
-      const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_type", "report_type"], ["missing_network", "network"], ["missing_tester", "tester"], ["missing_report_date", "report_date"]]
+      const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_name", "report_name"], ["missing_report_type", "report_type"], ["missing_network", "network"], ["missing_tester", "tester"], ["missing_report_date", "report_date"]]
         .filter(([code]) => flagged(code))
         .map(([, field]) => root.querySelector(`[data-path="engagement.${field}"]`));
       const undated = results.filter(result => result.code === "missing_test_dates").map(result => result.environment);

@@ -39,6 +39,13 @@ _Avoid_: clean report, empty report, no-vulnerability report, report type
 **Provisioning**:
 The server completing a finding with the sections its status requires, their seed fragments, and an image slot for each affected environment.
 
+**Segment**:
+The part of the business a report is written for, chosen on Setup from a fixed list.
+
+**Application name**:
+The name of the application under test, typed on Setup. It is not the report name, although the report name of every segment except GWAM contains it.
+_Avoid_: report name
+
 **Tested environment**:
 An environment the engagement covers, chosen on Setup.
 _Avoid_: covered environment, selected environment
@@ -82,6 +89,10 @@ _Avoid_: environment-irrelevant image, stale image, orphaned image, out-of-scope
 **Word report**:
 The Word document the app builds from a report.
 _Avoid_: Word document report, generated report, docx, output file
+
+**Report name**:
+The name a Word report gives itself. It is printed on the cover and in the footers, and it names the file. For GWAM the tester types the whole name on Setup. For every other segment the app builds it from the segment, the application name, the report type and the year, such as `JH - Northstar Banking - Annual Pentest 2026`.
+_Avoid_: report title, document name, application name
 
 **Findings Summary table**:
 The table under the Findings Summary heading of a Word report, with one finding row per finding.

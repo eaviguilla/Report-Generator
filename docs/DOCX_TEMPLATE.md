@@ -18,13 +18,13 @@ root, so every branch must stay inside `resources/`.
 **Asia is a boolean, not one value among several**, so `JH`, `GWAM`, `GDT` and
 `GFT` all land in the *not Asia* column — the last two by decision rather than by
 omission. No `MAIN_GDT.docx` or `MAIN_GFT.docx` was authored and none is wanted:
-the whole document cost of either segment is one printed string, `{{segment}}` on
-the title line, supplied by `_metadata` as `engagement.segment or "N/A"`, so such
+the whole document cost of either segment is one printed string, the segment at
+the start of the report name that `report_name_for` builds, so such
 a report carries no Section table and demands no CVSS pair. The decision lives in
 the tests rather than in a branch — `test_main_template_path_selects_on_both_axes`
-covers eight rows, and
+covers ten rows, and
 `test_every_shipped_template_renders_without_unresolved_placeholders` renders the
-same eight, so both are proved to render with nothing unresolved. Giving either
+same ten, so both are proved to render with nothing unresolved. Giving either
 its own masters later means two Word-authored files and a per-segment suffix
 lookup in place of the boolean.
 
@@ -67,7 +67,8 @@ are rendered by `_render_component_fragment`.
 | Template token | Report value |
 |---|---|
 | `segment` | Selected segment |
-| `app-name`, `report-name` | Application name |
+| `app-name` | Application name |
+| `report-name` | The report name: the tester's own for a segment in `REPORT_NAME_SEGMENTS`, otherwise built by `report_name_for` |
 | `test-type` | Annual Pentest, Retest, Deployment Pentest, or New Test |
 | `app-owner` | Application owner |
 | `report-date` | Report date |
@@ -75,6 +76,27 @@ are rendered by `_render_component_fragment`.
 | `prod-start`, `prod-end`, `prod-time` | Production test window |
 | `non-prod-start`, `non-prod-end`, `non-prod-time` | Non-Production test window |
 | `network` | `Internal` or `External`, from `Engagement.network`; `N/A` while the tester has not chosen |
+
+**`{{report-name}}` is the whole report name, and each master holds it in three paragraphs.** The cover
+title in `word/document.xml` and the lines in `word/footer5.xml` and `word/footer8.xml` hold only that
+token. For a segment in `REPORT_NAME_SEGMENTS` (`GWAM`) it is the name the tester typed on Setup, as typed.
+For every other segment `report_name_for` builds `segment - application name - report type year`, joined
+with en dashes, the year being the Report Date's. `{{app-name}}` is the application name alone: the cover
+table's Application cell, and the sentences, headings, captions and scope text around it.
+
+Before 2026-10-22 the cover read `{{segment}} - {{app-name}} - {{test-type}} 2026`, with a plain `2026`,
+and the footers `{{segment}} - {{report-name}} - {{test-type}}` with no year, and `report-name` then held the
+application name. Every segment's cover now prints the Report Date's year, and its footers print the year
+too, with the cover's dashes.
+
+The token is braced-only and is replaced after every other token. Its value is free text, so a pass that
+matched `report-name` or `app-name` as bare words would either rewrite the name or never finish:
+`replace_pattern_across_text_nodes` searches its own output again. Four tests hold this in place.
+`test_each_master_prints_its_report_name_from_one_token_on_the_cover_and_in_both_footers` pins the three
+paragraphs, `test_the_report_name_prints_on_the_cover_and_in_both_footers_while_the_application_name_stays_put`
+renders every segment on every master, `test_a_report_name_holding_a_token_word_prints_as_typed` guards the
+order, and `test_no_shipped_document_spells_report_name_without_braces` checks the masters and components.
+`resources/report-name.docx`, which both release scripts ship and nothing renders, still holds the old footer line.
 
 **`{{network}}` is braced-only, and sits in the cover's `Application Type` cell.** All four shipped
 templates carry it since `f6c215d`, in **8 cells, not 4**: the cover block occurs twice in every template
@@ -187,13 +209,23 @@ including `"Closed": "closed"` — without it a generated Closed report imports 
 warning and is therefore easy to miss. A retest drops Closed findings exactly as
 it drops Resolved ones and names them in the same `dropped_resolved` list;
 editable mode keeps Closed as written and is the way back to a dropped finding.
-The title line is parsed against its own segment allowlist — `JH`, `GWAM`,
-`Asia`, `GDT`, `GFT` — which is a fourth copy of the segment set, not derived from
-`Segment`. Segment, application name and report type are assigned from one
-match, so a segment missing from that tuple loses all three together and raises
-nothing at import time;
+The cover title is read against the segment set the model holds (`get_args(Segment)`), so
+there is no list of its own to drift. Segment, application name and report type are
+assigned from one match, so a title that does not start with a segment loses all three
+together and raises nothing at import time;
 `test_every_segment_the_model_allows_parses_back_out_of_a_title` in
-`tests/test_docx_import.py` catches that drift instead.
+`tests/test_docx_import.py` pins every segment.
+
+A segment in `REPORT_NAME_SEGMENTS` prints its typed name as that title, so its title is read
+differently. An Editable copy takes the title paragraph as printed for `report_name`, and the
+application name from the cover's Application cell (`APPLICATION_COVER_LABEL`, read through
+`_labelled_value` as the network access is), falling back to the title's middle parts when the
+cell is empty. A Retest import takes the application name from the cell and leaves `report_name`
+empty, because the old name carries the old test's type and year. In an Editable copy, a title that
+ends in a word that is not a report type gives a warning and an empty report type instead of the
+"Unknown report type" refusal, because a free-text name can end in anything. A name that does not
+start with a segment cannot be read at all, so the tester picks the segment and types it again.
+Other segments import as before. `ReportNameImportTests` in `tests/test_docx_import.py` pins each case.
 
 Web/API tables encode channel and environment. Component rows encode their
 channel but not their environment: a sole positive environment observation is

@@ -31,7 +31,7 @@ from app.library import Library
 from app.report_service import affected_channels, affected_environments, applicable_poc_variants, apply_poc_variant, provision, scope_has_location
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
-from tests.support import off_border_pixels, png_bytes, use_temp_workspace
+from tests.support import SEGMENTS_WITHOUT_OWN_REPORT_NAME, off_border_pixels, png_bytes, use_temp_workspace
 from app.models import Content, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TestWindow, Vulnerability, resolve_tested_channels
 from app.tester_identity import Identity, load_or_bootstrap
 
@@ -67,6 +67,23 @@ class ReportApiTests(unittest.TestCase):
         recovered.engagement.network = "External"
         main.workspace.save(recovered)
         self.assertEqual(main.workspace.load(report_id).engagement.network, "External")
+
+    def test_a_draft_written_before_the_report_name_existed_loads_with_it_empty(self) -> None:
+        """The field has an empty default and no repair, so an older draft keeps loading and is not rewritten."""
+        report_id = self.new_report()
+        path = main.workspace.find_path(report_id)
+        draft = read_json(path)
+        draft["engagement"].pop("report_name", None)
+        atomic_write_json(path, draft)
+
+        recovered = main.workspace.load(report_id)
+        self.assertEqual(recovered.engagement.report_name, "")
+        self.assertEqual(main.workspace.list_legacy_reports(), [], "an older draft was demoted to the legacy list")
+        self.assertNotIn("report_name", read_json(path)["engagement"], "loading rewrote the draft")
+
+        recovered.engagement.report_name = "GWAM - Northstar Banking - Annual Pentest 2026"
+        main.workspace.save(recovered)
+        self.assertEqual(main.workspace.load(report_id).engagement.report_name, "GWAM - Northstar Banking - Annual Pentest 2026")
 
     def test_safe_name_rejects_windows_device_names_with_extensions(self) -> None:
         self.assertEqual(safe_name("CON.txt", "fallback"), "fallback")
@@ -619,6 +636,12 @@ class ReportApiTests(unittest.TestCase):
                 self.assertIsNotNone(embedded, "the page carries no vocabulary")
                 self.assertEqual(json.loads(embedded.group(1)), expected)
 
+    def test_the_vocabulary_names_the_segments_that_have_their_own_report_name(self) -> None:
+        served = vocabulary.client_vocabulary()
+        self.assertEqual(served["report_name_segments"], ["GWAM"])
+        self.assertTrue(set(served["report_name_segments"]) <= set(served["segments"]), "a segment the picker does not offer")
+        self.assertIn("report_name", served["character_rules"])
+
     def test_the_library_editor_takes_its_lists_from_the_served_vocabulary(self) -> None:
         """The editor page cannot load app.js, so it once kept a third copy of the channel list, and
         drift there silently dropped a whole app type's saved steps on save. No browser test loads it."""
@@ -938,6 +961,84 @@ class ReportApiTests(unittest.TestCase):
         for report_type, label in expected_labels.items():
             report.engagement.report_type = report_type
             self.assertEqual(main.report_export_filename(report), f"Asia - Payments Portal APAC - {label} 2026.zip")
+
+    def test_a_segment_without_its_own_report_name_gets_one_built_from_its_parts(self) -> None:
+        cases = [
+            *((segment, {"segment": segment}, f"{segment} \u2013 Northstar Banking \u2013 Annual Pentest 2026") for segment in SEGMENTS_WITHOUT_OWN_REPORT_NAME),
+            ("the year follows the Report Date", {"report_date": date(2027, 1, 2)}, "JH \u2013 Northstar Banking \u2013 Annual Pentest 2027"),
+            ("a blank application name prints N/A", {"app_name": " "}, "JH \u2013 N/A \u2013 Annual Pentest 2026"),
+            # Kept under another segment, and never printed there.
+            ("a name typed under GWAM is ignored", {"report_name": "GWAM - Typed Name - Retest 2026"}, "JH \u2013 Northstar Banking \u2013 Annual Pentest 2026"),
+        ]
+        for label, changes, expected in cases:
+            with self.subTest(label):
+                report = main.workspace.create_report()
+                report.engagement.segment = "JH"
+                report.engagement.app_name = "  Northstar Banking "
+                report.engagement.report_type = "annual_pentest"
+                report.engagement.report_date = date(2026, 9, 8)
+                for field, value in changes.items():
+                    setattr(report.engagement, field, value)
+
+                self.assertEqual(report_service.report_name_for(report), expected)
+
+    def test_a_gwam_report_name_is_the_typed_one_trimmed(self) -> None:
+        report = main.workspace.create_report()
+        report.engagement.segment = "GWAM"
+        report.engagement.app_name = "Northstar Banking"
+        for typed, expected in (("  GWAM - Typed Name - Retest 2026 ", "GWAM - Typed Name - Retest 2026"), ("", "")):
+            with self.subTest(typed=typed):
+                report.engagement.report_name = typed
+
+                self.assertEqual(report_service.report_name_for(report), expected)
+
+    def test_a_gwam_report_is_named_from_its_report_name(self) -> None:
+        report = main.workspace.create_report()
+        report.engagement.segment = "GWAM"
+        report.engagement.app_name = "Meridian Commerce API"
+        report.engagement.report_type = "deployment_pentest"
+        report.engagement.report_date = date(2026, 9, 8)
+        usual = "GWAM - Meridian Commerce API - Deployment Pentest 2026"
+        cases = [
+            ("the name as typed", "GWAM - Meridian Commerce - Annual Pentest 2026", "GWAM - Meridian Commerce - Annual Pentest 2026"),
+            ("an en dash becomes a hyphen", "GWAM \u2013 Meridian \u2013 Annual Pentest 2026", "GWAM - Meridian - Annual Pentest 2026"),
+            ("illegal characters go and spaces collapse", "GWAM - Meridian: Commerce/API  [Q4] #2 - Annual Pentest 2026", "GWAM - Meridian CommerceAPI [Q4] #2 - Annual Pentest 2026"),
+            ("a letter outside ASCII loses its accent", "GWAM - Caf\u00e9 - Annual Pentest 2026", "GWAM - Cafe - Annual Pentest 2026"),
+            ("the name is cut at 150 characters", "GWAM - " + "x" * 193, "GWAM - " + "x" * 143),
+            ("a cut never leaves a trailing space", "r" * 149 + " tail", "r" * 149),
+            ("a name that cleans to nothing falls back to the usual name", "///", usual),
+            ("an empty name falls back to the usual name", "", usual),
+        ]
+        for label, typed, expected in cases:
+            with self.subTest(label):
+                report.engagement.report_name = typed
+                self.assertEqual(main.report_export_filename(report), f"{expected}.zip")
+                self.assertEqual(main.report_export_filename(report, ".docx"), f"{expected}.docx")
+
+    def test_a_report_name_under_another_segment_does_not_name_the_file(self) -> None:
+        report = main.workspace.create_report()
+        report.engagement.segment = "JH"
+        report.engagement.app_name = "Meridian Commerce API"
+        report.engagement.report_type = "deployment_pentest"
+        report.engagement.report_date = date(2026, 9, 8)
+        report.engagement.report_name = "GWAM - Typed Name - Annual Pentest 2026"
+
+        self.assertEqual(main.report_export_filename(report), "JH - Meridian Commerce API - Deployment Pentest 2026.zip")
+
+    def test_a_gwam_report_downloads_and_generates_under_its_report_name(self) -> None:
+        report_id = self._generatable_report(segment="GWAM", app_name="Meridian Portal", report_name="GWAM \u2013 Meridian Portal \u2013 Annual Pentest 2026")
+        word = patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents)
+        word.start()
+        self.addCleanup(word.stop)
+        expected = "GWAM - Meridian Portal - Annual Pentest 2026"
+        generated = self.client.get(f"/reports/{report_id}/generate")
+        self.assertEqual(generated.status_code, 200)
+        self.assertIn(f'filename="{expected}.docx"', generated.headers["content-disposition"])
+        exported = self.client.get(f"/reports/{report_id}/export")
+        self.assertIn(f'filename="{expected}.zip"', exported.headers["content-disposition"])
+        saved = self.client.post(f"/reports/{report_id}/generate")
+        self.assertEqual(saved.json()["filename"], f"{expected}.docx")
+        self.assertTrue((main.GENERATED / f"{expected}.docx").is_file())
 
     def test_the_environment_modes_freeze_to_the_targets_they_resolved_to(self) -> None:
         """The retired modes re-resolved against the report's targets on every read, so a finding
@@ -2105,7 +2206,7 @@ class ReportApiTests(unittest.TestCase):
             'Non-Production name cannot have "!". Remove or replace it.',
         ])
 
-    def _generatable_report(self) -> str:
+    def _generatable_report(self, **engagement) -> str:
         report_id = self.new_report()
         incomplete = self.client.get(f"/reports/{report_id}/generate")
         self.assertEqual(incomplete.status_code, 422)
@@ -2120,6 +2221,7 @@ class ReportApiTests(unittest.TestCase):
             "report_date": "2026-09-09",
             "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-09-01", "end_date": "2026-09-02", "test_time": "Anytime"}},
+            **engagement,
         })
         report["scope_text"] = {"production": {"web": "https://prod.example.test"}}
         report["vulnerabilities"] = [{

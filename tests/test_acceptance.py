@@ -121,6 +121,28 @@ class CheckTests(unittest.TestCase):
         valid["vulnerabilities"][0]["cvss_score"] = "9.8"
         self.assertEqual(acceptance.check(stored, valid).vulnerabilities[0].cvss_score, "9.8")
 
+    def test_a_gwam_report_name_is_checked_against_the_character_rule(self) -> None:
+        stored = stored_report()
+        stored.engagement.segment = "GWAM"
+        refused = submission(stored)
+        refused["engagement"]["report_name"] = "GWAM - Bad&Name"
+        accepted = submission(stored)
+        accepted["engagement"]["report_name"] = "GWAM \u2013 Retail/Wealth - Annual Pentest 2026"
+
+        with self.assertRaisesRegex(acceptance.InvalidFields, "^Report name cannot have") as raised:
+            acceptance.check(stored, refused)
+        self.assertEqual(raised.exception.setup_issues, [character_issue("report_name", "GWAM - Bad&Name")])
+        self.assertEqual(acceptance.check(stored, accepted).engagement.report_name, "GWAM \u2013 Retail/Wealth - Annual Pentest 2026")
+
+    def test_a_report_name_under_another_segment_is_kept_and_never_checked(self) -> None:
+        """Kept so that choosing GWAM again brings the text back, and unchecked because nothing prints it."""
+        stored = stored_report()
+        stored.engagement.segment = "GWAM"
+        hidden = submission(stored)
+        hidden["engagement"].update(segment="JH", report_name="GWAM - Bad&Name")
+
+        self.assertEqual(acceptance.check(stored, hidden).engagement.report_name, "GWAM - Bad&Name")
+
     def test_a_stored_setup_value_that_breaks_a_rule_saves_until_it_changes(self) -> None:
         """An import skips acceptance, so a stored value can break a rule; refusing every later save
         would trap the tester on whatever page they are on."""

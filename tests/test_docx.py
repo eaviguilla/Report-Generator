@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import tempfile
+import threading
 import unittest
 from datetime import date, datetime
 from io import BytesIO
@@ -30,7 +32,7 @@ from app.docx_report import (
 from app.docx_captions import flatten_section_number_fields
 from app.docx_import import NO_FINDINGS_TITLE
 from app.report_service import provision, sync_evidence_image_slots
-from tests.support import numbering_details, off_border_pixels, png_bytes
+from tests.support import numbering_details, off_border_pixels, paragraph_texts, png_bytes
 from app.models import CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, Segment, TableFragment, TestAccount, TestWindow, Vulnerability
 
 
@@ -41,6 +43,18 @@ def _keeps_next(element) -> bool:
 
 def _is_blank_paragraph(element) -> bool:
     return element.tag == qn("w:p") and not "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
+
+
+def _footer_texts(document) -> dict[str, list[str]]:
+    """Each footer part of a document by part name, with the text of its paragraphs."""
+    return {
+        str(part.partname): paragraph_texts(part._element)
+        for part in document.part.package.parts
+        if "/footer" in str(part.partname)
+    }
+
+
+MASTERS = ("MAIN.docx", "MAIN_ASIA.docx", "MAIN_THICK_MOBILE.docx", "MAIN_THICK_MOBILE_ASIA.docx")
 
 
 RESOURCES = Path(__file__).resolve().parent.parent / "resources"
@@ -1312,6 +1326,9 @@ class DocxReportTests(unittest.TestCase):
             # Asia requires both, so the fixture is not generation-clean without them.
             report.vulnerabilities[0].cvss_score = "8.1"
             report.vulnerabilities[0].cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+        if segment == "GWAM":
+            # A GWAM report types its own name, so the fixture is not generation-clean without one.
+            report.engagement.report_name = "GWAM - Northstar Banking - Annual Pentest 2026"
         return report
 
     def test_main_template_path_selects_on_both_axes(self) -> None:
@@ -1366,6 +1383,104 @@ class DocxReportTests(unittest.TestCase):
                     header = next(table for table in rendered.tables if any(cell.text.strip() == "Emergency" for row in table.rows for cell in row.cells))
                     self.assertIn("Internal", [cell.text.strip() for row in header.rows for cell in row.cells])
 
+    def test_each_master_prints_its_report_name_from_one_token_on_the_cover_and_in_both_footers(self) -> None:
+        for master in MASTERS:
+            with self.subTest(master):
+                document = Document(RESOURCES / master)
+                body = paragraph_texts(document.element.body)
+                footers = _footer_texts(document)
+
+                self.assertEqual(body.count("{{report-name}}"), 1, "the cover title")
+                self.assertEqual(sorted(name for name, texts in footers.items() if "{{report-name}}" in texts), ["/word/footer5.xml", "/word/footer8.xml"])
+                every_text = [*body, *(text for texts in footers.values() for text in texts)]
+                for left_over in ("{{segment}}", "{{test-type}}"):
+                    self.assertEqual([text for text in every_text if left_over in text], [], f"{left_over} is still spelled out in a title line")
+
+    def test_each_master_keeps_its_application_cell_and_its_footer_template_id(self) -> None:
+        for master in MASTERS:
+            with self.subTest(master):
+                document = Document(RESOURCES / master)
+
+                self.assertIn("{{app-name}}", paragraph_texts(document.element.body), "the cover table's Application cell")
+                self.assertTrue(any("GCSAppSec_Report2026v1" in text for texts in _footer_texts(document).values() for text in texts), "the template ID in the footers")
+
+    def test_the_report_name_prints_on_the_cover_and_in_both_footers_while_the_application_name_stays_put(self) -> None:
+        for channel in ("web", "thick_client"):
+            for segment in get_args(Segment):
+                with self.subTest(channel=channel, segment=segment), tempfile.TemporaryDirectory() as temporary_directory:
+                    report_folder = Path(temporary_directory)
+                    report = self._component_report(report_folder, channel, segment, [
+                        ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
+                    ])
+                    report.engagement.report_date = date(2027, 3, 4)
+                    # Typed under every segment, so a segment that has no report name of its own must ignore it.
+                    typed = "GWAM - Meridian Portal \u2013 Annual Pentest 2027" if segment == "GWAM" else "GWAM - Typed Name - Retest 2026"
+                    report.engagement.report_name = typed
+                    expected = typed if segment == "GWAM" else f"{segment} \u2013 Northstar Banking \u2013 Annual Pentest 2027"
+                    self.assertEqual(generation_issues(report), [])
+
+                    rendered = Document(BytesIO(render_report_docx(report, main_template_path(report, RESOURCES), report_folder)))
+
+                    body = paragraph_texts(rendered.element.body)
+                    footers = _footer_texts(rendered)
+                    self.assertEqual(body.count(expected), 1, "the cover title")
+                    self.assertEqual(sorted(name for name, texts in footers.items() if expected in texts), ["/word/footer5.xml", "/word/footer8.xml"])
+                    self.assertTrue(any("GCSAppSec_Report2026v1" in text for texts in footers.values() for text in texts), "the template ID in the footers")
+                    self.assertEqual([body[index + 1] for index, text in enumerate(body) if text == "Application"], ["Northstar Banking", "Northstar Banking"])
+                    # The places that name the application, not the report.
+                    body_text = "\n".join(body)
+                    for place in (
+                        "requested by the Northstar Banking application team",
+                        "Northstar Banking PENTEST",
+                        "team members of the Northstar Banking application",
+                        "used by the Northstar Banking web application",
+                        "Summary of findings for Northstar Banking",
+                    ):
+                        self.assertIn(place, body_text)
+                    if segment != "GWAM":
+                        self.assertNotIn("Typed Name", "\n".join([body_text, *(text for texts in footers.values() for text in texts)]))
+
+    def test_a_report_name_holding_a_token_word_prints_as_typed(self) -> None:
+        """The value is free text and goes in last, so no later pass may rewrite it, and a pass that
+        found its own output again would never finish."""
+        typed = "GWAM - app-name and report-name for app-owner - tester-name 2026"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_folder = Path(temporary_directory)
+            report = self._component_report(report_folder, "web", "GWAM", [
+                ScopeTarget(target_id="t_one", environment="production", channel="web", value="https://prod.example.test"),
+            ])
+            report.engagement.report_name = typed
+            self.assertEqual(generation_issues(report), [])
+            outcome: dict = {}
+
+            def render() -> None:
+                try:
+                    outcome["document"] = Document(BytesIO(render_report_docx(report, main_template_path(report, RESOURCES), report_folder)))
+                except Exception as error:  # reported by the assertions below
+                    outcome["error"] = error
+
+            worker = threading.Thread(target=render, daemon=True)
+            worker.start()
+            worker.join(60)
+            self.assertFalse(worker.is_alive(), "rendering a name that holds a token word never finished")
+            self.assertNotIn("error", outcome)
+
+            body = paragraph_texts(outcome["document"].element.body)
+            self.assertEqual(body.count(typed), 1, "the cover title")
+            self.assertEqual(sorted(name for name, texts in _footer_texts(outcome["document"]).items() if typed in texts), ["/word/footer5.xml", "/word/footer8.xml"])
+
+    def test_no_shipped_document_spells_report_name_without_braces(self) -> None:
+        """`report-name` is no longer a word the renderer replaces wherever it finds it, because the
+        value is free text. Only the braced token is replaced, so a bare spelling would print as is."""
+        documents = sorted([*RESOURCES.glob("*.docx"), *(path for folder in ("fragments", "finding_types", "severity_titles") for path in (RESOURCES / folder).glob("*.docx"))])
+        self.assertGreater(len(documents), 15, "too few documents were checked")
+        for path in documents:
+            with self.subTest(str(path.relative_to(RESOURCES))):
+                document = Document(path)
+                roots = [document.element, *(part._element for part in document.part.package.parts if "/header" in str(part.partname) or "/footer" in str(part.partname))]
+                spelled = [text for root in roots for text in paragraph_texts(root) if "report-name" in re.sub(r"\{\{\s*report-name\s*\}\}", "", text)]
+                self.assertEqual(spelled, [])
+
     def test_a_blank_account_row_is_left_out_of_the_user_roles_table(self) -> None:
         cases = [
             ("among filled rows", [TestAccount(user_role="Admin", username="qa.admin"), TestAccount(user_role=" ", username="")], [["Admin", "qa.admin"]]),
@@ -1387,7 +1502,7 @@ class DocxReportTests(unittest.TestCase):
         """None of the four has been through this renderer before. Each carries its own anchors,
         table headers and tokens, and every one of them is a hard precondition."""
         resources = RESOURCES
-        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia"), ("web", "GDT"), ("thick_client", "GDT"), ("web", "GFT"), ("thick_client", "GFT")):
+        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia"), ("web", "GDT"), ("thick_client", "GDT"), ("web", "GFT"), ("thick_client", "GFT"), ("web", "GWAM"), ("mobile", "GWAM")):
             for has_findings in (True, False):
                 with self.subTest(channel=channel, segment=segment, has_findings=has_findings), tempfile.TemporaryDirectory() as temporary_directory:
                     report_folder = Path(temporary_directory)

@@ -297,6 +297,8 @@ input[data-path*="scope"],
   #setup[data-step="findings"] .table-wrap { overflow-x: auto !important; overflow-y: visible !important; }
 
 .setup-field-wrap { display: grid; gap: 4px; min-width: 0; }
+/* The wrapper and a label each set their own display, and no stylesheet reinstates the browser's [hidden] rule, so each needs one. */
+.setup-field-wrap[hidden], .fields > label[hidden] { display: none; }
 .setup-field-message { display: block; color: var(--danger); font-size: 11px; line-height: 1.35; }
 .setup-field-message[hidden] { display: none; }
 #setup .limitations-field + .setup-field-message { margin: 4px 15px 15px; }

@@ -10,7 +10,7 @@ from functools import cache
 from itertools import zip_longest
 from typing import Callable, Literal
 
-from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
+from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_NAME_SEGMENTS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
 
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@\\-](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9._@\\-])?$")
@@ -104,6 +104,7 @@ def format_rule_message(result: dict, report: dict | None = None, *, scope_conte
     fixed_messages = {
         "missing_app_name": "Enter the application name.",
         "missing_segment": "Choose a segment.",
+        "missing_report_name": "Enter the report name.",
         "missing_report_type": "Choose a report type.",
         "missing_network": "Choose the network access.",
         "missing_tester": "Enter the tester's name.",
@@ -256,6 +257,8 @@ MAX_TEST_ACCOUNTS = 50
 
 CHARACTER_RULES: dict[str, CharacterRule] = {
     "app_name": CharacterRule("Application name", "-:;.()[]#", max_length=100),
+    # The application name's symbols, a slash, and the en dash the Word masters print between the parts of a name.
+    "report_name": CharacterRule("Report name", "-:;.()[]#/\u2013", max_length=200),
     "ci_number": CharacterRule("CI number", "-", spaces=False, max_length=30),
     "bsn_number": CharacterRule("BSN number", "-", spaces=False, max_length=30),
     "app_owner": CharacterRule("Application owner", "-'\u2019.", numbers=False, max_length=60),
@@ -315,7 +318,10 @@ def setup_field_refusals(engagement: dict) -> list[dict]:
         if limit is not None and text_length(value) > limit:
             refuse("too_long", field=field, **context, limit=limit)
 
-    for field in ("app_name", "ci_number", "bsn_number", "app_owner", "tester"):
+    for field in ("app_name", "report_name", "ci_number", "bsn_number", "app_owner", "tester"):
+        # Typed, printed and checked only under a segment that has a report name of its own. Twin: fieldRefusals in rules.js.
+        if field == "report_name" and engagement.get("segment") not in REPORT_NAME_SEGMENTS:
+            continue
         check(field, engagement.get(field))
     environments = engagement.get("tested_environments") or []
     windows = engagement.get("test_windows")
@@ -422,14 +428,41 @@ def finding_input_issues(report: Report) -> list[str]:
     return issues
 
 
+EN_DASH = "\u2013"
+# A file name is cut at about the longest one the app already made (a 100-character application
+# name plus the other parts), because the file lands in generated/ under the project folder and
+# Windows stops a path at 260 characters.
+REPORT_NAME_FILENAME_LIMIT = 150
+
+
+def report_name_for(report: Report) -> str:
+    """The name a Word report gives itself: the tester's own for a segment in REPORT_NAME_SEGMENTS, and
+    for every other segment one built from its parts, joined with the en dashes the cover has always used."""
+    engagement = report.engagement
+    if engagement.segment in REPORT_NAME_SEGMENTS:
+        return engagement.report_name.strip()
+    year = engagement.report_date.year if engagement.report_date else "N/A"
+    test_type = REPORT_TYPE_LABELS.get(engagement.report_type or "", "N/A")
+    return f" {EN_DASH} ".join([engagement.segment or "N/A", engagement.app_name.strip() or "N/A", f"{test_type} {year}"])
+
+
+def _filename_text(value: str | None) -> str:
+    """Text as a portable file name part: ASCII only, no characters Windows refuses, one space at a time."""
+    ascii_value = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", INVALID_FILENAME_CHARACTERS.sub("", ascii_value)).strip(" .")
+
+
 def report_export_filename(report: Report, suffix: str = ".zip") -> str:
     """Build a portable report filename from the required Setup metadata."""
     engagement = report.engagement
+    if engagement.segment in REPORT_NAME_SEGMENTS:
+        # The report name is the whole file name, so it is cut once rather than part by part.
+        named = _filename_text(report_name_for(report).replace(EN_DASH, "-"))[:REPORT_NAME_FILENAME_LIMIT].strip(" .")
+        if named:
+            return f"{named}{suffix}"
 
     def component(value: str | None, fallback: str) -> str:
-        ascii_value = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
-        cleaned = re.sub(r"\s+", " ", INVALID_FILENAME_CHARACTERS.sub("", ascii_value)).strip(" .")
-        return cleaned[:100] or fallback
+        return _filename_text(value)[:100] or fallback
 
     segment = component(engagement.segment, "Unassigned")
     application = component(engagement.app_name, "Untitled Application")
@@ -1088,6 +1121,8 @@ def setup_results(report: dict) -> list[dict]:
         issue("missing_app_name")
     if not engagement.get("segment"):
         issue("missing_segment")
+    if engagement.get("segment") in REPORT_NAME_SEGMENTS and not (engagement.get("report_name") or "").strip():
+        issue("missing_report_name")
     if not engagement.get("report_type"):
         issue("missing_report_type")
     if not engagement.get("network"):

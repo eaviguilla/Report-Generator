@@ -43,14 +43,19 @@ from .docx_components import (
     set_page_break_before,
 )
 from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, STATUS_LABELS
-from .report_service import PLACEHOLDER_TEXT, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, setup_issues
+from .report_service import PLACEHOLDER_TEXT, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, report_name_for, setup_issues
 
 SEVERITY_ORDER = list(get_args(Severity))
 # Targets number from zero within each channel, so channel rank has to come first when ordering them.
 CHANNEL_ORDER = list(CHANNELS)
 # Belongs to the document, never to the draft, so the stored value stays bare digits.
 SEVERITY_TICKET_PREFIX = "GRIMPEN-"
-PLAIN_METADATA_TOKENS = {"app-name", "app-owner", "tester-name", "report-name"}
+# Tokens that also match as bare words. `report-name` is left out on purpose, because its value is
+# free text and a pass that found its own output again would never finish.
+PLAIN_METADATA_TOKENS = {"app-name", "app-owner", "tester-name"}
+# The one token whose value is free text. It goes in after every other token, so no later pass can
+# rewrite a word of it that happens to spell another token.
+REPORT_NAME_TOKEN = "report-name"
 UNRESOLVED_MARKERS = (
     "-vuln",
     "-affected-location",
@@ -278,7 +283,7 @@ def _metadata(report: Report) -> dict[str, str]:
         "segment": engagement.segment or "N/A",
         "network": engagement.network or "N/A",
         "app-name": _display_value(engagement.app_name),
-        "report-name": _display_value(engagement.app_name),
+        REPORT_NAME_TOKEN: _display_value(report_name_for(report)),
         "test-type": REPORT_TYPE_LABELS.get(engagement.report_type or "", "N/A"),
         "app-owner": _display_value(engagement.app_owner),
         "report-date": _display_date(engagement.report_date),
@@ -313,7 +318,11 @@ def _document_roots(document: DocumentType):
 
 
 def _replace_metadata(document: DocumentType, report: Report) -> None:
-    for token, value in sorted(_metadata(report).items(), key=lambda item: len(item[0]), reverse=True):
+    values = _metadata(report)
+    # Longest first; the report name, being free text, last of all.
+    ordered = [*sorted((token for token in values if token != REPORT_NAME_TOKEN), key=len, reverse=True), REPORT_NAME_TOKEN]
+    for token in ordered:
+        value = values[token]
         escaped = re.escape(token)
         patterns = [re.compile(r"\{\{\s*" + escaped + r"\s*\}\}", re.IGNORECASE)]
         if token in PLAIN_METADATA_TOKENS:

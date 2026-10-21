@@ -38,6 +38,9 @@ NON_PRODUCTION_LABEL_PRESETS: tuple[str, ...] = ("NON-PROD", "MOD", "UAT", "STAG
 # Retired presets. Still recognised on import so reports generated before the set changed round trip.
 LEGACY_NON_PRODUCTION_LABELS: tuple[str, ...] = ("TEST/MO", "DEV")
 Segment = Literal["JH", "GWAM", "Asia", "GDT", "GFT"]
+# The segments whose report name the tester types on Setup. Every other segment prints a name built from
+# its segment, application name, report type and year.
+REPORT_NAME_SEGMENTS: tuple[Segment, ...] = ("GWAM",)
 ReportType = Literal["annual_pentest", "retest", "deployment_pentest", "new_test"]
 REPORT_TYPE_LABELS: dict[ReportType, str] = {
     "annual_pentest": "Annual Pentest",
@@ -242,6 +245,9 @@ class Vulnerability(BaseModel):
 
 class Engagement(BaseModel):
     app_name: str = ""
+    # Typed on Setup for a segment in REPORT_NAME_SEGMENTS and ignored under every other one. A name
+    # kept under another segment comes back when the tester chooses that segment again.
+    report_name: str = ""
     ci_number: str = ""
     bsn_number: str = ""
     app_owner: str = ""

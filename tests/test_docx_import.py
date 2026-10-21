@@ -31,7 +31,7 @@ from app import main
 from app.docx_import import NETWORK_IMPORT_WARNING, SEVERITY_TICKET_LABEL, ReportImportError, ReportImportLimitError, _parsed_ticket_lines, classify_paragraph, first_change, numbering_formats, parse_report_docx
 from app.docx_report import generation_issues, main_template_path, render_report_docx
 from app.report_service import RESOLVED_REMEDIATION, character_issue, finding_input_issues, setup_issues
-from tests.support import png_bytes, use_temp_workspace
+from tests.support import paragraph_texts, png_bytes, use_temp_workspace
 from app.models import (
     CodeFragment,
     Content,
@@ -331,7 +331,7 @@ class FragmentRecognitionTests(unittest.TestCase):
         projection = self._normalized_retest_projection(payload, evidence, summary)
 
         self.assertEqual(projection["engagement"], {
-            "app_name": "Northstar Banking", "app_owner": "", "ci_number": "", "bsn_number": "",
+            "app_name": "Northstar Banking", "report_name": "", "app_owner": "", "ci_number": "", "bsn_number": "",
             "segment": "JH", "report_type": None, "report_date": None, "tester": "",
             "network": "Internal",
             "tested_environments": ["production"], "tested_channels": ["web"],
@@ -1901,6 +1901,101 @@ class RefusalMessageTests(unittest.TestCase):
         )
 
 
+def _empty_application_cells(document) -> None:
+    """Blank the cover's Application cells. They sit in cover-page shapes that python-docx does not list."""
+    paragraphs = list(document.element.body.iter(qn("w:p")))
+    texts = paragraph_texts(document.element.body)
+    for index, text in enumerate(texts[:-1]):
+        if text == "Application":
+            for node in paragraphs[index + 1].iter(qn("w:t")):
+                node.text = ""
+
+
+def _retitle(document, title: str) -> None:
+    cover = next(paragraph for paragraph in document.paragraphs[:20] if "Annual Pentest" in paragraph.text)
+    _set_text(cover, title)
+
+
+class ReportNameImportTests(unittest.TestCase):
+    """A segment with a report name of its own prints what the tester typed as its cover title. The
+    importer reads that title back as the Report Name, and takes the application name from the
+    cover's Application cell, because the title no longer holds it."""
+
+    @staticmethod
+    def _gwam_render(report_name: str) -> bytes:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.segment = "GWAM"
+            report.engagement.report_name = report_name
+            return render_report_docx(report, TEMPLATE, folder)
+
+    def test_an_editable_copy_reads_the_cover_title_as_the_report_name_and_the_cell_as_the_application_name(self) -> None:
+        # A slash, an en dash and a double space are all allowed in a name, and all must come back as typed.
+        typed = "GWAM - Meridian  Portal \u2013 Wealth/Asset [Q4] - Annual Pentest 2026"
+
+        payload, _, _ = parse_report_docx(self._gwam_render(typed), mode="editable")
+
+        engagement = payload["engagement"]
+        self.assertEqual(engagement["report_name"], typed)
+        self.assertEqual(engagement["app_name"], "Northstar Banking")
+        self.assertEqual((engagement["segment"], engagement["report_type"]), ("GWAM", "annual_pentest"))
+        self.assertIsNone(character_issue("report_name", engagement["report_name"]))
+
+    def test_a_retest_import_keeps_the_application_name_and_leaves_the_report_name_to_the_tester(self) -> None:
+        payload, _, _ = parse_report_docx(self._gwam_render("GWAM - Meridian Portal - Annual Pentest 2026"), mode="retest")
+
+        engagement = payload["engagement"]
+        self.assertEqual(engagement["report_name"], "")
+        self.assertEqual(engagement["app_name"], "Northstar Banking")
+        self.assertEqual((engagement["segment"], engagement["report_type"]), ("GWAM", None))
+
+    def test_a_gwam_title_that_ends_in_no_known_report_type_warns_instead_of_refusing(self) -> None:
+        typed = "GWAM - Meridian Portal - Quarterly Assessment 2026"
+
+        payload, _, summary = parse_report_docx(self._gwam_render(typed), mode="editable")
+
+        engagement = payload["engagement"]
+        self.assertEqual((engagement["report_name"], engagement["report_type"]), (typed, None))
+        self.assertTrue(
+            any('"Quarterly Assessment"' in warning and "Setup" in warning for warning in summary.get("warnings", [])),
+            summary.get("warnings"),
+        )
+
+    def test_a_title_that_does_not_start_with_a_segment_gives_nothing(self) -> None:
+        payload, _, _ = parse_report_docx(self._gwam_render("Meridian Portal Annual Penetration Test 2026"), mode="editable")
+
+        engagement = payload["engagement"]
+        self.assertEqual((engagement["segment"], engagement["app_name"], engagement["report_name"], engagement["report_type"]), (None, "", "", None))
+
+    def test_a_gwam_report_made_before_the_report_name_existed_imports_with_its_old_title_as_the_name(self) -> None:
+        old_title = "GWAM \u2013 Northstar Banking \u2013 Annual Pentest 2026"
+
+        payload, _, _ = parse_report_docx(_edited(base_render(), lambda document: _retitle(document, old_title)), mode="editable")
+
+        engagement = payload["engagement"]
+        self.assertEqual(engagement["report_name"], old_title)
+        self.assertEqual(engagement["app_name"], "Northstar Banking")
+        self.assertIsNone(character_issue("report_name", old_title), "the old title would show as a Setup refusal")
+
+    def test_the_application_name_falls_back_to_the_title_when_the_cover_cell_is_empty(self) -> None:
+        document = _edited(self._gwam_render("GWAM - Meridian Portal - Annual Pentest 2026"), _empty_application_cells)
+
+        payload, _, _ = parse_report_docx(document, mode="editable")
+
+        self.assertEqual(payload["engagement"]["app_name"], "Meridian Portal")
+
+    def test_a_segment_without_its_own_report_name_still_takes_its_application_name_from_the_title(self) -> None:
+        # The cell says Northstar Banking; only the title says Meridian Portal.
+        document = _edited(base_render(), lambda doc: _retitle(doc, "JH \u2013 Meridian Portal \u2013 Annual Pentest 2026"))
+
+        for mode in ("editable", "retest"):
+            with self.subTest(mode):
+                engagement = parse_report_docx(document, mode=mode)[0]["engagement"]
+                self.assertEqual(engagement["app_name"], "Meridian Portal")
+                self.assertEqual(engagement["report_name"], "")
+
+
 class FirstChangeTests(unittest.TestCase):
     """The editable import's last checks say what the app would change by comparing two dumps of one report."""
 
@@ -2132,6 +2227,9 @@ class ImportRouteTests(unittest.TestCase):
                 if segment == "Asia":
                     report.vulnerabilities[0].cvss_score = "9.8"
                     report.vulnerabilities[0].cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+                typed = "GWAM - Northstar Banking - Annual Pentest 2026"
+                if segment == "GWAM":
+                    report.engagement.report_name = typed
 
                 document = render_report_docx(report, main_template_path(report, resources), folder)
                 payload, _, _ = parse_report_docx(document, mode="editable")
@@ -2140,6 +2238,7 @@ class ImportRouteTests(unittest.TestCase):
                 self.assertEqual(engagement["segment"], segment)
                 self.assertEqual(engagement["app_name"], "Northstar Banking")
                 self.assertEqual(engagement["report_type"], "annual_pentest")
+                self.assertEqual(engagement["report_name"], typed if segment == "GWAM" else "")
 
     def test_gdt_titles_round_trip_every_report_type_label(self) -> None:
         """The title parser receives report type only as a display label, so each label must map

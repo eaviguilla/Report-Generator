@@ -71,6 +71,8 @@ class ReportSpec:
     non_production_label: str
     targets: dict[str, tuple[str, str]]
     findings: tuple[FindingSpec, ...]
+    # Typed by the tester for a segment that has a report name of its own; empty for every other one.
+    report_name: str = ""
 
 
 REPORT_SPECS = (
@@ -111,6 +113,7 @@ REPORT_SPECS = (
         app_name="Meridian Commerce API",
         ci_number="CI-MERIDIAN-202",
         segment="GWAM",
+        report_name="GWAM - Meridian Commerce API - Deployment Pentest 2026",
         report_type="deployment_pentest",
         non_production_label="MOD",
         targets={
@@ -401,6 +404,7 @@ def _build_report(spec: ReportSpec, report_number: int) -> tuple[Report, dict[st
         saved_at=now,
         engagement=Engagement(
             app_name=spec.app_name,
+            report_name=spec.report_name,
             ci_number=spec.ci_number,
             bsn_number=f"BSN-{report_number:03d}",
             app_owner="Security Engineering",

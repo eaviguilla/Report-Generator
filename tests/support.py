@@ -4,6 +4,7 @@ from __future__ import annotations
 import tempfile
 from io import BytesIO
 from pathlib import Path
+from typing import get_args
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -11,7 +12,16 @@ from docx.oxml.ns import qn
 from PIL import Image
 
 from app import main
+from app.models import REPORT_NAME_SEGMENTS, Segment
 from app.workspace import Workspace
+
+# Every segment whose report name is built from its parts. Derived, so a segment added later is tested as one by default.
+SEGMENTS_WITHOUT_OWN_REPORT_NAME = tuple(segment for segment in get_args(Segment) if segment not in REPORT_NAME_SEGMENTS)
+
+
+def paragraph_texts(root) -> list[str]:
+    """The text of every paragraph under `root`, including the ones inside cover-page shapes."""
+    return ["".join(node.text or "" for node in paragraph.iter(qn("w:t"))).strip() for paragraph in root.iter(qn("w:p"))]
 
 
 def use_temp_workspace(test: TestCase, tester: str) -> Path:

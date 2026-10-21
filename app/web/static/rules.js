@@ -119,6 +119,10 @@
     return results;
   };
 
+  // Whether a segment types its own report name, so Setup shows the field and the rules require it.
+  // Twin: the segment test in report_service.setup_results and setup_field_refusals.
+  const hasOwnReportName = (engagement, vocabulary) => vocabulary.report_name_segments.includes(engagement?.segment);
+
   // Twin of report_service.setup_field_refusals.
   const fieldRefusals = (engagement, vocabulary) => {
     const results = [];
@@ -130,7 +134,11 @@
       if (characters.length) refuse("invalid_characters", {field, ...context, characters});
       if (tooLong(value, rule.max_length)) refuse("too_long", {field, ...context, limit:rule.max_length});
     };
-    ["app_name", "ci_number", "bsn_number", "app_owner", "tester"].forEach(field => check(field, engagement[field]));
+    ["app_name", "report_name", "ci_number", "bsn_number", "app_owner", "tester"].forEach(field => {
+      // Typed, printed and checked only under a segment that has a report name of its own. Twin: setup_field_refusals.
+      if (field === "report_name" && !hasOwnReportName(engagement, vocabulary)) return;
+      check(field, engagement[field]);
+    });
     const environments = engagement.tested_environments || [];
     environments.forEach(environment => {
       const testWindow = engagement.test_windows?.[environment];
@@ -159,6 +167,7 @@
     const issue = (code, context = {}) => results.push({kind:"issue", code, ...context});
     if (!strip(asString(engagement.app_name))) issue("missing_app_name");
     if (!engagement.segment) issue("missing_segment");
+    if (hasOwnReportName(engagement, vocabulary) && !strip(asString(engagement.report_name))) issue("missing_report_name");
     if (!engagement.report_type) issue("missing_report_type");
     if (!engagement.network) issue("missing_network");
     if (!strip(asString(engagement.tester))) issue("missing_tester");
@@ -197,6 +206,7 @@
     const fixedMessages = {
       missing_app_name:"Enter the application name.",
       missing_segment:"Choose a segment.",
+      missing_report_name:"Enter the report name.",
       missing_report_type:"Choose a report type.",
       missing_network:"Choose the network access.",
       missing_tester:"Enter the tester's name.",
@@ -326,5 +336,5 @@
     throw new Error(`Unknown rule message: ${result.code}`);
   };
 
-  window.vrRules = {setupResults, scopeTargets, scopeRefusals, invalidCharacters, strip, stripStart, stripEnd, usernameRefusals, tooLong, formatRuleMessage};
+  window.vrRules = {setupResults, hasOwnReportName, scopeTargets, scopeRefusals, invalidCharacters, strip, stripStart, stripEnd, usernameRefusals, tooLong, formatRuleMessage};
 })();

@@ -6,7 +6,7 @@ import re
 from dataclasses import asdict
 from typing import get_args
 
-from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, ReportType, Segment, Severity, Status
+from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_NAME_SEGMENTS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, ReportType, Segment, Severity, Status
 from .report_service import CHARACTER_RULES, MAX_TEST_ACCOUNTS, PLACEHOLDER_TEXT, RESOLVED_REMEDIATION, SCOPE_LIMITS
 
 # Each report page by the last part of its address, with the name a tester sees.
@@ -19,6 +19,7 @@ def client_vocabulary() -> dict:
         "statuses": [[status, STATUS_LABELS[status]] for status in get_args(Status)],
         "severities": list(get_args(Severity)),
         "segments": list(get_args(Segment)),
+        "report_name_segments": list(REPORT_NAME_SEGMENTS),
         "report_types": [[report_type, REPORT_TYPE_LABELS[report_type]] for report_type in get_args(ReportType)],
         "network_access": list(get_args(NetworkAccess)),
         "channels": [[channel, CHANNEL_LABELS[channel]] for channel in CHANNELS],

@@ -24,7 +24,7 @@ from docx.text.run import Run as WordRun
 from PIL import Image, UnidentifiedImageError
 
 from .docx_captions import paragraph_style_id
-from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, Segment
+from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_NAME_SEGMENTS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, Segment
 from .report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status, default_conclusion_span
 
 # Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
@@ -72,6 +72,9 @@ MAX_IMAGE_WIDTH_MM = 155
 # back as Internal whatever the engagement was.
 NETWORK_COVER_LABEL = "Application Type"
 NETWORK_IMPORT_WARNING = "Network access was not read from the DOCX cover -- choose it in Setup before continuing."
+# The cover label beside {{app-name}}. A segment with a report name of its own prints that name as its
+# cover title, so the title no longer holds the application name and this cell is where it is read.
+APPLICATION_COVER_LABEL = "Application"
 
 
 class ReportImportError(ValueError):
@@ -1430,15 +1433,26 @@ def parse_report_docx(
                 metadata.setdefault(cells[0], cells[1])
 
     # The title is the one place the segment and the application name appear as themselves rather
-    # than substituted into a sentence: "JH - Northstar Banking - Annual Pentest 2026".
-    app_name, segment, report_type = "", None, None
+    # than substituted into a sentence: "JH - Northstar Banking - Annual Pentest 2026". A segment with a
+    # report name of its own prints that name instead, so for it the title is the Report Name and the
+    # application name is read from the cover's Application cell.
+    warnings: list[str] = []
+    app_name, segment, report_type, report_name = "", None, None, ""
     for paragraph in document.paragraphs[:20]:
         parts = [part.strip() for part in re.split(r"\s[\u2013\u2014-]\s", paragraph.text) if part.strip()]
         if len(parts) >= 3 and parts[0] in get_args(Segment):
             segment, app_name = parts[0], " - ".join(parts[1:-1])
             label = re.sub(r"\s+\d{4}$", "", parts[-1])
             report_type = REPORT_TYPE_BY_LABEL.get(label)
-            if mode == "editable" and report_type is None:
+            if segment in REPORT_NAME_SEGMENTS:
+                app_name = _labelled_value(_document_texts(document), APPLICATION_COVER_LABEL) or app_name
+                # A Retest import leaves the name to the tester, because it carries the old test's type and year.
+                if mode == "editable":
+                    report_name = paragraph.text.strip()
+                    # A free-text name can end in anything, so a type that is not one of ours is no refusal here.
+                    if report_type is None:
+                        warnings.append(f'The report name ends in "{label}", which is not a report type. Choose the report type in Setup before continuing.')
+            elif mode == "editable" and report_type is None:
                 raise ReportImportError(
                     f'Unknown report type "{label}" in the cover title. It must be one of: {", ".join(REPORT_TYPE_LABELS.values())}.'
                 )
@@ -1448,7 +1462,6 @@ def parse_report_docx(
     detected_non_production_label = _detect_non_production_label(document)
     non_production_label = detected_non_production_label or NON_PRODUCTION_LABEL_PRESETS[0]
     windows = _test_windows(document) if mode == "editable" else {}
-    warnings: list[str] = []
     targets = _scope_rows(document, "URL(s) in Scope", "web") + _scope_rows(document, "API Routes", "api")
     targets += _component_rows(document, _observed_environments(document, windows, targets), warnings)
     evidence: dict[str, bytes] = {}
@@ -1483,6 +1496,7 @@ def parse_report_docx(
             windows, evidence_environments, warnings,
         )
     engagement["network"] = _network_access(document)
+    engagement["report_name"] = report_name
     if engagement["network"] is None:
         warnings.append(NETWORK_IMPORT_WARNING)
     payload = {

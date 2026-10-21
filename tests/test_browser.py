@@ -7568,19 +7568,71 @@ class BrowserWorkflowTests(unittest.TestCase):
                 expect(cards).to_have_count(before + 1)
                 expect(cards.last.locator(".tag")).to_have_text("note")
 
-    def test_the_add_row_names_the_button_under_the_pointer_and_moves_nothing(self) -> None:
+    def test_the_add_row_has_no_empty_space_inside_it(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        # Side by side, a section is about 460px wide. Stacked, it is the width of the pane.
+        for width in (1440, 1000):
+            with self.subTest(window=width):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.wait_for_selector("#issue-count")
+                block = page.locator('.content-block[data-content-type="description"]')
+                row = block.get_by_role("toolbar", name="Add a fragment to Description", exact=True)
+                section, strip, last = block.bounding_box(), row.bounding_box(), row.get_by_role("button").last.bounding_box()
+                self.assertLess(strip["width"], section["width"] - 80, "the strip runs the whole width of the section")
+                self.assertLessEqual(strip["x"] + strip["width"] - (last["x"] + last["width"]), 12, "there is empty space at the right inside the strip")
+
+    def test_the_add_row_sits_in_the_middle_of_its_section(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        for width in (1440, 1000):
+            with self.subTest(window=width):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.wait_for_selector("#issue-count")
+                block = page.locator('.content-block[data-content-type="description"]')
+                section, strip = block.bounding_box(), block.get_by_role("toolbar", name="Add a fragment to Description", exact=True).bounding_box()
+                # A strip as wide as the section is level with both edges, so only a narrower one can show it is centred.
+                self.assertLess(strip["width"], section["width"] - 80, "the strip fills the section, so its position says nothing")
+                left = strip["x"] - section["x"]
+                right = section["x"] + section["width"] - (strip["x"] + strip["width"])
+                self.assertAlmostEqual(left, right, delta=2, msg="the strip is not in the middle")
+
+    def test_the_add_row_has_the_same_space_above_and_below(self) -> None:
+        report_id = self._report_with_every_section()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        # Above is the gap to the fragment before the strip. Below is the gap to the inside of the section's border.
+        gaps = page.evaluate("""() => [...document.querySelectorAll('.content-block .add-row')].map(row => {
+            const block = row.closest('.content-block');
+            const strip = row.getBoundingClientRect();
+            const inside = block.getBoundingClientRect().top + block.clientTop + block.clientHeight;
+            return {section: block.dataset.contentType, above: strip.top - row.previousElementSibling.getBoundingClientRect().bottom, below: inside - strip.bottom};
+        })""")
+        self.assertEqual(len(gaps), 5, "a section lost its add row")
+        for gap in gaps:
+            with self.subTest(section=gap["section"]):
+                self.assertAlmostEqual(gap["above"], gap["below"], delta=0.5, msg="the space above the strip is not the space below it")
+
+    def test_the_add_row_names_the_button_under_the_pointer_to_the_right_of_the_strip_and_moves_nothing(self) -> None:
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
-        row = page.get_by_role("toolbar", name="Add a fragment to Description", exact=True)
+        block = page.locator('.content-block[data-content-type="description"]')
+        row = block.get_by_role("toolbar", name="Add a fragment to Description", exact=True)
         name = row.locator(".add-row-name")
-        tray = row.locator(".add-row-tray")
         expect(name).to_have_text("")
-        left = tray.bounding_box()["x"]
+        strip_before, section_before = row.bounding_box(), block.bounding_box()
         row.get_by_role("button", name="Add table", exact=True).hover()
         expect(name).to_have_text("Table")
-        self.assertEqual(tray.bounding_box()["x"], left, "the name shifted the buttons")
+        slot, strip = name.bounding_box(), row.bounding_box()
+        self.assertGreaterEqual(slot["x"], strip["x"] + strip["width"], "the name is not outside the strip, at its right")
+        self.assertLessEqual(abs(slot["y"] + slot["height"] / 2 - (strip["y"] + strip["height"] / 2)), 4, "the name is not level with the strip")
+        self.assertEqual(strip, strip_before, "the name moved the strip")
+        self.assertEqual(block.bounding_box(), section_before, "the name moved the section")
         page.mouse.move(2, 2)
         expect(name).to_have_text("")
 
@@ -7598,27 +7650,35 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.keyboard.press("Tab")
         expect(name).to_have_text("")
 
-    def test_a_name_that_does_not_fit_beside_the_buttons_takes_its_own_line_and_moves_nothing(self) -> None:
-        report_id = self.ready_report(include_finding=True)
+    def test_the_hovered_name_stays_inside_its_section_at_the_narrowest_two_column_width(self) -> None:
+        report_id = self._report_with_every_section()
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
-        description = page.locator('.content-block[data-content-type="description"]')
-        # Two columns leave a section about 440px and a smaller window leaves less, so the name cannot always sit beside the buttons.
-        description.evaluate("block => { block.style.width = '360px'; }")
-        row = description.get_by_role("toolbar", name="Add a fragment to Description", exact=True)
-        tray = row.locator(".add-row-tray").bounding_box()
-        slot = row.locator(".add-row-name")
-        self.assertGreaterEqual(slot.bounding_box()["y"], tray["y"] + tray["height"], "the name did not wrap, so this test checks nothing")
-        heights = lambda: (row.bounding_box()["height"], description.bounding_box()["height"])
-        before = heights()
-
-        row.get_by_role("button", name="Add numbered list", exact=True).hover()
-        expect(slot).to_have_text("Numbered list")
-        self.assertEqual(heights(), before, "the name pushed the rest of the section down")
-        page.mouse.move(2, 2)
-        expect(slot).to_have_text("")
-        self.assertEqual(heights(), before)
+        # Two columns end where the pane drops to 900px, which leaves each section 444px. A section clips what runs past
+        # its padding box, so a name has to end before that.
+        page.evaluate("() => document.querySelectorAll('.content-block').forEach(block => { block.style.width = '444px'; })")
+        checked = 0
+        for section, content_type in (
+            ("Description", "description"),
+            ("Recommended Remediation", "recommended_remediation"),
+            ("Previous Proof of Concept", "previous_proof_of_concept"),
+            ("Proof of Concept", "proof_of_concept"),
+        ):
+            block = page.locator(f'.content-block[data-content-type="{content_type}"]')
+            row = block.get_by_role("toolbar", name=f"Add a fragment to {section}", exact=True)
+            name = row.locator(".add-row-name")
+            limit = block.evaluate("element => element.getBoundingClientRect().left + element.clientLeft + element.clientWidth")
+            buttons = row.get_by_role("button")
+            for index in range(buttons.count()):
+                button = buttons.nth(index)
+                with self.subTest(section=section, button=button.get_attribute("aria-label")):
+                    button.hover()
+                    expect(name).to_have_text(button.get_attribute("data-label"))
+                    slot = name.bounding_box()
+                    self.assertLessEqual(slot["x"] + slot["width"], limit, "the name runs past the section and is clipped")
+                    checked += 1
+        self.assertEqual(checked, 26, "a row was skipped")
 
     def test_a_collapsed_section_and_a_locked_remediation_have_no_add_row(self) -> None:
         report_id = self._report_with_every_section(status="resolved")

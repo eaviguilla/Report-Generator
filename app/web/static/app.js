@@ -3052,9 +3052,9 @@
   // A section that does not allow a type has no button for it and the others keep their order. A type added to
   // `allowed` needs a place in ADD_ROW_GROUPS, or it gets no button, and an entry in ADD_ROW_ICONS, or its button reads "undefined".
   const ADD_ROW_GROUPS = [["paragraph"], ["numbered_list", "bulleted_list"], ["image", "table", "code_block"], ["note", "instance_title"]];
-  const addRowIcon = (shapes, size = 18, weight = 1.7) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${weight}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes}</svg>`;
+  const addRowIcon = (shapes, size = 14, weight = 1.7) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${weight}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes}</svg>`;
   const ADD_ROW_ICONS = {
-    plus: addRowIcon('<path d="M12 5v14M5 12h14"/>', 13, 2.4),
+    plus: addRowIcon('<path d="M12 5v14M5 12h14"/>', 11, 2.4),
     paragraph: addRowIcon('<path d="M4 6h16M4 10.5h16M4 15h16M4 19.5h9"/>'),
     numbered_list: addRowIcon('<path d="M10 6h11M10 12h11M10 18h11"/><path d="M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>'),
     bulleted_list: addRowIcon('<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.1" fill="currentColor" stroke="none"/>'),
@@ -3065,8 +3065,8 @@
     instance_title: addRowIcon('<path d="M6 12h12M6 20V4M18 20V4"/>'),
   };
   // The row that ends a section. One click adds that kind of fragment at the end of it. The row is one Tab stop and
-  // the arrow keys move inside it. The name of the button under the pointer or the cursor shows in a fixed slot at
-  // the right, so no tooltip covers anything and nothing shifts.
+  // the arrow keys move inside it. The name of the button under the pointer or the cursor shows to the right of the
+  // row, outside it and out of the layout, so no tooltip covers anything and nothing shifts.
   function renderAddRow(sectionName, allowedTypes, onAdd) {
     const row = document.createElement("div");
     row.className = "add-row";

@@ -3098,51 +3098,58 @@ button.finding-nav.active:not(:disabled)::after {
 }
 
 /* ---- Add row: one click adds a fragment at the end of its section ----
-   The buttons are grouped by purpose in one order everywhere. The name of the button under the pointer or the
-   cursor shows in a fixed slot at the right, so it covers nothing and moves nothing. */
+   The add row is a dashed strip like "Add another screenshot". It is as wide as its content and sits in the middle
+   of the section. The buttons are grouped by purpose and keep one order in every section. The name of the button
+   under the pointer or the cursor shows to the right of the strip, outside it and out of the layout, so a name never
+   moves the strip. The fragment above leaves 8px of its own, and grid items do not collapse margins, so the 3px
+   margin above the strip makes the space above it 11px, the same as the space below. */
 .add-row {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
-  margin: 10px 11px 11px;
+  gap: 8px;
+  justify-self: center;
+  min-height: 32px;
+  margin-block: 3px 11px;
+  padding: 3px 8px 3px 11px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition: border-color 150ms ease;
+}
+
+.add-row:hover,
+.add-row:focus-within {
+  border-color: var(--accent);
 }
 
 .add-row-caption {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
 }
 
-.add-row-tray {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-quiet);
-}
-
+.add-row-tray,
 .add-row-group {
   display: inline-flex;
-  gap: 2px;
+  align-items: center;
 }
 
 .add-row-group + .add-row-group {
   margin-left: 5px;
-  padding-left: 6px;
-  border-left: 1px solid var(--line);
+  padding-left: 5px;
+  border-left: 1px solid var(--line-strong);
 }
 
-/* Written with the row's class in front so these beat the page-wide button colours, hover included. */
+/* Written with the row's class in front so these beat the page-wide button rules for colour, hover and minimum height. */
 .add-row .add-row-button {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -3153,29 +3160,25 @@ button.finding-nav.active:not(:disabled)::after {
 
 .add-row .add-row-button:hover,
 .add-row .add-row-button:focus-visible {
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--accent-strong);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-small);
+  background: var(--accent-soft);
 }
 
 .add-row .add-row-button:focus-visible {
   outline-offset: 1px;
 }
 
-.add-row .add-row-button:active:not(:disabled) {
-  background: var(--accent-soft);
-}
-
-/* The width holds the longest name with room for a wider font. When the row is too narrow for it beside the
-   buttons, the name wraps to a line of its own, and the line keeps its height empty so a name never moves the page. */
+/* The name sits outside the strip and ignores the pointer, so hovering it does not count as hovering the strip. The
+   section clips at its padding box. A centred strip leaves room for the longest name at 444px, and a test checks it. */
 .add-row-name {
-  min-width: 7.5em;
-  min-height: 16px;
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 8px);
+  transform: translateY(-50%);
   color: var(--accent-strong);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 16px;
+  font: 400 9.5px "JetBrains Mono", Consolas, monospace;
+  pointer-events: none;
   white-space: nowrap;
 }
 

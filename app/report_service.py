@@ -10,7 +10,7 @@ from functools import cache
 from itertools import zip_longest
 from typing import Callable, Literal
 
-from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
+from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
 
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@\\-](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9._@\\-])?$")
@@ -255,7 +255,7 @@ ASCII_LETTERS_AND_DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 MAX_TEST_ACCOUNTS = 50
 
 CHARACTER_RULES: dict[str, CharacterRule] = {
-    "app_name": CharacterRule("Application name", "-:;.()", max_length=100),
+    "app_name": CharacterRule("Application name", "-:;.()[]#", max_length=100),
     "ci_number": CharacterRule("CI number", "-", spaces=False, max_length=30),
     "bsn_number": CharacterRule("BSN number", "-", spaces=False, max_length=30),
     "app_owner": CharacterRule("Application owner", "-'\u2019.", numbers=False, max_length=60),
@@ -1148,6 +1148,12 @@ def setup_issues(report: Report) -> list[str]:
 def setup_is_complete(report: Report) -> bool:
     """Return whether a report meets the canonical Findings entry requirements."""
     return not setup_issues(report)
+
+
+def scope_of_every_target(report: Report) -> Scope:
+    """The scope of a finding that starts with every place the engagement tests selected, in Setup's
+    order. Twin: allTargetsScope in app.js, which a blank finding added on the Findings page uses."""
+    return Scope(target_ids=[target.target_id for target in report.scope_targets])
 
 
 def scope_has_location(vulnerability: Vulnerability, report: Report) -> bool:

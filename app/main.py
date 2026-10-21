@@ -24,14 +24,14 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import ValidationError
 from starlette.requests import ClientDisconnect
 
-from app.models import Content, EvidenceItem, LibraryRef, Report, Scope, Vulnerability
+from app.models import Content, EvidenceItem, LibraryRef, Report, Vulnerability
 from app.tester_identity import LIBRARY_PATH, load_or_bootstrap
 from . import acceptance
 from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, main_template_path, render_report_docx
 from .library import Library
 from .docx_import import ReportImportLimitError, first_change, parse_report_docx, stranded_scope_refusal
-from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_is_complete, provision, report_export_filename, scope_text_from_targets, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
+from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_is_complete, provision, report_export_filename, scope_of_every_target, scope_text_from_targets, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 from .vocabulary import client_vocabulary
 from .workspace import StaleReportError, Workspace, app_id_for
@@ -970,9 +970,10 @@ def insert_library(request: Request, report_id: str, library_id: str):
     entry = library.get(library_id)
     if entry is None:
         raise HTTPException(404, "Library entry not found")
-    # Scope defaults to "all", which would read as a deliberate every-target choice and let the
-    # finding past the affected-location gate before the tester has picked anything.
-    vulnerability = Vulnerability(uid=f"v_{uuid.uuid4().hex[:8]}", title=entry["title"], likelihood=entry.get("default_likelihood"), impact=entry.get("default_impact"), severity=entry.get("default_severity") or "informational", scope=Scope(mode="custom"), library_ref=LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=datetime.now().astimezone()), contents=copy.deepcopy(entry.get("contents", [])))
+    # Every target starts selected, so the tester removes what a finding does not touch instead of
+    # ticking everything it does. Severity is left blank unless the entry gives one: the finding is
+    # not complete, and Next on the Findings page waits, until the tester has rated it.
+    vulnerability = Vulnerability(uid=f"v_{uuid.uuid4().hex[:8]}", title=entry["title"], likelihood=entry.get("default_likelihood"), impact=entry.get("default_impact"), severity=entry.get("default_severity"), scope=scope_of_every_target(report), library_ref=LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=datetime.now().astimezone()), contents=copy.deepcopy(entry.get("contents", [])))
     # This finding *is* the entry, so the Content page must not offer to install what it already
     # holds. Only the sections actually copied are answered; the rest still get their offer.
     vulnerability.content_offer_resolved = {content.type: entry["library_id"] for content in vulnerability.contents}
@@ -981,11 +982,10 @@ def insert_library(request: Request, report_id: str, library_id: str):
     report.vulnerabilities.append(vulnerability)
     sync_evidence_image_slots(vulnerability, report)
     variants = applicable_poc_variants(vulnerability, report, entry.get("proof_of_concept"))
-    # Several applicable app types is the tester's choice to make on the Content page, not ours.
-    if len(variants) == 1:
-        steps = (entry.get("proof_of_concept") or {})[variants[0]]
-        # The entry is a plain dict, so let Content parse the raw steps back into fragment models.
-        apply_poc_variant(vulnerability, Content(type="proof_of_concept", fragments=steps).fragments, variants)
+    if variants:
+        # Web first, then API: CHANNELS order. They arrive as one list, as the Content page's offer joins them.
+        steps = [fragment for variant in variants for fragment in Content(type="proof_of_concept", fragments=entry["proof_of_concept"][variant]).fragments]
+        apply_poc_variant(vulnerability, steps, variants)
     save_if_current(report, expected_revision(request, report.saved_at))
     return {
         "saved_at": report.saved_at.isoformat(),

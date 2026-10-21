@@ -47,7 +47,7 @@ same change.
 | POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder. A report with no findings needs `?confirm_no_findings=true` |
 | POST | `/reports/import` | Classify and import a ZIP, evidence-free legacy JSON, or generated DOCX with a new report ID |
 | GET | `/library/search?q=` | Search the offline vulnerability library |
-| POST | `/reports/{id}/library/{library_id}` | Insert a library finding, with the proof-of-concept steps matching the finding's app types |
+| POST | `/reports/{id}/library/{library_id}` | Insert a library finding with every scope target selected, no severity unless the entry gives one, its Description and Remediation, and the proof-of-concept steps for every app type the finding touches (web, then API, as one list) |
 | POST | `/reports/{id}/evidence` | Validate, normalize, and store an image |
 | GET | `/reports/{id}/evidence/{evidence_id}` | Serve stored evidence |
 

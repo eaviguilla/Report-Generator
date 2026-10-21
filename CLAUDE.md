@@ -28,6 +28,7 @@ Before you send a reply longer than three sentences, read `.claude/skills/unslop
 - Word automation (`pythoncom`, `win32com`) stays in `app/docx_captions.py`; `msvcrt` stays behind its existing guards in `app/workspace.py` and `app/init.py`.
 - `docs/plans/` is 25 files of up to 3,400 lines each. Never Read one whole: `grep -n '^## '` it, then Read only `## Answers` and `## Agreed plan`. A plan is a dated record: trust the code and `docs/DATA_MAP.md` over it, and run `git log -S` on a symbol the plan adds before believing a `done` status.
 - Implementing a plan: update its status and deviations in the same change, and mark it `done` only with the commit that contains the change.
+- Any change under `app/web/**`, to a page route, or a UI bug report: check it in a real browser with the `playwright-cli` skill before you say it is done. The recipe is in `.claude/rules/web-client.md` ("Check a UI change in a real browser"). Start with `.venv/bin/python -m scripts.ui_check --report finding`.
 - More process rules: `.github/copilot-instructions.md` ("Implementing a plan", "Running tests in this repo", "Pushing changes").
 - `docs/FORM_STATE_PLAN.md` is superseded research, not the shipped design.
 

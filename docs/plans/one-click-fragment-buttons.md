@@ -1,6 +1,6 @@
 # One-click fragment buttons on the Content page
 
-> **Status:** in-progress · 2026-10-21 · Built, and its checks pass on macOS. It becomes `done` with the hash of the commit that holds it.
+> **Status:** done · 2026-10-21 · `5e63b3d`
 
 ## Request
 
@@ -55,12 +55,8 @@ From a grilling session on 2026-10-21.
 - [x] 4. Styles: drop the `.add-fragment` select rules in `taste.css` and `app.css`, and add the B2 row styles: the tray, the groups, the name slot and the arrival ring. Keep `.evidence-add`.
 - [x] 5. Docs: the "Add a fragment" mention in `docs/DATA_MAP.md` and its Last verified line, and a line in the web-client instruction, regenerated into `.claude/rules/`, if the focus-after-redraw order proves a trap.
 - [x] 6. A real-browser check, then `scripts/relevant_tests.py --affected --run` and pyflakes. The check ran in the VS Code browser and in Playwright scripts, not through the `playwright-cli` skill.
-- [ ] 7. Tick these boxes, set the status to `done` with the date and commit, and add one paragraph on what deviated.
+- [x] 7. Tick these boxes, set the status to `done` with the date and commit, and add one paragraph on what deviated.
 
 ## What deviated
 
 The plan said `cellInput` already looked a cell up by position. It captured the cell objects, so a table cell typed into after an autosave lost its text when the tester went back to Findings. That was fixed first, as its own commit with its own test (`80bb61a`), because a two-column table makes it easier to hit. The shipped buttons are 34 by 34 px and not 36 by 34. The row then fits on one line in a two-column section of about 460 px or more, and below that the name drops under the buttons and its line keeps its height, so a name never moves the page. Home, End and wrap-around on the arrow keys came from the prototype and were not in Q4. A new fragment also scrolls whole into view, because focusing a field showed only its caret. Code review found that redrawing the review panel at the moment the red ring is released lost a click that began on the panel, so the release now waits 100 ms. A stale fixture in `test_keyboard_library_selection_and_fragment_movement` (a finding with no severity is sent back from Content) was fixed on its own in `f84f40e`. "Add another screenshot" arms and focuses its new slot, as assumed.
-
-## Next steps
-
-1. `/implement`: Set this to `done` with the date and the hash of the commit that holds the change, and tick step 7.

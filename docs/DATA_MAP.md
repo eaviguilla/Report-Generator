@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-21**, after Content's arrival sort of the stored findings was put back in `app.js` and the Content page's "Add a fragment" dropdown became an add row.
+> Last verified against source: **2026-10-21**, after opening Content began sorting the stored findings, a finding began with every location selected and no severity unless the library gives one, a library insert installed every tested app type's steps, the In Conclusion offers became one, a Content table stopped typing into cells a save had replaced, and an add row replaced the dropdown.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -148,7 +148,7 @@ Every mutating `Workspace` method takes this lock. If you add one that does not,
   - library insert and evidence upload send the **`X-Report-Saved-At` header** (read by `main.expected_revision`)
 - **Client serialization:** `trackMutation` queues library inserts and evidence uploads. A queued operation starts only after the previous one settles, so it reads the updated in-memory `saved_at`; `pendingMutation` is the caught queue tail.
   Each rendered library option is one-shot and clears the search synchronously, so repeated Enter cannot queue it twice while a new query gets a new option that can join the queue. A failed latest selection restores its captured query when the tester has not started another one.
-  `waitForMutations` drains the live queue tail in a loop, so Back or Next also waits for work appended after the navigation click.
+  `waitForMutations` drains the live queue tail in a loop, so Back or Next also waits for work appended after the navigation click. Undo and Redo (button and Ctrl/Cmd+Z, one shared `settleThenStep` in `save.js`) wait the same way before choosing a step, because a settled insert or upload adds its own history step and clears Redo; a second request during that wait is dropped.
 - **Same-tab history handoff:** each successful `applyServerRevision` records the newest revision in `sessionStorage["vulnreport-saved-at:{reportId}"]`. Separate tabs keep separate values. A clean document restored by bfcache or a Navigation Timing `back_forward` load reloads when this tab saved a newer revision on another page.
 - **409 body** (`main.stale_report_detail`) carries `code: "stale_report"`, `recoverable`, and `latest_saved_at`.
   Evidence upload converts a stale write under the evidence lock into this same response; the file is not left behind.
@@ -416,9 +416,10 @@ Anything that is not a numbered list leaves the carry untouched; a numbered list
 Merging also drops blank items, falling back to the first item when every item is blank.
 Installed app types are appended to `poc_variants`; only the app types just installed are removed from `poc_variant_declined`, because declining API and accepting Web are independent decisions.
 
-Nothing is written without a click.
-The Content page renders an offer, derived purely from current state, listing the app types that have steps and are neither installed (`poc_variants`) nor refused (`poc_variant_declined`).
-With more than one on offer the tester ticks which to install; `POST /reports/{id}/library/{library_id}` auto-installs **only** when exactly one variant applies, leaving the ambiguous case to that choice.
+A finding added from the library arrives with its steps in place. `POST /reports/{id}/library/{library_id}` installs **every** applicable variant, in `CHANNELS` order (web, then API), as one merged list, because the new finding starts with every target selected and so already touches every tested app type.
+`installLibraryContent` is its JavaScript twin for a title picked in a Findings row: it fills the Description, the Remediation and the steps, but only into a section the tester has not written, and never In Conclusion.
+Anything it leaves is a state-derived offer on the Content page, listing the app types that have steps and are neither installed (`poc_variants`) nor refused (`poc_variant_declined`).
+With more than one on offer the tester ticks which to install. Offers are never counted as gaps: they are listed as suggestions, and neither the page's verdict nor `generation_issues` reads them (`test_pending_suggestions_never_block_generation`).
 
 ---
 
@@ -726,6 +727,9 @@ A stored value that breaks a rule is a Setup issue (`setup_issues` words every r
 | finding completeness | `finding_is_complete` | `validateFindingsPage`, `updateFindingSummary` |
 | a report with no findings may continue to Content | `edit` checks only that every finding is complete | `validateFindingsPage` refuses only an incomplete finding. Pinned by the `no_findings` case of the Findings-gate contract test |
 | a finding claims a location at all | `scope_has_location` | `scopeHasLocation`, `scopeTargetIds` — `target_ids` is **presence only**, neither side checks that they resolve; a typed line is held to more, see below |
+| a new finding starts with every target selected | `scope_of_every_target`, used by `insert_library` | `allTargetsScope`, used by `addFinding` on the Findings page. The ids are written out, not a mode: `Scope.mode` has one legal value, so a target added to Setup later never joins an existing finding. No guard ties the two together beyond `test_a_library_finding_arrives_with_every_location_selected` and `test_a_blank_finding_starts_with_every_location_selected` |
+| a library finding arrives with Description, Remediation and steps in place | `insert_library` (steps for every applicable app type, web then API, as one list) | `installLibraryContent`, for a title picked in a Findings row: only into sections with nothing written, never In Conclusion |
+| which Setup fields carry the `*` | the `missing_*` issue codes of `setup_results` | `REQUIRED_SETUP_FIELDS` in `app.js`, which also decides which field `validateSetupPage` ringed after Next. `test_setup_stars_exactly_the_fields_that_block_next` compares the two |
 | which typed lines in the additional-locations box count | `location_lines` | `locationLines` |
 | a scope still reaches a surviving target | `_scope_reaches_a_location` | `scopeReaches` — resolution-aware, intersects against the target list |
 | which locations a finding prints | `docx_report._finding_locations` | none — generation is server-only |
@@ -917,8 +921,8 @@ Every one of those guards is `await window.vrDialog.confirm(...)` (`dialog.js`),
 The difference is load-bearing for anything keyboard- or focus-related: a native `window.confirm` blocks the JavaScript thread, whereas a `vrDialog` is an ordinary DOM overlay that leaves timers, autosave, and document-level key handlers running underneath it.
 While one is open, `document.querySelector("[data-dialog]")` finds its backdrop; the evidence lightbox is a separate, native `<dialog>` opened with `showModal()` and carries no such attribute.
 
-**`replaceFromLibrary` no longer confirms or copies content.** A title match on the Findings page now silently applies only `title`, `likelihood`, `impact`, `severity`, `library_ref` (`applyLibraryEntry`) — `contents` is untouched.
-Instead, each library-sourced content section (`description`, `recommended_remediation`, and `proof_of_concept`) offers its own client-only, state-derived banner on the Content page — same pattern as the pre-existing proof-of-concept offer — with three choices: keep, replace, or add (merge-append) the library's fragments for that section.
+**`replaceFromLibrary` no longer confirms, and fills only what the tester has not written.** A title match on the Findings page applies `title`, `likelihood`, `impact`, `severity` (blank when the entry gives none, never `informational`), `library_ref` (`applyLibraryEntry`), then `installLibraryContent` fills each section that holds no written content.
+A section the tester has written keeps its own client-only, state-derived banner on the Content page, with three choices: keep, replace, or add (merge-append) the library's fragments for that section.
 `description`/`recommended_remediation` resolution is tracked in the new `content_offer_resolved` field (§6) and has no server-side twin, since the mutation rides the ordinary autosave PUT like any other Content-page edit.
 `proof_of_concept`'s offer reuses `poc_variant`/`poc_variant_declined` and, because `apply_poc_variant`/`applyPocVariant` already have a Python/JavaScript twin, its new merge-append mode had to be added to **both** sides (see the table above).
 `previous_proof_of_concept` is excluded from this mechanism entirely — it is never library-sourced.
@@ -955,19 +959,25 @@ which dispatches `reportchange` again — an unbounded save loop consuming the s
 The `focusout` handler dispatches one extra tick so leaving a field is the moment a banner can appear.
 There is **no wrapper element**: `.content-block` is a grid styled by child position in rules duplicated in `taste.css`, and a permanent slot would cost every section its heading gap.
 
-**The In Conclusion section carries two more client-only banners**, both state-derived like the library offers and both writing nothing without a click.
-The first quotes `pocLastStep(finding)` — the last non-blank line of the last `numbered_list`, `bulleted_list` or `note` in `proof_of_concept`, scanning in reverse, with `previous_proof_of_concept` excluded so a retest conclusion never quotes last year's steps — and writes it **into the front of the paragraph that already holds the status sentence**, not into a paragraph of its own.
+**The In Conclusion section carries client-only banners**, state-derived like the library offers and writing nothing without a click.
+An **empty** conclusion (no paragraph holds text) with a step to quote gets **one** banner. It writes the step and the standard sentence into the empty paragraph, as `Observe the balance of another user. The finding "X" is still Open.`, and records the step in `conclusion_offer_resolved`.
+Dismissing it leaves the sentence-only banner below on offer. It used to be two banners, and the step one inserted a paragraph of its own above the empty one.
+Otherwise the step and the sentence are offered separately, as described next.
+The step banner quotes `pocLastStep(finding)` — the last non-blank line of the last `numbered_list`, `bulleted_list` or `note` in `proof_of_concept`, scanning in reverse, with `previous_proof_of_concept` excluded so a retest conclusion never quotes last year's steps — and writes it **into the front of the paragraph that already holds the status sentence**, not into a paragraph of its own.
 That is why the sentence has to be recognised as a tail (§12); a quoted step and the sentence share one paragraph, reading as `Observe the balance of another user. The finding "X" is still Open.` It is suppressed once that text is in `conclusion_offer_resolved` (§6), and the primary button becomes **Update the quoted step** when the paragraph already starts with a previously offered line,
 so a corrected step replaces its predecessor via `runsAfter` rather than stacking in front of it.
 Once the tester edits the quoted text it no longer matches, and a later step goes in front of their words instead of overwriting them.
 Deliberate consequences: a proof of concept ending in an image, table or code block is offered the prose line *above* it, and the copied line is a **snapshot** — editing the step later does not update the conclusion, though it does re-offer.
-The second banner appears when the section holds a text-less paragraph and no paragraph ending with the sentence, and writes the sentence back **in place** into the last such paragraph, leaving the fragment count unchanged, and clears `conclusion_offer_resolved` — a conclusion returned to boilerplate holds nothing the tester chose,
+The sentence banner appears when the section holds a text-less paragraph and no paragraph ending with the sentence, and writes the sentence back **in place** into the last such paragraph, leaving the fragment count unchanged, and clears `conclusion_offer_resolved` — a conclusion returned to boilerplate holds nothing the tester chose,
 so an earlier "not that step" no longer describes anything and the step offer starts over.
 Accepting it swaps one readiness row for another (`text is required` becomes `still holds the default sentence`), which is why its copy says so; it is never a move from clean to blocked.
+The focused block keeps its banners while the tester types, so a button can outlive the paragraph it was drawn for.
+**Use it**, **Put it back**, **Update the quoted step** and **Replace what I wrote** / **Add it to the end** each re-check their paragraph when clicked (still in the section, still empty or still reading what the banner saw).
+When it changed, the click redraws the banners and writes nothing, and `conclusion_offer_resolved` stays as it was.
 
-Both banners are built during `render()`, which does **not** run while the tester types — `scheduleSave` only queues `reportchange`, whose listeners are the readiness panel and the setup summaries.
+The conclusion banners are built during `render()`, which does **not** run while the tester types — `scheduleSave` only queues `reportchange`, whose listeners are the readiness panel and the setup summaries.
 So a banner earned by an edit appears at the next render (finding switch, section toggle, fragment add or delete, any banner click, undo/redo, or reload), not mid-keystroke.
-That is what keeps the quoted text from churning character by character, and it is the reason neither banner needs a "finished typing" event, which the list textarea does not have.
+That is what keeps the quoted text from churning character by character, and it is the reason no conclusion banner needs a "finished typing" event, which the list textarea does not have.
 
 `offerConclusionRewrite` is the shared replace-or-keep prompt.
 There are five client-side title and status writes, and it is awaited at **three** of them: the Findings row title `onchange`, the Findings row status `onchange`, and the editor's `finishTitle`.

@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-15**, after the paragraph and note editor began saving the line breaks a tester types with Enter, which it had read as nothing.
+> Last verified against source: **2026-10-21**, after the Content page's "Add a fragment" dropdown became an add row of one-click buttons whose new fragment takes the cursor.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -473,7 +473,9 @@ The browser code is two IIFEs.
 `pageNames` maps each of the three to the name a tester sees, from the vocabulary's `report_pages` (§12).
 `start` decides which report the page edits, the server's or a restored recovery copy, and returns it with the field to point at (`changedField`, §10) and the save functions page code calls (`scheduleSave`, `save`, `setSaveState`, `SAVE_STATES`, `trackMutation`, `waitForMutations`, `markSaveConflict`, `showOperationError`, `applyServerRevision`, `finalizeTextTransaction`, `holdSaves`,
 `hasUnsavedEdits`).
-`vrSave` also carries three helpers that need no page: `reconcileCanonicalObject`, `isRecord`, and `activeTextEntry`, the one rule for which element counts as a focused text field.
+`vrSave` also carries three helpers that need no page: `reconcileCanonicalObject`, `isRecord`, and `activeTextEntry`.
+It carries `TEXT_ENTRY_SELECTOR` too, the one rule for which element counts as a text field.
+`activeTextEntry` applies it to the focused element, and the cursor lookup for a fragment just added applies it to that fragment's card.
 Seeding and `scope_text` below are page code in `app.js`; the rest of this section is `save.js`.
 
 The mutable object named `report` is the client's source of truth. Page code gets it from `start` and never replaces it.
@@ -501,7 +503,10 @@ Each row carries its finding's `uid` in `data-finding`.
 On Content (`contentFieldName`) it is `{finding, content, fragment}`.
 `finding` is the finding's `uid` and `content` the section's content type.
 `fragment` is the `frag_id` of the fragment card the element sits in, or `{uid}:{key}` for an Additional Information field.
-It is null for a control in the section but outside a card, such as Add a fragment or a library offer.
+It is null for a control in the section but outside a card, such as a button of an add row or a library offer.
+A click on an add row's button adds the fragment at the end of its section, and `render()` removes that button, so `rememberFocusedField` names the step for the section.
+The new fragment takes the cursor a frame later, after `scheduleSave` has recorded the add, so the add is a step of its own and the typing that follows is the next.
+A text field with the cursor when `scheduleSave` runs would instead start a text transaction that the typing joins.
 Some changes rebuild the Findings table or the Content pane before their step is recorded, such as a location box or Delete fragment.
 The rebuild removes the focused element.
 So `renderFindings()` and `render()` call `rememberFocusedField` first.

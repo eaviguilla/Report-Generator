@@ -59,9 +59,10 @@
     });
     return changed;
   }
+  const TEXT_ENTRY_SELECTOR = 'input:not([type="checkbox"],[type="radio"],[type="file"]), textarea, [contenteditable="true"]';
   const activeTextEntry = () => {
     const activeElement = document.activeElement;
-    return activeElement?.matches('input:not([type="checkbox"],[type="radio"],[type="file"]), textarea, [contenteditable="true"]') ? activeElement : null;
+    return activeElement?.matches(TEXT_ENTRY_SELECTOR) ? activeElement : null;
   };
   // app.js calls this once per report page; it returns the report the page edits, the server's or a recovery copy.
   // pageNames maps each report page, by the last part of its address, to the name a tester sees.
@@ -770,5 +771,5 @@
     }
     return {report, changedField, scheduleSave, scheduleAutomaticSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
   }
-  window.vrSave = {start, reconcileCanonicalObject, isRecord, activeTextEntry};
+  window.vrSave = {start, reconcileCanonicalObject, isRecord, activeTextEntry, TEXT_ENTRY_SELECTOR};
 })();

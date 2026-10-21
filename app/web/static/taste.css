@@ -1250,13 +1250,6 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   background: var(--canvas-deep);
   box-shadow: none;
 }
-/* The margins set the width; a percentage would add to them and overshoot the card edge. */
-.content-block > .add-fragment {
-  width: auto;
-  min-width: 0;
-  max-width: none;
-}
-
 /* ---- Finding header: title, then its details underneath. No card wraps the whole finding. ---- */
 .finding-card {
   overflow: visible;
@@ -1471,17 +1464,6 @@ button.content-toggle:hover:not(:disabled) small {
   overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.6;
-}
-
-.add-fragment {
-  border-color: var(--line-strong);
-}
-
-.add-fragment:hover:not(:disabled),
-.add-fragment:focus:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent-strong);
-  background: var(--accent-soft);
 }
 
 .evidence-set {
@@ -2273,7 +2255,6 @@ textarea,
 .finding-card,
 .evidence-tile,
 .evidence-add,
-.add-fragment,
 .scope-panel,
 .location-group,
 .test-configuration fieldset,
@@ -3116,27 +3097,106 @@ button.finding-nav.active:not(:disabled)::after {
   line-height: 19px;
 }
 
-/* ---- Add a fragment ---- */
-.add-fragment {
-  min-height: 34px;
+/* ---- Add row: one click adds a fragment at the end of its section ----
+   The buttons are grouped by purpose in one order everywhere. The name of the button under the pointer or the
+   cursor shows in a fixed slot at the right, so it covers nothing and moves nothing. */
+.add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
   margin: 10px 11px 11px;
-  padding: 1px 6px;
-  border: 1px dashed var(--line-strong);
+}
+
+.add-row-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.add-row-tray {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-quiet);
+}
+
+.add-row-group {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.add-row-group + .add-row-group {
+  margin-left: 5px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+}
+
+/* Written with the row's class in front so these beat the page-wide button colours, hover included. */
+.add-row .add-row-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--muted);
   background: transparent;
-  font-size: 11px;
-  font-weight: 600;
-  text-align: center;
-  text-align-last: center;
-  appearance: none;
+  transition-duration: 80ms;
 }
 
-.add-fragment:hover,
-.add-fragment:focus {
+.add-row .add-row-button:hover,
+.add-row .add-row-button:focus-visible {
   border-color: var(--accent);
   color: var(--accent-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-small);
+}
+
+.add-row .add-row-button:focus-visible {
+  outline-offset: 1px;
+}
+
+.add-row .add-row-button:active:not(:disabled) {
   background: var(--accent-soft);
+}
+
+/* The width holds the longest name with room for a wider font. When the row is too narrow for it beside the
+   buttons, the name wraps to a line of its own, and the line keeps its height empty so a name never moves the page. */
+.add-row-name {
+  min-width: 7.5em;
+  min-height: 16px;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* A fragment just added shows a short blue ring, so it is easy to find at the end of a long section. */
+.fragment.just-added,
+.evidence-tile.just-added {
+  animation: fragment-arrive 1100ms ease-out;
+}
+
+@keyframes fragment-arrive {
+  0% {
+    box-shadow: 0 0 0 9px var(--accent-soft), 0 0 0 2px var(--accent);
+  }
+
+  40% {
+    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 2px var(--accent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 transparent, 0 0 0 0 transparent;
+  }
 }
 
 /* ---- Readiness: a foldable card per finding, holding a dense Content/Needs table ---- */

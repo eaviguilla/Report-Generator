@@ -196,7 +196,7 @@ input:focus, select:focus, textarea:focus, .rich:focus { outline: 2px solid #c8d
 .list-marker { display: block; padding-right: 7px; }
 .list-textarea { width: 100%; min-height: 34px; overflow: hidden; resize: none; white-space: pre-wrap; }
 .list-line-measure { position: absolute; top: 0; left: -10000px; height: auto; min-height: 0; padding: 0; border: 0; visibility: hidden; white-space: pre-wrap; }
-.add-fragment { width: 100%; max-width: none; margin-top: 10px; }.image-preview { display: block; }
+.image-preview { display: block; }
 .evidence-environment { width: auto; }
 .evidence-environment-value { display: flex; min-height: 26px; align-items: center; padding: 3px 8px; border: 1px solid var(--line); font-size: 11px; font-weight: 500; }.table-fragment { width: 100%; border: 1px solid var(--line); border-collapse: collapse; table-layout: fixed; background: var(--surface-raised); }
 .table-fragment th { font-size: 11px; font-weight: 600; }

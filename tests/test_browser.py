@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import socket
 import hashlib
 import threading
@@ -40,6 +41,20 @@ AUTOSAVE_TEST_DEFAULT = """(() => {
         set: value => { explicit = value; },
     });
 })()"""
+
+# The newest fragment of a section, and whether the cursor is in it. A screenshot is a tile, which holds the cursor itself.
+NEWEST_FRAGMENT_AND_CURSOR = """(contentType) => {
+    const block = document.querySelector(`.content-block[data-content-type="${contentType}"]`);
+    const newest = [...block.querySelectorAll('[data-fragment-id]')].at(-1);
+    const active = document.activeElement;
+    return {
+        tag: newest.querySelector('.tag')?.textContent ?? null,
+        isTile: newest.classList.contains('evidence-tile'),
+        hasCursor: newest.contains(active),
+        activeIsTile: active === newest,
+        activeTag: active.tagName,
+    };
+}"""
 
 
 def setup_issue(field_name: str, value: str, environment: str = "production") -> str:
@@ -156,6 +171,26 @@ class BrowserWorkflowTests(unittest.TestCase):
             main.sync_evidence_image_slots(finding, report)
         main.workspace.save(report)
         return report.report_id
+
+    # The order of an add row in every section. A section that lacks a type lacks its button.
+    ADD_ROW_ORDER = ("paragraph", "numbered_list", "bulleted_list", "image", "table", "code_block", "note", "instance_title")
+
+    def add_fragment(self, scope, section: str, kind: str) -> None:
+        """Click one button of a section's add row. `scope` is the page or a block inside it, and `kind`
+        is the fragment type, such as "numbered_list"."""
+        row = scope.get_by_role("toolbar", name=f"Add a fragment to {section}", exact=True)
+        row.get_by_role("button", name=f"Add {kind.replace('_', ' ')}", exact=True).click()
+
+    def _report_with_every_section(self, status: str = "open_previously_discovered") -> str:
+        """A ready report whose one finding prints all five sections, the way a retested finding does."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        finding = report.vulnerabilities[0]
+        finding.status = status
+        main.provision(finding)
+        main.sync_evidence_image_slots(finding, report)
+        main.workspace.save(report)
+        return report_id
 
     def importable_docx(self) -> bytes:
         report_id = self.ready_report(include_finding=True)
@@ -310,7 +345,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             description_toggle.click()
         fragments = page.locator("#finding-editor .fragment")
         initial_fragment_count = fragments.count()
-        page.get_by_role("combobox", name="Add fragment to Description").select_option(label="note")
+        self.add_fragment(page, "Description", "note")
         self.assertEqual(fragments.count(), initial_fragment_count + 1)
 
         page.goto(f"{self.base_url}/")
@@ -3350,7 +3385,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.get_by_role("button", name="Saved").wait_for(timeout=5_000)
         self.assertEqual(page.get_by_text("Non-Production evidence image required", exact=True).count(), 0)
 
-        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        self.add_fragment(proof, "Proof of Concept", "image")
         image_cards = proof.locator(".evidence-tile")
         self.assertEqual(image_cards.count(), 3)
         self.assertEqual(proof.locator(".evidence-environment").last.input_value(), "production")
@@ -3411,7 +3446,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             proof.locator(".evidence-environment").first.locator("option").all_inner_texts(),
             ["Production", "Non-Production (supporting)"],
         )
-        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        self.add_fragment(proof, "Proof of Concept", "image")
         proof.locator(".evidence-environment").last.select_option("non_production")
         page.locator("#save-button").click()
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
@@ -3473,7 +3508,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
-        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        self.add_fragment(proof, "Proof of Concept", "image")
         added = proof.locator(".evidence-tile").last.get_attribute("data-fragment-id")
 
         proof.locator(f'.evidence-tile[data-fragment-id="{added}"] .evidence-environment').select_option("production")
@@ -3497,7 +3532,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
-        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        self.add_fragment(proof, "Proof of Concept", "image")
         added = proof.locator(".evidence-tile").last.get_attribute("data-fragment-id")
         proof.locator(f'.evidence-tile[data-fragment-id="{added}"] .evidence-environment').select_option("production")
         page.get_by_role("button", name="Save").click()
@@ -3527,7 +3562,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
-        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        self.add_fragment(proof, "Proof of Concept", "image")
         added = proof.locator(".evidence-tile").last.get_attribute("data-fragment-id")
         environment = proof.locator(f'.evidence-tile[data-fragment-id="{added}"] .evidence-environment')
         environment.focus()
@@ -3726,7 +3761,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         current_page.goto(f"{self.base_url}/reports/{report_id}/edit")
 
         stale_proof = stale_page.locator(".content-block").filter(has_text="Proof of Concept").last
-        stale_proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        self.add_fragment(stale_proof, "Proof of Concept", "image")
         supporting_tile = stale_proof.locator(".evidence-tile").last
         supporting_tile.locator(".evidence-environment").select_option("non_production")
         supporting_tile.locator(".evidence-caption").fill("Supporting response after conflict")
@@ -3787,7 +3822,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             report_id,
         )
         proof = page.locator(".content-block").filter(has_text="Proof of Concept").last
-        proof.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("image")
+        self.add_fragment(proof, "Proof of Concept", "image")
         supporting_tile = proof.locator(".evidence-tile").last
         supporting_tile.locator(".evidence-environment").select_option("non_production")
         supporting_fragment_id = supporting_tile.get_attribute("data-fragment-id")
@@ -4118,7 +4153,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         description = page.locator(".content-block").filter(has_text="Description")
         cards = description.locator(".fragment")
         initial_count = cards.count()
-        description.get_by_role("combobox", name="Add fragment to Description").select_option("note")
+        self.add_fragment(description, "Description", "note")
         self.assertEqual(cards.count(), initial_count + 1)
         cards.last.get_by_role("button", name="Move fragment up").click()
         self.assertEqual(cards.nth(initial_count - 1).locator(".tag").text_content(), "note")
@@ -4777,7 +4812,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
-        remediation_block.get_by_role("combobox", name="Add fragment to Recommended Remediation").select_option("table")
+        self.add_fragment(remediation_block, "Recommended Remediation", "table")
         remediation_block = page.locator(".content-block").filter(has_text="Recommended Remediation")
         remediation_block.get_by_role("button", name="Add below").click()
         page.get_by_role("button", name="Previous: Findings").click()
@@ -4865,7 +4900,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(conclusion.locator(".fragment").count(), 1, "accepting the offer added a fragment")
 
         conclusion.locator(".rich").first.fill("Testing confirmed that compensating controls reduce the exposure. The issue remains open pending remediation.")
-        conclusion.get_by_role("combobox", name="Add fragment to In Conclusion").select_option("note")
+        self.add_fragment(conclusion, "In Conclusion", "note")
         conclusion.locator(".fragment").last.locator(".rich").fill("Monitor the control until permanent remediation is complete.")
 
         page.get_by_role("button", name="Save").click()
@@ -4881,8 +4916,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
 
         for fragment_type in ("numbered_list", "bulleted_list", "table", "note", "code_block", "image"):
-            page.get_by_role("combobox", name="Add fragment to Description").select_option(fragment_type)
-        page.get_by_role("combobox", name="Add fragment to Proof of Concept").select_option("instance_title")
+            self.add_fragment(page, "Description", fragment_type)
+        self.add_fragment(page, "Proof of Concept", "instance_title")
         self.assertEqual(page.locator(".table-fragment").count(), 1)
         self.assertGreaterEqual(page.locator(".fragment .rich").count(), 3)
         self.assertGreaterEqual(page.locator(".list-textarea").count(), 2)
@@ -4993,7 +5028,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.keyboard.press("Enter")
         page.keyboard.press("Enter")
 
-        description.get_by_role("combobox", name="Add fragment to Description").select_option("note")
+        self.add_fragment(description, "Description", "note")
         expect(description.locator(".fragment .tag").filter(has_text="note")).to_have_count(1)
         for frag_id in ("f_between", "f_trailing", "f_saved"):
             with self.subTest(fragment=frag_id):
@@ -6016,7 +6051,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(proof.locator(".evidence-tile button.danger").first.is_disabled(), "the required evidence must not be deletable")
 
         # Only the last one of each is guaranteed, so a second is the tester's to remove.
-        proof.locator('select.add-fragment').select_option("numbered_list")
+        self.add_fragment(proof, "Proof of Concept", "numbered_list")
         cards = proof.locator('.fragment').filter(has=page.locator('.tag:text-is("numbered list")'))
         self.assertEqual(cards.count(), 2)
         self.assertFalse(cards.last.locator("button.danger").is_disabled(), "a second steps list is deletable")
@@ -6494,8 +6529,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
         description = page.locator(".content-block").filter(has_text="Description").first
-        description.get_by_role("combobox", name="Add fragment to Description").select_option("table")
-        description.get_by_role("button", name="Add column").click()
+        self.add_fragment(description, "Description", "table")
         cells = page.locator(".table-cell-input")
         expect(cells).to_have_count(4)
 
@@ -6520,18 +6554,368 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("#issue-count")
         description = page.locator(".content-block").filter(has_text="Description").first
-        description.get_by_role("combobox", name="Add fragment to Description").select_option("table")
+        self.add_fragment(description, "Description", "table")
         cell = page.locator(".table-cell-input").last
         cell.wait_for()
         # The state the save-while-typing race leaves behind: on screen, but not in the model.
         cell.evaluate("node => { node.value = 'UNCOMMITTED'; }")
         description.get_by_role("button", name="Add row").click()
-        page.wait_for_function("() => document.querySelectorAll('.table-cell-input').length > 2")
+        page.wait_for_function("() => document.querySelectorAll('.table-cell-input').length > 4")
         self.assertIn(
             "UNCOMMITTED",
             page.locator(".table-cell-input").evaluate_all("nodes => nodes.map(node => node.value)"),
             "the redraw dropped an edit that was still only on screen",
         )
+
+    def test_every_open_section_has_an_add_row_with_the_types_it_allows_in_one_order(self) -> None:
+        report_id = self._report_with_every_section()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        written = ("paragraph", "numbered_list", "bulleted_list", "image", "table", "note", "code_block")
+        proof = ("numbered_list", "image", "bulleted_list", "instance_title", "note", "code_block")
+        # The types each section allows, and how many buttons sit in each group: text, lists, media and code, notes.
+        sections = {
+            "Description": (written, [1, 2, 3, 1]),
+            "Recommended Remediation": (written, [1, 2, 3, 1]),
+            "Previous Proof of Concept": (proof, [2, 2, 2]),
+            "Proof of Concept": (proof, [2, 2, 2]),
+            "In Conclusion": (("paragraph", "note"), [1, 1]),
+        }
+        for section, (allowed, group_sizes) in sections.items():
+            with self.subTest(section=section):
+                row = page.get_by_role("toolbar", name=f"Add a fragment to {section}", exact=True)
+                expect(row).to_have_count(1)
+                labels = row.get_by_role("button").evaluate_all("buttons => buttons.map(button => button.getAttribute('aria-label'))")
+                self.assertEqual(labels, [f"Add {kind.replace('_', ' ')}" for kind in self.ADD_ROW_ORDER if kind in allowed])
+                self.assertEqual(row.locator(".add-row-group").evaluate_all("groups => groups.map(group => group.children.length)"), group_sizes)
+                # A type with no icon would show the word "undefined" in its button.
+                expect(row.locator(".add-row-button svg")).to_have_count(len(labels))
+        expect(page.locator('[role="toolbar"][aria-label^="Add a fragment to"]')).to_have_count(len(sections))
+        expect(page.locator("select.add-fragment")).to_have_count(0)
+
+    def test_a_click_on_an_add_button_appends_that_fragment_at_the_end_and_saves_it(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        kinds = ["paragraph", "numbered_list", "bulleted_list", "image", "table", "code_block", "note"]
+        for kind in kinds:
+            with page.expect_response(lambda response: response.request.method == "PUT"):
+                self.add_fragment(description, "Description", kind)
+        stored = main.workspace.load(report_id).vulnerabilities[0]
+        saved = next(content for content in stored.contents if content.type == "description").fragments
+        self.assertEqual([fragment.type for fragment in saved], ["paragraph", *kinds])
+
+    def test_the_new_fragment_takes_the_cursor_whatever_its_kind(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        cases = [("Description", "description", kind) for kind in ("paragraph", "numbered_list", "bulleted_list", "image", "table", "code_block", "note")]
+        cases.append(("Proof of Concept", "proof_of_concept", "instance_title"))
+        for section, content_type, kind in cases:
+            with self.subTest(kind=kind):
+                self.add_fragment(page.locator(f'.content-block[data-content-type="{content_type}"]'), section, kind)
+                page.wait_for_function(f"(contentType) => ({NEWEST_FRAGMENT_AND_CURSOR})(contentType).hasCursor", arg=content_type, timeout=3_000)
+                state = page.evaluate(NEWEST_FRAGMENT_AND_CURSOR, content_type)
+                if kind == "image":
+                    self.assertTrue(state["isTile"] and state["activeIsTile"], state)
+                else:
+                    self.assertEqual(state["tag"], kind.replace("_", " "))
+                    self.assertIn(state["activeTag"], {"DIV", "TEXTAREA", "INPUT"}, state)
+
+    def test_a_new_table_starts_with_two_header_cells_and_a_body_row_of_two_and_saves_that_way(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        with page.expect_response(lambda response: response.request.method == "PUT"):
+            self.add_fragment(description, "Description", "table")
+        table = description.locator(".table-fragment")
+        expect(table.locator("thead .table-cell-input")).to_have_count(2)
+        expect(table.locator("tbody .table-cell-input")).to_have_count(2)
+        stored = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "description")
+        saved = next(fragment for fragment in stored.fragments if fragment.type == "table")
+        self.assertEqual((len(saved.header), [len(row) for row in saved.rows]), (2, [2]))
+
+    def test_typing_after_adding_a_table_goes_into_its_first_header_cell(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        self.add_fragment(description, "Description", "table")
+        first_header = description.locator(".table-fragment thead .table-cell-input").first
+        expect(first_header).to_be_focused()
+        # No click in between.
+        page.keyboard.type("Parameter")
+        expect(first_header).to_have_value("Parameter")
+
+    def test_a_screenshot_slot_added_by_the_row_or_by_add_another_screenshot_is_armed_for_paste(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        proof = page.locator('.content-block[data-content-type="proof_of_concept"]')
+        tiles = proof.locator(".evidence-tile")
+        armed = re.compile(r"\bis-paste-target\b")
+        expect(tiles).to_have_count(1)
+        self.add_fragment(proof, "Proof of Concept", "image")
+        expect(tiles).to_have_count(2)
+        expect(tiles.last).to_have_class(armed)
+        expect(tiles.last).to_be_focused()
+        proof.get_by_role("button", name="Add another screenshot").click()
+        expect(tiles).to_have_count(3)
+        expect(tiles.last).to_have_class(armed)
+        expect(proof.locator(".evidence-tile.is-paste-target")).to_have_count(1)
+
+    def test_add_another_screenshot_still_inserts_after_its_own_set(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        proof = next(content for content in report.vulnerabilities[0].contents if content.type == "proof_of_concept")
+        proof.fragments += [
+            InstanceTitleFragment(frag_id="f_second_instance", type="instance_title", text="Second page"),
+            ImageFragment(frag_id="f_second_image", type="image", environment="production"),
+        ]
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="proof_of_concept"]')
+        with page.expect_response(lambda response: response.request.method == "PUT"):
+            block.get_by_role("button", name="Add another screenshot").first.click()
+        stored = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
+        self.assertEqual([fragment.type for fragment in stored.fragments], ["numbered_list", "image", "image", "instance_title", "image"])
+
+    def test_a_new_fragment_shows_no_red_ring_until_the_cursor_leaves_it(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        issues = page.locator("#issue-count")
+        expect(issues).to_have_text(re.compile(r"\d+ to fill in"))
+        description = page.locator('.content-block[data-content-type="description"]')
+        red = re.compile(r"\bis-incomplete\b")
+        for kind in ("paragraph", "numbered_list", "table"):
+            with self.subTest(kind=kind):
+                before = int(issues.inner_text().split()[0])
+                self.add_fragment(description, "Description", kind)
+                newest = description.locator("[data-fragment-id]").last
+                # The fragment is still to be filled in, and the list says so. Only its red ring waits.
+                expect(issues).to_have_text(f"{before + 1} to fill in")
+                expect(newest).not_to_have_class(red)
+                page.locator(".finding-nav-heading").click()
+                expect(newest).to_have_class(red)
+
+    def test_switching_to_another_program_does_not_end_the_wait_for_the_red_ring(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        self.add_fragment(description, "Description", "paragraph")
+        newest = description.locator("[data-fragment-id]").last
+        expect(newest.locator(".rich")).to_be_focused()
+        red = re.compile(r"\bis-incomplete\b")
+
+        # A window that loses focus blurs its field while document.hasFocus() already answers false.
+        page.evaluate("() => { document.hasFocus = () => false; document.activeElement.blur(); }")
+        expect(newest).not_to_have_class(red)
+
+        # The same blur in a focused window is the cursor leaving, and it ends the wait.
+        page.evaluate("() => { delete document.hasFocus; }")
+        newest.locator(".rich").focus()
+        page.locator(".finding-nav-heading").click()
+        expect(newest).to_have_class(red)
+
+    def test_a_click_on_the_review_panel_right_after_an_add_is_not_lost(self) -> None:
+        """Pressing the panel takes the cursor out of the new fragment, which ends the wait for its red ring.
+        The panel was redrawn at that moment, and a click whose press and release land on different nodes does not happen."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        self.add_fragment(description, "Description", "paragraph")
+        expect(description.locator("[data-fragment-id]").last.locator(".rich")).to_be_focused()
+        arrow = page.get_by_role("button", name="Go to Recommended Remediation", exact=True)
+        target = arrow.get_attribute("data-review-fragment")
+        arrow.click()
+        expect(page.locator(f'[data-fragment-id="{target}"]')).to_have_class(re.compile(r"\bis-review-target\b"))
+
+    def test_a_new_fragment_that_starts_below_the_visible_part_of_the_pane_is_scrolled_into_view(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+        description.fragments += [ParagraphFragment(frag_id=f"f_pad_{number}", type="paragraph", runs=[Run(text=f"Paragraph {number}")]) for number in range(6)]
+        main.workspace.save(report)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        # The add row sits at the bottom edge of the pane, so a new table starts below what the tester can see.
+        page.evaluate("""() => {
+            const pane = document.querySelector('#finding-editor');
+            const row = document.querySelector('[role="toolbar"][aria-label="Add a fragment to Description"]');
+            pane.scrollTop += row.getBoundingClientRect().bottom - pane.getBoundingClientRect().bottom;
+        }""")
+        self.add_fragment(page.locator('.content-block[data-content-type="description"]'), "Description", "table")
+        # The caret alone in view is not enough, since focusing a field scrolls only far enough to show the caret.
+        page.wait_for_function("""() => {
+            const pane = document.querySelector('#finding-editor').getBoundingClientRect();
+            const cards = document.querySelectorAll('.content-block[data-content-type="description"] [data-fragment-id]');
+            const newest = cards[cards.length - 1];
+            const box = newest.getBoundingClientRect();
+            return newest.querySelector('.tag')?.textContent === 'table' && box.top >= pane.top && box.bottom <= pane.bottom;
+        }""", timeout=3_000)
+
+    def test_the_add_row_is_one_tab_stop_and_the_arrow_keys_move_inside_it(self) -> None:
+        report_id = self._report_with_every_section()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        row = page.get_by_role("toolbar", name="Add a fragment to Description", exact=True)
+        button = lambda kind: row.get_by_role("button", name=f"Add {kind}", exact=True)
+        page.locator('.content-block[data-content-type="description"] [data-fragment-id]').last.locator(".rich").focus()
+        page.keyboard.press("Tab")
+        expect(button("paragraph")).to_be_focused()
+        page.keyboard.press("ArrowRight")
+        expect(button("numbered list")).to_be_focused()
+        page.keyboard.press("End")
+        expect(button("note")).to_be_focused()
+        page.keyboard.press("ArrowRight")
+        expect(button("paragraph")).to_be_focused()
+        page.keyboard.press("ArrowLeft")
+        expect(button("note")).to_be_focused()
+        page.keyboard.press("Home")
+        expect(button("paragraph")).to_be_focused()
+        page.keyboard.press("End")
+        expect(button("note")).to_be_focused()
+        self.assertEqual(row.locator('button[tabindex="0"]').count(), 1)
+        # One Tab leaves the whole row, for the heading of the next section.
+        page.keyboard.press("Tab")
+        expect(page.locator('.content-block[data-content-type="recommended_remediation"] .content-toggle')).to_be_focused()
+        page.keyboard.press("Shift+Tab")
+        expect(button("note")).to_be_focused()
+
+    def test_enter_and_space_on_an_add_button_add_its_fragment(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        cards = description.locator("[data-fragment-id]")
+        for key in ("Enter", "Space"):
+            with self.subTest(key=key):
+                before = cards.count()
+                description.get_by_role("toolbar", name="Add a fragment to Description", exact=True).get_by_role("button", name="Add note", exact=True).focus()
+                page.keyboard.press(key)
+                expect(cards).to_have_count(before + 1)
+                expect(cards.last.locator(".tag")).to_have_text("note")
+
+    def test_the_add_row_names_the_button_under_the_pointer_and_moves_nothing(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        row = page.get_by_role("toolbar", name="Add a fragment to Description", exact=True)
+        name = row.locator(".add-row-name")
+        tray = row.locator(".add-row-tray")
+        expect(name).to_have_text("")
+        left = tray.bounding_box()["x"]
+        row.get_by_role("button", name="Add table", exact=True).hover()
+        expect(name).to_have_text("Table")
+        self.assertEqual(tray.bounding_box()["x"], left, "the name shifted the buttons")
+        page.mouse.move(2, 2)
+        expect(name).to_have_text("")
+
+    def test_the_add_row_names_the_button_the_cursor_is_on(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        name = page.get_by_role("toolbar", name="Add a fragment to Description", exact=True).locator(".add-row-name")
+        page.locator('.content-block[data-content-type="description"] [data-fragment-id]').last.locator(".rich").focus()
+        page.keyboard.press("Tab")
+        expect(name).to_have_text("Paragraph")
+        page.keyboard.press("ArrowRight")
+        expect(name).to_have_text("Numbered list")
+        page.keyboard.press("Tab")
+        expect(name).to_have_text("")
+
+    def test_a_name_that_does_not_fit_beside_the_buttons_takes_its_own_line_and_moves_nothing(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        # Two columns leave a section about 440px and a smaller window leaves less, so the name cannot always sit beside the buttons.
+        description.evaluate("block => { block.style.width = '360px'; }")
+        row = description.get_by_role("toolbar", name="Add a fragment to Description", exact=True)
+        tray = row.locator(".add-row-tray").bounding_box()
+        slot = row.locator(".add-row-name")
+        self.assertGreaterEqual(slot.bounding_box()["y"], tray["y"] + tray["height"], "the name did not wrap, so this test checks nothing")
+        heights = lambda: (row.bounding_box()["height"], description.bounding_box()["height"])
+        before = heights()
+
+        row.get_by_role("button", name="Add numbered list", exact=True).hover()
+        expect(slot).to_have_text("Numbered list")
+        self.assertEqual(heights(), before, "the name pushed the rest of the section down")
+        page.mouse.move(2, 2)
+        expect(slot).to_have_text("")
+        self.assertEqual(heights(), before)
+
+    def test_a_collapsed_section_and_a_locked_remediation_have_no_add_row(self) -> None:
+        report_id = self._report_with_every_section(status="resolved")
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        rows = page.locator('[role="toolbar"][aria-label^="Add a fragment to"]')
+        expect(page.get_by_role("toolbar", name="Add a fragment to Recommended Remediation", exact=True)).to_have_count(0)
+        expect(rows).to_have_count(4)
+        page.locator('.content-block[data-content-type="description"] .content-toggle').click()
+        expect(page.get_by_role("toolbar", name="Add a fragment to Description", exact=True)).to_have_count(0)
+        expect(rows).to_have_count(3)
+
+    def test_an_add_is_its_own_undo_step_and_typing_in_the_new_fragment_is_the_next(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+
+        def stored_description():
+            finding = main.workspace.load(report_id).vulnerabilities[0]
+            return next(content for content in finding.contents if content.type == "description").fragments
+
+        before = len(stored_description())
+        description = page.locator('.content-block[data-content-type="description"]')
+        self.add_fragment(description, "Description", "paragraph")
+        expect(description.locator("[data-fragment-id]").last.locator(".rich")).to_be_focused()
+        page.keyboard.type("Typed into the new paragraph")
+        page.locator(".finding-nav-heading").click()
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        self.assertEqual(len(stored_description()), before + 1)
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        fragments = stored_description()
+        self.assertEqual(len(fragments), before + 1, "the first Undo took the add back, not the typing")
+        self.assertEqual("".join(run.text for run in fragments[-1].runs), "")
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        self.assertEqual(len(stored_description()), before)
+
+    def test_a_new_fragment_arrives_with_a_short_ring(self) -> None:
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        self.add_fragment(description, "Description", "paragraph")
+        newest = description.locator("[data-fragment-id]").last
+        expect(newest).to_have_class(re.compile(r"\bjust-added\b"))
+        expect(newest).not_to_have_class(re.compile(r"\bjust-added\b"), timeout=3_000)
 
     def test_folding_a_section_leaves_its_header_under_the_pointer(self) -> None:
         """Lists size themselves a frame after the redraw, so a section above the one being folded
@@ -7451,8 +7835,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         description = page.locator(".content-block").filter(has_text="Description")
-        description.get_by_role("combobox", name="Add fragment to Description").select_option("numbered_list")
-        description.get_by_role("combobox", name="Add fragment to Description").select_option("bulleted_list")
+        self.add_fragment(description, "Description", "numbered_list")
+        self.add_fragment(description, "Description", "bulleted_list")
 
         numbered = description.get_by_role("textbox", name="Numbered list items")
         bulleted = description.get_by_role("textbox", name="Bulleted list items")

@@ -249,7 +249,7 @@
   };
   const rememberFocusedField = () => keepFieldName(pageFieldName(document.activeElement));
   const nameField = element => pageFieldName(element) || fieldBeforeRebuild;
-  const {isRecord, activeTextEntry} = window.vrSave;
+  const {isRecord, activeTextEntry, TEXT_ENTRY_SELECTOR} = window.vrSave;
   const {report, changedField, scheduleSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
   const updateSetupValidationNotice = () => {
     if (root.dataset.step !== "setup") return;
@@ -2655,7 +2655,15 @@
     };
   }
   // Creates the minimum valid data structure for a requested fragment type.
-  function newFragment(type) { const fragment = {frag_id:id("f"),type}; if (type === "paragraph" || type === "note") fragment.runs = []; else if (type.endsWith("list")) Object.assign(fragment,{items:[{runs:[]}],continue_numbering:false}); else if (type === "table") Object.assign(fragment,{header:[{runs:[]}],rows:[[{runs:[]}]]}); else if (type === "image") Object.assign(fragment,{evidence_id:null,caption:"",width_mm:null}); else if (type === "code_block") Object.assign(fragment,{caption:null,text:""}); else fragment.text=""; return fragment; }
+  function newFragment(type) { const fragment = {frag_id:id("f"),type}; if (type === "paragraph" || type === "note") fragment.runs = []; else if (type.endsWith("list")) Object.assign(fragment,{items:[{runs:[]}],continue_numbering:false}); else if (type === "table") Object.assign(fragment,{header:[{runs:[]},{runs:[]}],rows:[[{runs:[]},{runs:[]}]]}); else if (type === "image") Object.assign(fragment,{evidence_id:null,caption:"",width_mm:null}); else if (type === "code_block") Object.assign(fragment,{caption:null,text:""}); else fragment.text=""; return fragment; }
+  // A new screenshot belongs to the first affected environment that has none yet, or else to the first one.
+  function newImageFragment(finding) {
+    const image = newFragment("image");
+    const environments = affectedEnvironments(finding);
+    const existing = finding.contents.flatMap(item => item.fragments.filter(candidate => candidate.type === "image"));
+    image.environment = environments.find(environment => !existing.some(candidate => candidate.environment === environment)) || environments[0] || null;
+    return image;
+  }
   const EVIDENCE_ICONS = {
     image: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m3 15 4.5-4.5a2 2 0 0 1 2.8 0L15 15"/><circle cx="15.5" cy="8.5" r="1.2"/></svg>',
     earlier: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
@@ -2945,6 +2953,98 @@
     tile.append(spine, main, upload);
     return tile;
   }
+  // The buttons of an add row, grouped by purpose and in one order in every section: text, lists, media and code, notes.
+  // A section that does not allow a type has no button for it and the others keep their order. A type added to
+  // `allowed` needs a place in ADD_ROW_GROUPS, or it gets no button, and an entry in ADD_ROW_ICONS, or its button reads "undefined".
+  const ADD_ROW_GROUPS = [["paragraph"], ["numbered_list", "bulleted_list"], ["image", "table", "code_block"], ["note", "instance_title"]];
+  const addRowIcon = (shapes, size = 18, weight = 1.7) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${weight}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes}</svg>`;
+  const ADD_ROW_ICONS = {
+    plus: addRowIcon('<path d="M12 5v14M5 12h14"/>', 13, 2.4),
+    paragraph: addRowIcon('<path d="M4 6h16M4 10.5h16M4 15h16M4 19.5h9"/>'),
+    numbered_list: addRowIcon('<path d="M10 6h11M10 12h11M10 18h11"/><path d="M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>'),
+    bulleted_list: addRowIcon('<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.1" fill="currentColor" stroke="none"/>'),
+    image: addRowIcon('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'),
+    table: addRowIcon('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 10v10"/>'),
+    code_block: addRowIcon('<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>'),
+    note: addRowIcon('<path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/>'),
+    instance_title: addRowIcon('<path d="M6 12h12M6 20V4M18 20V4"/>'),
+  };
+  // The row that ends a section. One click adds that kind of fragment at the end of it. The row is one Tab stop and
+  // the arrow keys move inside it. The name of the button under the pointer or the cursor shows in a fixed slot at
+  // the right, so no tooltip covers anything and nothing shifts.
+  function renderAddRow(sectionName, allowedTypes, onAdd) {
+    const row = document.createElement("div");
+    row.className = "add-row";
+    row.setAttribute("role", "toolbar");
+    row.setAttribute("aria-label", `Add a fragment to ${sectionName}`);
+    const caption = document.createElement("span");
+    caption.className = "add-row-caption";
+    caption.innerHTML = `${ADD_ROW_ICONS.plus}Add`;
+    const tray = document.createElement("div");
+    tray.className = "add-row-tray";
+    const name = document.createElement("span");
+    name.className = "add-row-name";
+    name.setAttribute("aria-hidden", "true");
+    const buttons = [];
+    ADD_ROW_GROUPS.forEach(groupTypes => {
+      const group = document.createElement("div");
+      group.className = "add-row-group";
+      groupTypes.filter(type => allowedTypes.includes(type)).forEach(type => {
+        const words = type.replaceAll("_", " ");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "add-row-button";
+        button.dataset.label = words[0].toUpperCase() + words.slice(1);
+        button.setAttribute("aria-label", `Add ${words}`);
+        button.tabIndex = buttons.length ? -1 : 0;
+        button.innerHTML = ADD_ROW_ICONS[type];
+        button.onclick = () => onAdd(type);
+        group.append(button);
+        buttons.push(button);
+      });
+      if (group.children.length) tray.append(group);
+    });
+    row.append(caption, tray, name);
+    const show = button => { name.textContent = button ? button.dataset.label : ""; };
+    // A click leaves its button focused, but only a cursor the keyboard put there keeps its name showing.
+    const cursorButton = () => buttons.find(button => button === document.activeElement && button.matches(":focus-visible")) || null;
+    row.addEventListener("pointerover", event => show(event.target.closest(".add-row-button") || cursorButton()));
+    row.addEventListener("pointerleave", () => show(cursorButton()));
+    row.addEventListener("focusin", event => {
+      const at = buttons.indexOf(event.target);
+      if (at < 0) return;
+      buttons.forEach((button, index) => { button.tabIndex = index === at ? 0 : -1; });
+      show(buttons[at]);
+    });
+    row.addEventListener("focusout", event => { if (!row.contains(event.relatedTarget)) show(null); });
+    row.addEventListener("keydown", event => {
+      const at = buttons.indexOf(document.activeElement);
+      const next = {ArrowRight: (at + 1) % buttons.length, ArrowLeft: (at - 1 + buttons.length) % buttons.length, Home: 0, End: buttons.length - 1}[event.key];
+      if (at < 0 || next === undefined) return;
+      event.preventDefault();
+      buttons[next].focus();
+    });
+    return row;
+  }
+  // The fragment just added takes the cursor, scrolls into view and shows a short ring. This runs a frame after the
+  // redraw. render() restores the scroll position in a frame of its own, and the scroll here has to come after that.
+  function revealJustAdded(fragmentId) {
+    requestAnimationFrame(() => {
+      const card = document.querySelector(`[data-fragment-id="${fragmentId}"]`);
+      if (!card) return;
+      // A screenshot is a tile that takes the cursor itself, and the cursor arms it for pasting.
+      const field = card.classList.contains("evidence-tile") ? card : card.querySelector(TEXT_ENTRY_SELECTOR);
+      (field || card).focus({preventScroll: true});
+      // Focusing a field alone scrolls only far enough to show its caret, which can leave most of a new table below the fold.
+      card.scrollIntoView({block: "nearest"});
+      card.classList.add("just-added");
+      card.addEventListener("animationend", function done(event) {
+        if (event.target !== card) return;
+        card.classList.remove("just-added");
+        card.removeEventListener("animationend", done);
+      });
+    });
+  }
   // A run of adjacent image fragments, shown as one set so the screenshots read and reorder together.
   function renderEvidenceSet(images, content, rerender, finding) {
     const article = document.createElement("article");
@@ -2977,13 +3077,11 @@
     add.className = "evidence-add";
     add.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add another screenshot';
     add.onclick = () => {
-      const image = newFragment("image");
-      const environments = affectedEnvironments(finding);
-      const existing = finding.contents.flatMap(item => item.fragments.filter(candidate => candidate.type === "image"));
-      image.environment = environments.find(environment => !existing.some(candidate => candidate.environment === environment)) || environments[0] || null;
+      const image = newImageFragment(finding);
       content.fragments.splice(last + 1, 0, image);
       rerender();
       scheduleSave();
+      revealJustAdded(image.frag_id);
     };
     set.append(add);
     article.append(set);
@@ -3200,9 +3298,9 @@
         const height = Math.max(37, ...inputs.map(input => input.scrollHeight));
         inputs.forEach(input => { input.style.height = `${height}px`; });
       };
-      // The cell is looked up when the text is typed, never captured when the table is drawn: a save
-      // merges the server's copy into the model and replaces these cell objects, and an edit made to
-      // a captured one would mark the page changed while the model, and so the next save, kept the old text.
+      // Look the cell up when the text is typed, and never capture it when the table is drawn. A save merges the
+      // server's copy into the model and replaces these cell objects. An edit to a captured one marks the page
+      // changed while the model, and so the next save, keeps the old text.
       const cellInput = (cellAt, placeholder) => {
         const input = document.createElement("textarea");
         input.className = "table-cell-input";
@@ -3324,6 +3422,8 @@
     let expandedContentTypes;
     let engagementContextOpen = false;
     let reviewTargetId = null;
+    // The fragment the tester has just added. It still counts as something to fill in, but gets no red ring until the cursor has left it.
+    let justAddedFragmentId = null;
     // Fixed scalar fields shared by rendering and readiness, so visibility and validation cannot drift.
     const additionalInformationFields = finding => {
       const fields = [];
@@ -3473,7 +3573,7 @@
       // silences every competing mark so the requested field stands alone.
       const incomplete = reviewTargetId
         ? new Set(issues.filter(issue => issue.evidenceSlot && issue.fragmentId === reviewTargetId).map(issue => issue.fragmentId))
-        : new Set(issues.filter(issue => issue.fragmentId && !issue.evidenceSlot && (issue.level || "error") === "error").map(issue => issue.fragmentId));
+        : new Set(issues.filter(issue => issue.fragmentId && issue.fragmentId !== justAddedFragmentId && !issue.evidenceSlot && (issue.level || "error") === "error").map(issue => issue.fragmentId));
       pane.querySelectorAll("[data-fragment-id]").forEach(node => node.classList.toggle("is-incomplete", incomplete.has(node.dataset.fragmentId)));
       // Each section carries its own count, so a tester scrolling the page sees the gap without the panel.
       const typeByLabel = Object.fromEntries(Object.entries(contentNames).map(([type, label]) => [label, type]));
@@ -3634,6 +3734,16 @@
       });
     };
     document.addEventListener("reportchange", refreshContentOffers);
+    // Focus leaving the fragment just added ends the wait for its red ring. The Add button that made it is removed
+    // with the old pane and reports a focusout of its own, which is not about the new fragment, so only focus
+    // leaving the fragment's own fields counts. A window that loses focus keeps the cursor where it was.
+    pane.addEventListener("focusout", event => {
+      const card = justAddedFragmentId && pane.querySelector(`[data-fragment-id="${justAddedFragmentId}"]`);
+      if (!card || !card.contains(event.target) || card.contains(event.relatedTarget) || !document.hasFocus()) return;
+      justAddedFragmentId = null;
+      // 100 ms later, as reportchange does after a blur. Replacing the panel's rows during a press loses a click that began on one of them.
+      window.setTimeout(updateReadinessPanel, 100);
+    });
     const render = (focusedFindingUid) => {
       rememberFocusedField();
       // Rebuilding the pane resets its scroll, which would throw the tester back to the top after an upload.
@@ -3956,24 +4066,14 @@
           block.append(heading);
           if (!isExpanded) return block;
           block.append(...contentOffersFor(finding, content));
-          const appendFragmentMenu = () => {
-            const menu = document.createElement("select");
-            menu.className = "add-fragment";
-            menu.setAttribute("aria-label", `Add fragment to ${contentNames[content.type]}`);
-            menu.innerHTML = `<option value="">+ Add a fragment</option>${allowed[content.type].map(type => `<option value="${type}">${type.replaceAll("_", " ")}</option>`).join("")}`;
-            menu.onchange = () => {
-              if (!menu.value) return;
-              const fragment = newFragment(menu.value);
-              if (fragment.type === "image") {
-                const environments = affectedEnvironments(finding);
-                const existing = finding.contents.flatMap(item => item.fragments.filter(candidate => candidate.type === "image"));
-                fragment.environment = environments.find(environment => !existing.some(image => image.environment === environment)) || environments[0] || null;
-              }
-              content.fragments.push(fragment);
-              render();
-              scheduleSave();
-            };
-            block.append(menu);
+          // The new fragment still counts as something to fill in, but its red ring waits until the cursor has left it.
+          const addFragment = type => {
+            const fragment = type === "image" ? newImageFragment(finding) : newFragment(type);
+            content.fragments.push(fragment);
+            justAddedFragmentId = fragment.frag_id;
+            render();
+            scheduleSave();
+            revealJustAdded(fragment.frag_id);
           };
           if (finding.status === "resolved" && content.type === "recommended_remediation") {
             const locked = document.createElement("p");
@@ -3988,7 +4088,7 @@
               index -= 1;
               block.append(renderEvidenceSet(run, content, render, finding));
             }
-            appendFragmentMenu();
+            block.append(renderAddRow(contentNames[content.type], allowed[content.type], addFragment));
           }
           return block;
         };

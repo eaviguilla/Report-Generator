@@ -6484,6 +6484,34 @@ class BrowserWorkflowTests(unittest.TestCase):
                     (still_default, "issues" if still_default else "ready", still_default, still_default),
                 )
 
+    def test_table_cells_typed_after_an_autosave_survive_going_back_to_findings(self) -> None:
+        """A save merges the server's copy into the live model, which replaces a table's cell objects
+        while the text boxes on screen still point at the old ones. Whatever was typed after that
+        went into objects the model no longer held, and Back saved without it."""
+        report_id = self.ready_report(include_finding=True)
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator(".content-block").filter(has_text="Description").first
+        description.get_by_role("combobox", name="Add fragment to Description").select_option("table")
+        description.get_by_role("button", name="Add column").click()
+        cells = page.locator(".table-cell-input")
+        expect(cells).to_have_count(4)
+
+        cells.nth(0).fill("Header A")
+        # The first value is saved, and the save's response replaces the model's cells.
+        page.wait_for_selector('#save-button:not([data-save-state="saved"])', timeout=5_000)
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        for index, text in ((1, "Header B"), (2, "Cell A"), (3, "Cell B")):
+            cells.nth(index).fill(text)
+        page.get_by_role("button", name="Previous: Findings").click()
+        page.wait_for_url("**/findings")
+
+        stored = main.workspace.load(report_id).vulnerabilities[0]
+        table = next(fragment for content in stored.contents if content.type == "description" for fragment in content.fragments if fragment.type == "table")
+        texts = ["".join(run.text for run in cell.runs) for cell in [*table.header, *table.rows[0]]]
+        self.assertEqual(texts, ["Header A", "Header B", "Cell A", "Cell B"])
+
     def test_a_table_edit_on_screen_survives_adding_a_row(self) -> None:
         """Add row redraws from the model, so a keystroke that has not reached it yet must be flushed first."""
         report_id = self.ready_report(include_finding=True)

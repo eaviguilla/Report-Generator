@@ -3200,16 +3200,19 @@
         const height = Math.max(37, ...inputs.map(input => input.scrollHeight));
         inputs.forEach(input => { input.style.height = `${height}px`; });
       };
-      const cellInput = (cell, placeholder) => {
+      // The cell is looked up when the text is typed, never captured when the table is drawn: a save
+      // merges the server's copy into the model and replaces these cell objects, and an edit made to
+      // a captured one would mark the page changed while the model, and so the next save, kept the old text.
+      const cellInput = (cellAt, placeholder) => {
         const input = document.createElement("textarea");
         input.className = "table-cell-input";
-        input.value = value(cell);
+        input.value = value(cellAt());
         input.placeholder = placeholder;
         input.rows = 1;
         const fitToText = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
         fitToText();
         document.fonts?.ready.then(fitToText);
-        input.oninput = () => { cell.runs = input.value ? [{text:input.value}] : []; resizeTableRow(input.closest("tr")); changed(); };
+        input.oninput = () => { cellAt().runs = input.value ? [{text:input.value}] : []; resizeTableRow(input.closest("tr")); changed(); };
         return input;
       };
       const table = document.createElement("table");
@@ -3224,7 +3227,7 @@
       };
       const header = document.createElement("thead");
       const headerRow = document.createElement("tr");
-      fragment.header.forEach((cell, index) => { const headerCell = document.createElement("th"); headerCell.append(cellInput(cell, `Header ${index + 1}`)); headerRow.append(headerCell); });
+      fragment.header.forEach((_, index) => { const headerCell = document.createElement("th"); headerCell.append(cellInput(() => fragment.header[index], `Header ${index + 1}`)); headerRow.append(headerCell); });
       const actionHeader = document.createElement("th");
       actionHeader.className = "table-row-action";
       actionHeader.setAttribute("aria-label", "Row actions");
@@ -3234,7 +3237,7 @@
       const body = document.createElement("tbody");
       fragment.rows.forEach((row, rowIndex) => {
         const bodyRow = document.createElement("tr");
-        row.forEach((cell, columnIndex) => { const bodyCell = document.createElement("td"); bodyCell.append(cellInput(cell, `Row ${rowIndex + 1}, column ${columnIndex + 1}`)); bodyRow.append(bodyCell); });
+        row.forEach((_, columnIndex) => { const bodyCell = document.createElement("td"); bodyCell.append(cellInput(() => fragment.rows[rowIndex][columnIndex], `Row ${rowIndex + 1}, column ${columnIndex + 1}`)); bodyRow.append(bodyCell); });
         const actionCell = document.createElement("td");
         actionCell.className = "table-row-action";
         const removeButton = document.createElement("button");

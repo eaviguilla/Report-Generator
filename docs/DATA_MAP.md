@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-22**, after the GWAM segment gained a Report Name field of its own, typed on Setup and printed on the cover, in the footers and as the file name.
+> Last verified against source: **2026-10-22**, after a numbered copy of a saved report began keeping its file name stem within 150 characters, on top of the lock on `generated/` that stops two reports with the same typed file name overwriting each other.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -17,7 +17,7 @@ No database. Everything is JSON and PNG files under `data/`.
 ```
 data/
   prefs.json                                   app-wide preferences (library_path, tester)
-  .locks/<sha256-of-report_id>.lock            OS advisory lock, one per report
+  .locks/<sha256-of-report_id>.lock            OS advisory lock, one per report (plus one for the generated folder, §4)
   server.lock                                  held by a running app/init.py, one server per data folder
   apps/
     <app_name>/                                 e.g. Northstar_Banking, unnamed
@@ -134,6 +134,33 @@ Consequences worth knowing:
 
 Every mutating `Workspace` method takes this lock. If you add one that does not, you have introduced a race.
 
+**The generated folder has its own lock.** `Workspace.locked_generated_folder(folder)` is `_locked` keyed on `generated-folder:<resolved folder path>`, so it has the same in-process and cross-process layers and a lock file of its own under `data/.locks/`.
+`finalized_report` takes it for a POST generate, after the report lock and around two steps only: `unused_export_path` picks a free name and `atomic_write_bytes` writes it.
+The Word pass runs before it, so the folder lock is never held across Word.
+Two reports can print the same file name (two applications typing the same GWAM Report Name), and their report locks do not meet, so without this lock both picked `Quarterly Review.docx` and the second replace overwrote the first.
+Always take the report lock first and the folder lock second.
+A write that fails raises its `OSError` and leaves no file, because `atomic_write_bytes` removes its temporary sibling.
+Pinned by `test_two_reports_saved_at_once_under_one_typed_name_both_survive`,
+`test_a_save_waits_while_another_process_holds_the_generated_folder`
+and `test_a_failed_write_to_the_generated_folder_leaves_no_file_and_frees_the_folder`.
+The lock covers this app's own saves. A file another program drops into `generated/` is only seen by `unused_export_path`'s `exists()` check.
+
+**A numbered copy stays within the file name limit.**
+`unused_export_path` appends ` (2)`, ` (3)` and so on
+after `report_export_filename` has already cut a GWAM name to `REPORT_NAME_FILENAME_LIMIT` (150).
+When the unnumbered stem is within that limit,
+the allocator cuts the stem to `150 - len(" (n)")` and strips trailing spaces and dots before adding the number,
+so ` (10)` and ` (100)` take one and two more characters from the name and the final stem is never over 150.
+A candidate that the cut makes equal to an existing file (another report typed that name)
+is skipped like any other taken name.
+A stem that is already over 150 (an older name built from long parts) is numbered without a cut, as before.
+Pinned by `test_numbered_gwam_saves_keep_the_final_filename_stem_within_150_characters`,
+`test_a_multi_digit_number_takes_its_extra_characters_from_the_gwam_name_not_the_limit`,
+`test_a_numbered_gwam_name_skips_a_file_that_the_cut_name_already_matches`,
+`test_a_numbered_gwam_name_cut_on_a_space_does_not_double_the_space`,
+`test_a_numbered_name_already_over_the_limit_is_numbered_as_before`
+and `test_a_numbered_ordinary_name_keeps_its_whole_stem`.
+
 ---
 
 ## 5. Concurrency control: `saved_at`
@@ -210,6 +237,18 @@ A draft without the key loads as `""`, with no `load_path` repair and no schema 
 The value is kept when the segment changes away from GWAM, and nothing checks or prints it there, so choosing GWAM again brings the text back and a stored value that breaks the character rule cannot stop a save.
 `CHARACTER_RULES["report_name"]` is the Application name's symbols plus `/` and the en dash, up to 200 UTF-16 units.
 A GWAM draft written before the field existed has no name, so it shows the `missing_report_name` issue until the tester types one; nothing on disk is rewritten.
+`report_export_filename` uses the cleaned, cut name as the whole file name,
+and puts an underscore in front of one whose part before the first dot is a Windows device name
+(`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`, and the console devices `CONIN$` and `CONOUT$`,
+any case, spaces before the dot ignored;
+`COM0`, `LPT0`, `CONIN$X` and `CONIN` are not device names and stay as typed),
+because Windows cannot save such a file even with an extension.
+The test runs after the 150-character cut, since a cut can leave a bare `AUX`,
+and the underscore counts toward the 150, so the name is cut to 149 characters first;
+the displayed name is untouched.
+The `$` in `CONIN$` and `CONOUT$` is still a character-rule issue on Setup,
+but a stored or imported draft may hold it, and Export allows incomplete drafts,
+so the same escape keeps its ZIP name savable.
 The Report Name field sits after Application Name on Setup and is shown only while the segment is in `REPORT_NAME_SEGMENTS`, a list the page reads from `client_vocabulary()["report_name_segments"]`.
 
 `Status` and `Segment` each gained a member on 2026-09-21: `Status` is `Literal["open_new", "open_previously_discovered", "open_resolved_on_non_prod", "resolved", "closed"]` and `Segment` is `Literal["JH", "GWAM", "Asia", "GDT", "GFT"]` (`GFT` added 2026-09-22 on the same terms as `GDT`: no master of its own, one printed string).
@@ -1076,6 +1115,23 @@ Recorded so they are not rediscovered as bugs.
   **A Closed finding now takes the same divergence** — retest drops it, editable keeps it as Closed — but only the drop is shared: the remediation check stays `resolved`-only, because the app never writes a Closed finding's remediation and so has nothing canonical to demand back (§8).
   Findings that share a title pair with their own finding rows and CVSS rows in order, not through a dictionary keyed by title.
   A template with no `Section` table imports both CVSS values empty, which is normal for two of the four templates.
+- **The application name of a GWAM report is read from the cover's text boxes only.**
+  `parse_report_docx` pairs the `Application` label with the next line through `_cover_texts`,
+  the paragraphs inside `w:txbxContent`,
+  so a finding's list item or one-column table headed `Application` cannot conflict with the cover.
+  Two cover copies that disagree still raise the conflicting-values refusal,
+  and an empty cell still falls back to the title.
+  `_labelled_value` lets a label own the line after it and resumes after that line,
+  so an application named exactly `Application` is a value,
+  not a second label that would pair with the next cell (`Application Type`);
+  a cover copy with a different value still conflicts.
+  `_labelled_value(..., free_text=True)` reads the cell through `_visible_value`,
+  so a double space inside the typed name (`Northstar  Banking`) comes back unchanged in both modes;
+  `Delivered To` and the network cell still collapse spaces.
+  `test_application_list_or_table_text_cannot_be_read_as_gwam_cover_metadata`,
+  `test_a_gwam_application_name_keeps_the_spaces_inside_it_when_read_from_the_cover_cell`,
+  `test_an_application_named_like_its_cover_label_is_not_a_second_application_value`
+  and `test_a_cover_copy_that_differs_from_an_application_named_like_the_label_still_refuses_the_import` pin it.
 - **A GWAM report name the importer cannot read back is typed again.** The importer finds the cover title only when a segment comes first and the title splits on a spaced dash into three or more parts. A GWAM name that starts with anything else gives no segment, application name or report type, and nothing is raised.
   A title that starts with a segment but ends in a word that is not a report type gives, in an Editable copy of a GWAM report, a warning and an empty report type, where every other segment is refused. Retest import never reads the report name, because the old name carries the old test's type and year.
 - **`resources/report-name.docx` is a legacy template nothing renders.** Both release scripts ship it, and its footers still spell the old `{{segment}} - {{report-name}} - {{test-type}}` line. The four `MAIN*.docx` masters, which the generator uses, hold only `{{report-name}}` on the cover and in footers 5 and 8.

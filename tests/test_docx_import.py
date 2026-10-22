@@ -1876,6 +1876,23 @@ class RefusalMessageTests(unittest.TestCase):
             str(raised.exception),
         )
 
+    def test_a_built_cover_title_and_every_date_read_back_for_a_year_below_1000(self) -> None:
+        for year in (1, 99, 999):
+            with self.subTest(year=year), tempfile.TemporaryDirectory() as temporary_directory:
+                folder = Path(temporary_directory)
+                report = FragmentRecognitionTests._report(folder)
+                report.engagement.report_date = date(year, 1, 3)
+                window = report.engagement.test_windows["production"]
+                window.start_date, window.end_date = date(year, 1, 1), date(year, 1, 2)
+
+                payload, _, _ = parse_report_docx(render_report_docx(report, TEMPLATE, folder), mode="editable")
+
+                engagement = payload["engagement"]
+                self.assertEqual(engagement["report_type"], "annual_pentest")
+                self.assertEqual(engagement["report_date"], date(year, 1, 3).isoformat())
+                self.assertEqual(engagement["test_windows"]["production"]["start_date"], date(year, 1, 1).isoformat())
+                self.assertEqual(engagement["test_windows"]["production"]["end_date"], date(year, 1, 2).isoformat())
+
     def test_a_repeated_title_with_one_heading_left_names_the_finding_row(self) -> None:
         def share_a_title(document):
             _set_text(_heading(document, "Second finding"), "Authorization bypass")
@@ -1978,6 +1995,22 @@ class ReportNameImportTests(unittest.TestCase):
         self.assertEqual(engagement["app_name"], "Northstar Banking")
         self.assertIsNone(character_issue("report_name", old_title), "the old title would show as a Setup refusal")
 
+    def test_a_gwam_application_name_keeps_the_spaces_inside_it_when_read_from_the_cover_cell(self) -> None:
+        typed = "Northstar  Banking"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.segment = "GWAM"
+            report.engagement.report_name = "GWAM - Separate report title - Annual Pentest 2026"
+            report.engagement.app_name = typed
+            data = render_report_docx(report, TEMPLATE, folder)
+
+        for mode in ("editable", "retest"):
+            with self.subTest(mode):
+                payload, _, _ = parse_report_docx(data, mode=mode)
+                self.assertEqual(payload["engagement"]["app_name"], typed)
+                self.assertIsNone(character_issue("app_name", payload["engagement"]["app_name"]))
+
     def test_the_application_name_falls_back_to_the_title_when_the_cover_cell_is_empty(self) -> None:
         document = _edited(self._gwam_render("GWAM - Meridian Portal - Annual Pentest 2026"), _empty_application_cells)
 
@@ -1994,6 +2027,107 @@ class ReportNameImportTests(unittest.TestCase):
                 engagement = parse_report_docx(document, mode=mode)[0]["engagement"]
                 self.assertEqual(engagement["app_name"], "Meridian Portal")
                 self.assertEqual(engagement["report_name"], "")
+
+
+MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+
+
+class ApplicationCoverLabelScopeTests(unittest.TestCase):
+    """The application name of a segment with its own report name comes from the cover's Application
+    cell. A finding's own text can say "Application" too, and must not be read as the cover."""
+
+    @staticmethod
+    def _render_with_content(fragment) -> bytes:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.segment = "GWAM"
+            report.engagement.report_name = "GWAM - Separate report title - Annual Pentest 2026"
+            report.vulnerabilities[0].contents[0].fragments.append(fragment)
+            return render_report_docx(report, TEMPLATE, folder)
+
+    def test_application_list_or_table_text_cannot_be_read_as_gwam_cover_metadata(self) -> None:
+        value = "The authenticated administration portal."
+        cases = {
+            "bulleted list": ListFragment(
+                frag_id="f_application_list", type="bulleted_list",
+                items=[ListItem(runs=[Run(text="Application")]), ListItem(runs=[Run(text=value)])],
+            ),
+            "one-column table": TableFragment(
+                frag_id="f_application_table", type="table", caption="Scope notes",
+                header=[ListItem(runs=[Run(text="Application")])],
+                rows=[[ListItem(runs=[Run(text=value)])]],
+            ),
+        }
+        for shape, fragment in cases.items():
+            data = self._render_with_content(fragment)
+            for mode in ("editable", "retest"):
+                with self.subTest(shape=shape, mode=mode):
+                    engagement = parse_report_docx(data, mode=mode)[0]["engagement"]
+                    self.assertEqual(engagement["app_name"], "Northstar Banking")
+
+    def test_two_cover_copies_that_disagree_about_the_application_still_refuse_the_import(self) -> None:
+        def change_fallback_copy(document) -> None:
+            paragraphs = list(document.element.body.iter(qn("w:p")))
+            texts = paragraph_texts(document.element.body)
+            for index, text in enumerate(texts[:-1]):
+                in_fallback = any(ancestor.tag == MC_FALLBACK for ancestor in paragraphs[index].iterancestors())
+                if text == "Application" and in_fallback:
+                    for node in paragraphs[index + 1].iter(qn("w:t")):
+                        node.text = "Another Application"
+
+        data = _edited(ApplicationCoverLabelScopeTests._render_with_content(
+            ParagraphFragment(frag_id="f_plain", type="paragraph", runs=[Run(text="Plain.")])
+        ), change_fallback_copy)
+
+        with self.assertRaises(ReportImportError) as caught:
+            parse_report_docx(data, mode="editable")
+        self.assertIn('conflicting values for "Application"', str(caught.exception))
+
+    @staticmethod
+    def _render_named_application() -> bytes:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            folder = Path(temporary_directory)
+            report = FragmentRecognitionTests._report(folder)
+            report.engagement.segment = "GWAM"
+            report.engagement.app_name = "Application"
+            report.engagement.report_name = "GWAM - Separate typed title - Annual Pentest 2026"
+            return render_report_docx(report, TEMPLATE, folder)
+
+    def test_an_application_named_like_its_cover_label_is_not_a_second_application_value(self) -> None:
+        data = self._render_named_application()
+
+        for mode in ("editable", "retest"):
+            with self.subTest(mode=mode):
+                engagement = parse_report_docx(data, mode=mode)[0]["engagement"]
+                self.assertEqual(engagement["app_name"], "Application")
+                if mode == "editable":
+                    self.assertEqual(engagement["report_name"], "GWAM - Separate typed title - Annual Pentest 2026")
+
+    def test_a_cover_copy_that_differs_from_an_application_named_like_the_label_still_refuses_the_import(self) -> None:
+        def change_fallback_copy(document) -> None:
+            paragraphs = list(document.element.body.iter(qn("w:p")))
+            texts = paragraph_texts(document.element.body)
+            changed = 0
+            for index, text in enumerate(texts[:-1]):
+                in_fallback = any(ancestor.tag == MC_FALLBACK for ancestor in paragraphs[index].iterancestors())
+                if text == "Application" and texts[index + 1] == "Application" and in_fallback:
+                    nodes = list(paragraphs[index + 1].iter(qn("w:t")))
+                    nodes[0].text = "Another Application"
+                    for node in nodes[1:]:
+                        node.text = ""
+                    changed += 1
+            self.assertEqual(changed, 1)
+
+        data = _edited(self._render_named_application(), change_fallback_copy)
+
+        for mode in ("editable", "retest"):
+            with self.subTest(mode=mode):
+                with self.assertRaisesRegex(
+                    ReportImportError,
+                    r'conflicting values for "Application": "Application", "Another Application"\.$',
+                ):
+                    parse_report_docx(data, mode=mode)
 
 
 class FirstChangeTests(unittest.TestCase):

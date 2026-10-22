@@ -497,12 +497,36 @@ def _document_texts(document) -> list[str]:
     ]
 
 
-def _labelled_value(texts: list[str], label: str) -> str:
-    values = list(dict.fromkeys(
-        _clean(texts[index + 1])
-        for index, text in enumerate(texts[:-1])
-        if text == label and _clean(texts[index + 1])
-    ))
+def _cover_texts(document) -> list[str]:
+    """The paragraphs of the cover's text boxes, which all four masters keep as a box and its fallback copy.
+
+    A blank entry ends each box, so a label last in one box cannot pair with the first line of the next."""
+    texts: list[str] = []
+    for box in document.element.body.iter(qn("w:txbxContent")):
+        texts.extend(
+            "".join(node.text or "" for node in paragraph.iter(qn("w:t"))).strip()
+            for paragraph in box.iter(qn("w:p"))
+        )
+        texts.append("")
+    return texts
+
+
+def _labelled_value(texts: list[str], label: str, *, free_text: bool = False) -> str:
+    """The line after a label. A free-text value keeps the spaces inside it; the rest collapse them.
+
+    The line after a label belongs to that label, so a value that spells the label is not read as another label."""
+    read = _visible_value if free_text else _clean
+    found: list[str] = []
+    index = 0
+    while index < len(texts) - 1:
+        if texts[index] == label:
+            value = read(texts[index + 1])
+            if value:
+                found.append(value)
+            index += 2
+        else:
+            index += 1
+    values = list(dict.fromkeys(found))
     if len(values) > 1:
         raise ReportImportError(f'The document contains conflicting values for "{label}": {_quoted(values)}.')
     return values[0] if values else ""
@@ -1445,7 +1469,7 @@ def parse_report_docx(
             label = re.sub(r"\s+\d{4}$", "", parts[-1])
             report_type = REPORT_TYPE_BY_LABEL.get(label)
             if segment in REPORT_NAME_SEGMENTS:
-                app_name = _labelled_value(_document_texts(document), APPLICATION_COVER_LABEL) or app_name
+                app_name = _labelled_value(_cover_texts(document), APPLICATION_COVER_LABEL, free_text=True) or app_name
                 # A Retest import leaves the name to the tester, because it carries the old test's type and year.
                 if mode == "editable":
                     report_name = paragraph.text.strip()

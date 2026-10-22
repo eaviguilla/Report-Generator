@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ntpath
 import os
 import re
+import subprocess
 import sys
 import threading
 import unittest
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import date
 from io import BytesIO
@@ -1024,6 +1027,112 @@ class ReportApiTests(unittest.TestCase):
         report.engagement.report_name = "GWAM - Typed Name - Annual Pentest 2026"
 
         self.assertEqual(main.report_export_filename(report), "JH - Meridian Commerce API - Deployment Pentest 2026.zip")
+
+    def test_a_gwam_report_name_that_is_a_windows_device_name_still_gives_a_savable_file_name(self) -> None:
+        report = main.workspace.create_report()
+        report.engagement.segment = "GWAM"
+        cases = [
+            ("a device name", "CON", "_CON"),
+            ("a device name in lower case", "nul", "_nul"),
+            ("a numbered device name", "COM1", "_COM1"),
+            ("the last numbered device name", "LPT9", "_LPT9"),
+            ("a device name before an extra extension", "AUX.accounts", "_AUX.accounts"),
+            ("a device name with a space before the dot", "PRN .report", "_PRN .report"),
+            ("a name that cleans to a device name", "C:ON", "_CON"),
+            ("a name cut at 150 characters down to a device name", "AUX " + "." * 150 + "x", "_AUX"),
+            ("a name that only starts with a device name", "CONSOLE", "CONSOLE"),
+            ("a device name after another word", "GWAM CON", "GWAM CON"),
+            ("a number past the device range", "COM10", "COM10"),
+        ]
+        for label, typed, expected in cases:
+            for suffix in (".docx", ".zip"):
+                with self.subTest(label, suffix=suffix):
+                    report.engagement.report_name = typed
+                    filename = main.report_export_filename(report, suffix)
+                    self.assertEqual(filename, f"{expected}{suffix}")
+                    if hasattr(ntpath, "isreserved"):
+                        self.assertFalse(ntpath.isreserved(filename))
+        self.assertEqual(report_service.report_name_for(report), "COM10")
+
+    def test_an_escaped_gwam_device_name_file_name_keeps_the_150_character_limit(self) -> None:
+        report = main.workspace.create_report()
+        report.engagement.segment = "GWAM"
+        for typed in ("CON." + "A" * 146, "AUX " + "." * 150 + "x", "NUL." + "A" * 145 + " B"):
+            for suffix in (".docx", ".zip"):
+                with self.subTest(typed[:12], suffix=suffix):
+                    report.engagement.report_name = typed
+                    filename = main.report_export_filename(report, suffix)
+                    stem = filename[: -len(suffix)]
+                    self.assertLessEqual(len(stem), 150)
+                    self.assertTrue(stem.startswith("_"))
+                    self.assertEqual(stem, stem.strip(" ."))
+                    if hasattr(ntpath, "isreserved"):
+                        self.assertFalse(ntpath.isreserved(filename))
+        report.engagement.report_name = "CON." + "A" * 146
+        self.assertEqual(main.report_export_filename(report, ".docx"), "_CON." + "A" * 145 + ".docx")
+
+    def test_a_gwam_report_name_with_a_zero_numbered_device_name_is_left_alone(self) -> None:
+        report = main.workspace.create_report()
+        report.engagement.segment = "GWAM"
+        for typed in ("COM0", "LPT0", "com0.accounts", "LPT0 .report"):
+            for suffix in (".docx", ".zip"):
+                with self.subTest(typed, suffix=suffix):
+                    report.engagement.report_name = typed
+                    filename = main.report_export_filename(report, suffix)
+                    self.assertEqual(filename, f"{typed}{suffix}")
+                    if hasattr(ntpath, "isreserved"):
+                        self.assertFalse(ntpath.isreserved(filename))
+
+    def test_a_gwam_console_device_name_gives_a_savable_file_name(self) -> None:
+        report = main.workspace.create_report()
+        report.engagement.segment = "GWAM"
+        cases = [
+            ("the console input device", "CONIN$", "_CONIN$"),
+            ("the console output device", "CONOUT$", "_CONOUT$"),
+            ("a console device in lower case", "conout$", "_conout$"),
+            ("a console device before an extra extension", "CONIN$.accounts", "_CONIN$.accounts"),
+            ("a console device with a space before the dot", "CONOUT$ .report", "_CONOUT$ .report"),
+            ("a console device cut at 150 characters", "CONIN$ " + "." * 150 + "x", "_CONIN$"),
+            ("a console device name with more after it", "CONIN$X", "CONIN$X"),
+            ("a console device name without the dollar sign", "CONIN", "CONIN"),
+            ("a console device name after another word", "GWAM CONOUT$", "GWAM CONOUT$"),
+        ]
+        for label, typed, expected in cases:
+            for suffix in (".docx", ".zip"):
+                with self.subTest(label, suffix=suffix):
+                    report.engagement.report_name = typed
+                    filename = main.report_export_filename(report, suffix)
+                    self.assertEqual(filename, f"{expected}{suffix}")
+                    if hasattr(ntpath, "isreserved"):
+                        self.assertFalse(ntpath.isreserved(filename))
+        report.engagement.report_name = "CONOUT$." + "A" * 145
+        stem = main.report_export_filename(report, ".zip")[: -len(".zip")]
+        self.assertEqual(len(stem), 150)
+        self.assertTrue(stem.startswith("_CONOUT$."))
+        self.assertEqual(report_service.report_name_for(report), "CONOUT$." + "A" * 145)
+
+    def test_export_of_a_stored_or_imported_console_device_report_name_has_a_savable_zip_filename(self) -> None:
+        for typed, expected in (("CONIN$", "_CONIN$.zip"), ("CONOUT$", "_CONOUT$.zip")):
+            with self.subTest("stored", typed=typed):
+                report_id = self.new_report()
+                path = main.workspace.find_path(report_id)
+                draft = read_json(path)
+                draft["engagement"].update({"segment": "GWAM", "report_name": typed})
+                atomic_write_json(path, draft)
+                exported = self.client.get(f"/reports/{report_id}/export")
+                self.assertEqual(exported.status_code, 200)
+                self.assertIn(f'filename="{expected}"', exported.headers["content-disposition"])
+                with zipfile.ZipFile(BytesIO(exported.content)) as archive:
+                    self.assertEqual(json.loads(archive.read("draft.json"))["engagement"]["report_name"], typed)
+                self.assertEqual(main.workspace.load(report_id).engagement.report_name, typed)
+            with self.subTest("imported", typed=typed):
+                report = main.workspace.create_report().model_dump(mode="json", by_alias=True)
+                report["engagement"].update({"segment": "GWAM", "report_name": typed})
+                imported = self.client.post("/reports/import", files={"file": ("legacy.json", json.dumps(report).encode(), "application/json")})
+                self.assertEqual(imported.status_code, 200)
+                exported = self.client.get(f"/reports/{imported.json()['report_id']}/export")
+                self.assertEqual(exported.status_code, 200)
+                self.assertIn(f'filename="{expected}"', exported.headers["content-disposition"])
 
     def test_a_gwam_report_downloads_and_generates_under_its_report_name(self) -> None:
         report_id = self._generatable_report(segment="GWAM", app_name="Meridian Portal", report_name="GWAM \u2013 Meridian Portal \u2013 Annual Pentest 2026")
@@ -2314,6 +2423,169 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(again.json()["filename"], second_path.name)
         self.assertTrue(second_path.is_file())
         self.assertTrue(output_path.is_file())
+
+    def test_two_reports_saved_at_once_under_one_typed_name_both_survive(self) -> None:
+        """Two applications can type the same GWAM report name, and their report locks are separate,
+        so the shared generated folder has to serialize the pick of a free name and the write."""
+        first = self._generatable_report(segment="GWAM", app_name="First application", report_name="Quarterly Review")
+        second = self._generatable_report(segment="GWAM", app_name="Second application", report_name="Quarterly Review")
+        both_in_word = threading.Barrier(2)
+        both_picked = threading.Event()
+        picked: list[Path] = []
+        original = main.unused_export_path
+
+        def word_stub(contents: bytes) -> bytes:
+            both_in_word.wait(timeout=10)
+            return contents
+
+        def pause_after_picking(path: Path) -> Path:
+            chosen = original(path)
+            picked.append(chosen)
+            if len(picked) == 2:
+                both_picked.set()
+            # Without a lock the second request picks within milliseconds and this returns at once, so
+            # the unlocked race is certain. With one, the second request cannot pick until this one has
+            # written, so the wait times out; the short bound only costs that case half a second.
+            both_picked.wait(timeout=0.5)
+            return chosen
+
+        with patch.object(main, "update_docx_bytes_with_word", side_effect=word_stub), patch.object(
+            main, "unused_export_path", side_effect=pause_after_picking
+        ), ThreadPoolExecutor(max_workers=2) as pool:
+            responses = [future.result(timeout=30) for future in [
+                pool.submit(self.client.post, f"/reports/{report_id}/generate") for report_id in (first, second)
+            ]]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 200, response.text)
+        paths = [Path(response.json()["path"]) for response in responses]
+        self.assertEqual(sorted(path.name for path in paths), ["Quarterly Review (2).docx", "Quarterly Review.docx"])
+        self.assertEqual(sorted(path.name for path in main.GENERATED.iterdir()), ["Quarterly Review (2).docx", "Quarterly Review.docx"])
+        self.assertEqual(len({path.read_bytes() for path in paths}), 2, "one report's file holds the other report's contents")
+
+    def _save_gwam_report(self, report_id: str) -> dict:
+        with patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents):
+            response = self.client.post(f"/reports/{report_id}/generate")
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_numbered_gwam_saves_keep_the_final_filename_stem_within_150_characters(self) -> None:
+        report_id = self._generatable_report(segment="GWAM", report_name="R" * 150)
+        saved = [self._save_gwam_report(report_id) for _ in range(2)]
+        self.assertEqual(saved[0]["filename"], f"{'R' * 150}.docx")
+        self.assertEqual(saved[1]["filename"], f"{'R' * 146} (2).docx")
+        on_disk = sorted(path.name for path in main.GENERATED.iterdir())
+        self.assertEqual(on_disk, sorted(item["filename"] for item in saved), "a saved copy is missing or was overwritten")
+        for name in on_disk:
+            self.assertLessEqual(len(Path(name).stem), report_service.REPORT_NAME_FILENAME_LIMIT, name)
+
+    def test_a_multi_digit_number_takes_its_extra_characters_from_the_gwam_name_not_the_limit(self) -> None:
+        report_id = self._generatable_report(segment="GWAM", report_name="R" * 150)
+        main.GENERATED.mkdir(parents=True, exist_ok=True)
+        for next_number in (10, 100):
+            with self.subTest(next_number=next_number):
+                for leftover in main.GENERATED.glob("*"):
+                    leftover.unlink()
+                taken = [f"{'R' * 150}.docx"]
+                for number in range(2, next_number):
+                    suffix = f" ({number})"
+                    taken.append(f"{'R' * (150 - len(suffix))}{suffix}.docx")
+                for name in taken:
+                    (main.GENERATED / name).write_bytes(b"earlier")
+                suffix = f" ({next_number})"
+                saved = self._save_gwam_report(report_id)
+                self.assertEqual(saved["filename"], f"{'R' * (150 - len(suffix))}{suffix}.docx")
+                self.assertEqual(sorted(path.name for path in main.GENERATED.iterdir()), sorted([*taken, saved["filename"]]))
+                self.assertTrue(all((main.GENERATED / name).read_bytes() == b"earlier" for name in taken), "an earlier copy was overwritten")
+
+    def test_a_numbered_gwam_name_skips_a_file_that_the_cut_name_already_matches(self) -> None:
+        """Another report typed a name that is already the cut form of this one's first copy."""
+        report_id = self._generatable_report(segment="GWAM", report_name="R" * 150)
+        main.GENERATED.mkdir(parents=True, exist_ok=True)
+        cut_collision = main.GENERATED / f"{'R' * 146} (2).docx"
+        first = main.GENERATED / f"{'R' * 150}.docx"
+        cut_collision.write_bytes(b"typed by someone else")
+        first.write_bytes(b"first")
+        saved = self._save_gwam_report(report_id)
+        self.assertEqual(saved["filename"], f"{'R' * 146} (3).docx")
+        self.assertEqual(cut_collision.read_bytes(), b"typed by someone else")
+        self.assertEqual(first.read_bytes(), b"first")
+        self.assertLessEqual(len(Path(saved["filename"]).stem), report_service.REPORT_NAME_FILENAME_LIMIT)
+
+    def test_a_numbered_gwam_name_cut_on_a_space_does_not_double_the_space(self) -> None:
+        report_id = self._generatable_report(segment="GWAM", report_name=f"{'A' * 145} {'B' * 10}")
+        saved = [self._save_gwam_report(report_id) for _ in range(2)]
+        self.assertEqual(saved[0]["filename"], f"{'A' * 145} {'B' * 4}.docx")
+        self.assertEqual(saved[1]["filename"], f"{'A' * 145} (2).docx")
+
+    def test_a_numbered_name_already_over_the_limit_is_numbered_as_before(self) -> None:
+        """An older name built from long parts is already past the limit; numbering adds to it and never cuts it."""
+        main.GENERATED.mkdir(parents=True, exist_ok=True)
+        longest = main.GENERATED / f"{'Y' * 160}.docx"
+        longest.write_bytes(b"earlier")
+        self.assertEqual(main.unused_export_path(longest).name, f"{'Y' * 160} (2).docx")
+
+    def test_a_numbered_ordinary_name_keeps_its_whole_stem(self) -> None:
+        report_id = self._generatable_report()
+        saved = [self._save_gwam_report(report_id) for _ in range(2)]
+        self.assertEqual(saved[1]["filename"], "JH - Generated Report - Annual Pentest 2026 (2).docx")
+
+    def test_a_save_waits_while_another_process_holds_the_generated_folder(self) -> None:
+        report_id = self._generatable_report()
+        holder = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from app.workspace import Workspace\n"
+            "with Workspace(Path(sys.argv[1]), 'child').locked_generated_folder(Path(sys.argv[2])):\n"
+            "    print('locked', flush=True)\n"
+            "    sys.stdin.readline()\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", holder, str(self.root), str(main.GENERATED)],
+            cwd=Path(__file__).resolve().parent.parent,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.stdout.close)
+        self.addCleanup(process.stdin.close)
+        self.assertEqual(process.stdout.readline().strip(), "locked")
+        finished = threading.Event()
+        responses = []
+
+        def save() -> None:
+            responses.append(self.client.post(f"/reports/{report_id}/generate"))
+            finished.set()
+
+        with patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents):
+            thread = threading.Thread(target=save)
+            thread.start()
+            self.assertFalse(finished.wait(timeout=1), "the save ran while another process held the generated folder")
+            self.assertEqual(list(main.GENERATED.glob("*")), [])
+            process.stdin.write("\n")
+            process.stdin.flush()
+            thread.join(timeout=30)
+        self.assertEqual(responses[0].status_code, 200, responses[0].text)
+        self.assertTrue(Path(responses[0].json()["path"]).is_file())
+
+    def test_a_failed_write_to_the_generated_folder_leaves_no_file_and_frees_the_folder(self) -> None:
+        report_id = self._generatable_report()
+        replace = os.replace
+
+        def refuse_generated_folder(source, destination):
+            if Path(destination).parent == main.GENERATED:
+                raise OSError("disk full")
+            return replace(source, destination)
+
+        with patch.object(main, "update_docx_bytes_with_word", side_effect=lambda contents: contents):
+            with patch.object(storage_module.os, "replace", side_effect=refuse_generated_folder):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    self.client.post(f"/reports/{report_id}/generate")
+            self.assertEqual(list(main.GENERATED.iterdir()), [], "a failed write left a partial or temporary file")
+            again = self.client.post(f"/reports/{report_id}/generate")
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertEqual(again.json()["filename"], "JH - Generated Report - Annual Pentest 2026.docx")
 
     def test_a_report_with_no_findings_generates_only_when_the_request_confirms_it(self) -> None:
         """A page that still shows a finding sends no confirmation, so a report that lost its last

@@ -44,7 +44,7 @@ same change.
 | POST | `/reports/{id}/repair` | Repair duplicate fragment IDs in a legacy draft |
 | GET | `/reports/{id}/export` | Download a ZIP containing draft JSON and evidence |
 | GET | `/reports/{id}/generate` | Render and download a completed DOCX report; a report with no findings needs `?confirm_no_findings=true` |
-| POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder. A report with no findings needs `?confirm_no_findings=true` |
+| POST | `/reports/{id}/generate` | Render and save a completed DOCX into `generated/` at the repository root; the response names the file rather than opening a folder. Saves are serialized per generated folder, so two reports that print the same file name get `name.docx` and `name (2).docx`; a name already at the 150-character limit gives up the characters its number needs, so the numbered copy stays within it too. A report with no findings needs `?confirm_no_findings=true` |
 | POST | `/reports/import` | Classify and import a ZIP, evidence-free legacy JSON, or generated DOCX with a new report ID |
 | GET | `/library/search?q=` | Search the offline vulnerability library |
 | POST | `/reports/{id}/library/{library_id}` | Insert a library finding with every scope target selected, no severity unless the entry gives one, its Description and Remediation, and the proof-of-concept steps for every app type the finding touches (web, then API, as one list) |

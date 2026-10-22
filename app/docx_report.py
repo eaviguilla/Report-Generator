@@ -238,7 +238,8 @@ def _fragment_text(fragment) -> str:
 
 
 def _display_date(value) -> str:
-    return f"{value:%B} {value.day}, {value.year}" if value else "N/A"
+    # Four-digit year, because the importer's "%Y" accepts nothing shorter.
+    return f"{value:%B} {value.day}, {value.year:04d}" if value else "N/A"
 
 
 def _display_value(value: str | None) -> str:

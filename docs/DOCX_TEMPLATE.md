@@ -71,7 +71,7 @@ are rendered by `_render_component_fragment`.
 | `report-name` | The report name: the tester's own for a segment in `REPORT_NAME_SEGMENTS`, otherwise built by `report_name_for` |
 | `test-type` | Annual Pentest, Retest, Deployment Pentest, or New Test |
 | `app-owner` | Application owner |
-| `report-date` | Report date |
+| `report-date` | Report date, printed `Month D, YYYY` with a year padded to four digits, which the importer's `%Y` needs for years below 1000 |
 | `tester-name` | Tester |
 | `prod-start`, `prod-end`, `prod-time` | Production test window |
 | `non-prod-start`, `non-prod-end`, `non-prod-time` | Non-Production test window |
@@ -81,7 +81,7 @@ are rendered by `_render_component_fragment`.
 title in `word/document.xml` and the lines in `word/footer5.xml` and `word/footer8.xml` hold only that
 token. For a segment in `REPORT_NAME_SEGMENTS` (`GWAM`) it is the name the tester typed on Setup, as typed.
 For every other segment `report_name_for` builds `segment - application name - report type year`, joined
-with en dashes, the year being the Report Date's. `{{app-name}}` is the application name alone: the cover
+with en dashes, the year being the Report Date's, always four digits (`0099`), because the importer strips exactly four. `{{app-name}}` is the application name alone: the cover
 table's Application cell, and the sentences, headings, captions and scope text around it.
 
 Before 2026-10-22 the cover read `{{segment}} - {{app-name}} - {{test-type}} 2026`, with a plain `2026`,
@@ -219,8 +219,13 @@ together and raises nothing at import time;
 A segment in `REPORT_NAME_SEGMENTS` prints its typed name as that title, so its title is read
 differently. An Editable copy takes the title paragraph as printed for `report_name`, and the
 application name from the cover's Application cell (`APPLICATION_COVER_LABEL`, read through
-`_labelled_value` as the network access is), falling back to the title's middle parts when the
-cell is empty. A Retest import takes the application name from the cell and leaves `report_name`
+`_labelled_value`), falling back to the title's middle parts when the cell is empty. The cell is
+looked up only in `_cover_texts`, the paragraphs inside the cover's text boxes (`w:txbxContent`, a
+box and its fallback copy in all four masters), never in the whole body, because a finding's list
+item or table cell can read "Application" followed by a value and would otherwise conflict with the
+cover. The value is read with `free_text=True`, so it goes through `_visible_value` (edges trimmed, `N/A` read as empty) and keeps
+the spaces inside it as typed; the other labelled values collapse runs of spaces. Two cover copies that disagree still refuse the import. A label owns the line after it, so an application named exactly `Application` is that label's value and is not read as a second label whose value is the next cell (`Application Type`). The Application Type cell is still read
+from the whole body. A Retest import takes the application name from the cell and leaves `report_name`
 empty, because the old name carries the old test's type and year. In an Editable copy, a title that
 ends in a word that is not a report type gives a warning and an empty report type instead of the
 "Unknown report type" refusal, because a free-text name can end in anything. A name that does not

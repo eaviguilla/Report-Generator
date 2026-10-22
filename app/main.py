@@ -31,7 +31,7 @@ from .docx_captions import update_docx_bytes_with_word
 from .docx_report import ReportGenerationError, generation_issues, main_template_path, render_report_docx
 from .library import Library
 from .docx_import import ReportImportLimitError, first_change, parse_report_docx, stranded_scope_refusal
-from .report_service import applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_is_complete, provision, report_export_filename, scope_of_every_target, scope_text_from_targets, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
+from .report_service import REPORT_NAME_FILENAME_LIMIT, applicable_poc_variants, apply_poc_variant, assign_fresh_fragment_ids, character_issue, finding_is_complete, provision, report_export_filename, scope_of_every_target, scope_text_from_targets, setup_is_complete, sync_evidence_image_slots, unicode_character_ranges
 from .storage import atomic_write_bytes, atomic_write_json, read_json
 from .vocabulary import client_vocabulary
 from .workspace import StaleReportError, Workspace, app_id_for
@@ -583,8 +583,9 @@ def finalized_report(report_id: str, *, save_to_folder: bool = False, confirm_no
             output_path = GENERATED / report_export_filename(report, ".docx")
             if save_to_folder:
                 GENERATED.mkdir(parents=True, exist_ok=True)
-                output_path = unused_export_path(output_path)
-                atomic_write_bytes(output_path, contents)
+                with workspace.locked_generated_folder(GENERATED):
+                    output_path = unused_export_path(output_path)
+                    atomic_write_bytes(output_path, contents)
             return report, draft_path.parent, contents, output_path
     except FileNotFoundError as error:
         raise HTTPException(404, "Report not found") from error
@@ -593,11 +594,17 @@ def finalized_report(report_id: str, *, save_to_folder: bool = False, confirm_no
 
 
 def unused_export_path(path: Path) -> Path:
-    """Number repeat exports so regenerating never overwrites an earlier report."""
+    """Number repeat exports so regenerating never overwrites an earlier report. A name within the file name limit
+    gives up the characters its number needs, so a numbered copy stays within it too; an older, longer name keeps
+    its whole stem."""
     candidate = path
     counter = 2
     while candidate.exists():
-        candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
+        number = f" ({counter})"
+        stem = path.stem
+        if len(stem) <= REPORT_NAME_FILENAME_LIMIT:
+            stem = stem[:REPORT_NAME_FILENAME_LIMIT - len(number)].rstrip(" .")
+        candidate = path.with_name(f"{stem}{number}{path.suffix}")
         counter += 1
     return candidate
 

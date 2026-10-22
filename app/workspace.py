@@ -110,6 +110,16 @@ class Workspace:
                     else:
                         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
+    @contextmanager
+    def locked_generated_folder(self, folder: Path) -> Iterator[None]:
+        """Serialize choosing a free file name in a shared output folder and writing it, across reports and processes.
+
+        Report locks are per report, so two reports that print the same file name need this one.
+        Take it after a report lock and never the other way round.
+        """
+        with self._locked("generated-folder:" + os.path.normcase(str(folder.resolve()))):
+            yield
+
     def create_report(self) -> Report:
         """Create and persist a new blank report draft."""
         now = datetime.now().astimezone()

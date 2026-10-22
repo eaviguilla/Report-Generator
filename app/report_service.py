@@ -13,6 +13,8 @@ from typing import Callable, Literal
 from app.models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_NAME_SEGMENTS, REPORT_TYPE_LABELS, Channel, Content, Engagement, Environment, ImageFragment, InstanceTitleFragment, ListFragment, ListItem, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, Vulnerability, resolve_tested_channels
 
 INVALID_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# A name whose part before the first dot is a device name (trailing spaces ignored, as Windows does).
+WINDOWS_DEVICE_NAME = re.compile(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CONIN\$|CONOUT\$) *(?:\.|$)", re.IGNORECASE)
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@\\-](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9._@\\-])?$")
 RESOLVED_REMEDIATION = "None, the vulnerability has been remediated."
 # Guidance left in library text, such as "(insert version here)"; generation refuses it.
@@ -441,7 +443,8 @@ def report_name_for(report: Report) -> str:
     engagement = report.engagement
     if engagement.segment in REPORT_NAME_SEGMENTS:
         return engagement.report_name.strip()
-    year = engagement.report_date.year if engagement.report_date else "N/A"
+    # Four digits always, because the importer strips exactly four from the cover title; datetime and HTML dates run from year 1.
+    year = f"{engagement.report_date.year:04d}" if engagement.report_date else "N/A"
     test_type = REPORT_TYPE_LABELS.get(engagement.report_type or "", "N/A")
     return f" {EN_DASH} ".join([engagement.segment or "N/A", engagement.app_name.strip() or "N/A", f"{test_type} {year}"])
 
@@ -459,6 +462,10 @@ def report_export_filename(report: Report, suffix: str = ".zip") -> str:
         # The report name is the whole file name, so it is cut once rather than part by part.
         named = _filename_text(report_name_for(report).replace(EN_DASH, "-"))[:REPORT_NAME_FILENAME_LIMIT].strip(" .")
         if named:
+            # Windows refuses a device name as a file name, with or without an extension. The cut comes first, and the
+            # underscore takes a place inside the limit, so the stem stays within it.
+            if WINDOWS_DEVICE_NAME.match(named):
+                named = f"_{named[:REPORT_NAME_FILENAME_LIMIT - 1]}".rstrip(" .")
             return f"{named}{suffix}"
 
     def component(value: str | None, fallback: str) -> str:

@@ -345,8 +345,11 @@ class AppWindow(object):
                 return u"An app window from an earlier session is still open. Close it, then press Open.", None
             self._generation += 1
             self._discard()  # every window starts blank and keeps nothing from an earlier one
+        # Edge signs a new browser folder in to the Windows account and starts syncing it, so both are switched off.
+        # Chrome ignores the two Edge feature names (docs/adr/0003).
         words = [place, u"--app=" + url, u"--user-data-dir=" + self.folder.getPath(), u"--window-size=1440,900",
-                 u"--no-first-run", u"--no-default-browser-check"]
+                 u"--no-first-run", u"--no-default-browser-check",
+                 u"--disable-sync", u"--disable-features=msEdgeSyncService,msEdgeAccountSSO"]
         try:
             browser = self.launch(words)
         except (Exception, Throwable) as error:
@@ -1022,8 +1025,9 @@ def self_check_window(_app_folder, python_exe):
         note = window.open(url)
         check(len(launcher.started) == 1 and launcher.started[0].words == [
             chrome_pf, u"--app=" + url, u"--user-data-dir=" + release + sep + u"app-window",
-            u"--window-size=1440,900", u"--no-first-run", u"--no-default-browser-check"],
-            u"with only Chrome installed, Chrome opens the address with no address bar and a browser folder of its own: %s"
+            u"--window-size=1440,900", u"--no-first-run", u"--no-default-browser-check",
+            u"--disable-sync", u"--disable-features=msEdgeSyncService,msEdgeAccountSSO"],
+            u"with only Chrome installed, Chrome opens the address with no address bar, a browser folder of its own and sync off: %s"
             % [browser.words for browser in launcher.started])
         check(note is not None and chrome_pf in note, u"the tab is told which browser opened: %s" % note)
 
@@ -1031,6 +1035,9 @@ def self_check_window(_app_folder, python_exe):
         _make_file(edge_pf)
         AppWindow(release, places, launcher, True).open(url)
         check(len(launcher.started) == 1 and launcher.started[0].words[0] == edge_pf, u"with Edge installed too, Edge opens")
+        edge_words = launcher.started[0].words if launcher.started else []
+        check(u"--disable-sync" in edge_words and u"--disable-features=msEdgeSyncService,msEdgeAccountSSO" in edge_words,
+              u"Edge starts with sync and its account sign-in switched off: %s" % edge_words)
 
         launcher = _FakeLauncher()
         nowhere = root + sep + u"nowhere" + sep + u"msedge.exe"

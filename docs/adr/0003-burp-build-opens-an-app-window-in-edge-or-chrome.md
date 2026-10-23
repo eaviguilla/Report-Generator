@@ -12,6 +12,8 @@ When the Burp tab starts the app, it opens the app window in Edge, or in Chrome 
 
 Amended 2026-10-03: the browser folder was first kept between sessions. It is now thrown away, so the window never carries an account, history or data from one session to the next.
 
+Amended 2026-10-23: an empty folder did not stop Edge signing in. The app window showed "we are now syncing your browsing data across all your devices", because Edge signs a new browser folder in to the Windows account when that account is a Microsoft or work account. The window now starts with `--disable-sync` and `--disable-features=msEdgeSyncService,msEdgeAccountSSO`. Chrome gets the same flags and ignores the two Edge feature names.
+
 ## Considered options
 
 - **Burp's browser.** It ships with Burp, so every machine running the extension has it. Rejected because, started outside Burp on Windows, it cannot start its sandbox ("Sandbox cannot access executable … Access is denied"), its network service crashes, and the window comes up blank. repgen-web's Burp launcher hit this and dropped it. The workarounds either turn off part of the sandbox, in a window that displays proof-of-concept payloads, or change permissions inside Burp's install.
@@ -25,6 +27,7 @@ Amended 2026-10-03: the browser folder was first kept between sessions. It is no
 - Ending the browser discards what the page kept in it: an edit typed in the seconds before, if it had not reached the app yet, undo history and the theme choice. Reports themselves are saved by the app in the data folder and are unaffected.
 - A browser left running on the browser folder from an earlier session, after Burp was killed, cannot be tied to the app. Before opening a window, the extension checks the folder's lock file and asks the tester to close that window first. A browser that ends within three seconds of starting gave its window to one already running, so it does not stop the app either.
 - The browser folder holds nothing between sessions: no account sign-in, sync, imported browser data, cookies, cache or unsaved edits. Two cases leave files until the next window starts, which empties the folder first: Burp killed while the window is open, and a browser helper process still holding a file after five tries a second apart.
+- Sync and account sign-in are off through those launch flags, not through a setting in the folder. Microsoft does not document the two feature names, so a later Edge version may stop respecting them, and a policy that forces sign-in or sync on a managed machine may override them. If the notice returns, look here first.
 - Unsaved edits that a tester's usual browser held before this change are not offered in the app window.
 - The window's traffic stays out of Burp's Proxy history. Edge and Chrome send `127.0.0.1` traffic directly even when a system proxy is set.
 - Ctrl+N in the app window still opens an ordinary browser window, with an address bar.

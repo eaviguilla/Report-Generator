@@ -230,7 +230,8 @@ hides nothing.
   missing, started with `--app` (no address bar, no tabs) and a browser folder of its own, `app-window/` in
   the release folder (`docs/adr/0003-burp-build-opens-an-app-window-in-edge-or-chrome.md`). The folder is
   emptied before each new window and deleted when the window closes, so nothing carries from one session
-  to the next. It is Windows only,
+  to the next. The window starts with sync and account sign-in switched off, because Edge otherwise signs a
+  new folder in to the Windows account. It is Windows only,
   and never Burp's browser or the default browser. The window and the app stop together. When the server
   ends, the tab ends the browser it started, by its handle, and unloading the extension ends it at once.
   When that browser exits while the app is running, the tab stops the app, unless it exited within three

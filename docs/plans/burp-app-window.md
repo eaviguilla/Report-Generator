@@ -1,6 +1,6 @@
 # The Burp build opens the app window
 
-> **Status:** in-progress · 2026-10-03 · Built, and its checks pass on macOS. The Windows checks in step 5 are open.
+> **Status:** in-progress · 2026-10-23 · Built, and its checks passed on macOS before the 2026-10-23 sign-in flags (see What deviated), which have not been run on macOS or Windows. The Windows checks in step 5 are open.
 
 ## Request
 
@@ -71,8 +71,8 @@ Taken from repgen-web: a 1440 by 900 window, first-run screens skipped, and Open
   - i. Change the theme, press Stop, then Start: the new window is back on the default theme and offers
     no unsaved edit, because nothing is kept between windows.
   - j. On a machine signed in to Windows with a Microsoft or work account, the window shows no sign-in,
-    sync or import prompt, and `edge://settings/profiles` in a Ctrl+N window opened from it shows no
-    account.
+    sync or import prompt, no "syncing your browsing data across all your devices" notice, and
+    `edge://settings/profiles` in a Ctrl+N window opened from it shows no account.
 
 ## What deviated
 
@@ -112,6 +112,16 @@ Taken from repgen-web: a 1440 by 900 window, first-run screens skipped, and Open
   browser writes a new one when it starts.
 - **The window opens on a worker thread.** Starting a process and checking files must stay off Burp's
   Swing thread, as the launcher plan's Step 6 requires. The old `Desktop.browse` ran on that thread.
+- **Edge signed the throwaway folder in and started sync** (2026-10-23). A tester saw the app window show
+  "we are now syncing your browsing data across all your devices". This is the case the first deviation
+  left open for a machine signed in to Windows with a Microsoft or work account: an empty folder does not
+  prevent it, because Edge signs a new folder in to the Windows account on its own. The window now also
+  starts with `--disable-sync` and `--disable-features=msEdgeSyncService,msEdgeAccountSSO`, for Edge and
+  Chrome alike, and `--self-check-window` expects both flags. `--disable-sync` is Chromium's own switch.
+  Microsoft does not document the two feature names. They come from public scripts that open Edge in
+  `--app` mode on a throwaway folder. Nothing was run after this change, so check 5j now covers the
+  notice. A policy that forces sign-in or sync on a managed machine may still override the flags. The
+  Burp launcher in repgen-web opens Edge the same way and was not changed.
 
 ## Running the Jython checks on macOS
 
@@ -122,5 +132,5 @@ arm64 `pydantic_core`, and the app never prints its address.
 
 ## Next steps
 
-1. `/implement`: Run the Windows checks in step 5, including 5j on the throwaway browser folder, then set
-   the status to done.
+1. `/implement`: Run the Windows checks in step 5, including 5j on the throwaway browser folder (the sync
+   notice must not appear), then set the status to done.

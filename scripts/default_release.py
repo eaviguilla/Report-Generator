@@ -1,4 +1,4 @@
-"""Build the default release zip: the local web app, no Burp extension.
+"""Build the default release zip, the local web app without the Burp extension.
 
 Usage:
     .venv/bin/python scripts/default_release.py [name]
@@ -6,8 +6,8 @@ Usage:
 Copies only the runtime-required files into a staging folder, zips it, and
 writes the result to dist/<name>.zip (dist/ is a build output, gitignored).
 
-Fully independent of scripts/burp_release.py (docs/plans/split-release-into-burp-and-default.md):
-nothing this ships should hint that a Burp build exists.
+This script is independent of scripts/burp_release.py (docs/plans/split-release-into-burp-and-default.md).
+Nothing it ships should hint that a Burp build exists.
 """
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 
 # Everything a tester's machine needs to run the default build. Anything not listed here
-# (tests/, scripts/, docs/, .git, .claude, graphify-out, requirements-dev.txt, data/, generated/,
-# report_generator_burp.py, README-burp.md, ...) is left behind.
+# (tests/, scripts/, docs/, version control and local tool folders, requirements-dev.txt, data/,
+# generated/, report_generator_burp.py, README-burp.md, ...) is left behind.
 INCLUDE_FILES = ["requirements.txt", "README.md", "run.py"]
 INCLUDE_DIRS = ["app", "resources"]
 
@@ -33,7 +33,7 @@ EXCLUDE_RELATIVE = {
     Path("resources/fixtures"),
     Path("resources/report-name.docx"),
 }
-# graphify-out: the code graph `graphify update app` writes into app/.
+# Bytecode folders, macOS folder metadata and local tool output written into app/.
 EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "graphify-out"}
 EXCLUDE_SUFFIXES = {".pyc"}
 

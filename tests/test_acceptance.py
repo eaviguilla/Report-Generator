@@ -1,4 +1,4 @@
-"""Report acceptance through its own interface: no HTTP and no data folder."""
+"""Exercise report acceptance through its own interface, with no HTTP and no data folder."""
 from __future__ import annotations
 
 import unittest
@@ -263,7 +263,8 @@ def both_environments_report(findings: list[Vulnerability]) -> Report:
 
 
 def fragments(*names: str) -> list:
-    """s: steps, P: production image, N: non-production image, T: instance title. The name is the frag_id."""
+    """The first letter of each name picks the fragment type. Use s for steps, P for a production
+    image, N for a non-production image and T for an instance title. The whole name is the frag_id."""
     built = {
         "s": lambda name: ListFragment(frag_id=name, type="numbered_list", items=[ListItem()]),
         "P": lambda name: ImageFragment(frag_id=name, type="image", environment="production"),

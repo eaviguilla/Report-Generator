@@ -29,12 +29,12 @@ REPO = HERE.parent.parent
 TEMPLATE = HERE / "page.html"
 OUTPUT = HERE / "star_map.html"
 DATA_MARK = "/*STAR_MAP_DATA*/null"
-# mattpocock/skills was installed at this commit; items that already existed then get no star.
+# Work items whose files already existed at this commit get no star.
 CUTOFF = "663d12d"
 
 STATUSES = ("needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "in-progress", "done", "wontfix")
 FINISHED = ("done", "wontfix")
-# Status words from before the seven, still written in plans and wayfinder tickets.
+# Status words from before the seven, still written in plans and map tickets.
 OLD_WORDS = {
     "planning": "needs-info",
     "agreed": "ready-for-agent",
@@ -245,7 +245,7 @@ def first_paragraph(lines: list[str]) -> str:
     if LIST_ITEM.match(first[0]):
         return list_items(first)[0]
     text = plain(" ".join(x.strip() for x in first))
-    # A paragraph that introduces a list reads better with the list.
+    # A paragraph that ends in a colon only introduces a list, so append the list items to it.
     if text.endswith(":") and len(prose) > 1 and LIST_ITEM.match(prose[1][0]):
         text += " " + " ".join(list_items(prose[1]))
     return text
@@ -451,13 +451,13 @@ def build(repo: Path, existing: set[str] | None) -> dict:
 def render(template: str, data: dict) -> str:
     if DATA_MARK not in template:
         raise SystemExit(f"{TEMPLATE.name} has no {DATA_MARK} mark.")
-    # "<" escaped, so no text in a work item can close the script tag.
+    # "<" is escaped, so no text in a work item can close the script tag.
     payload = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
     return template.replace(DATA_MARK, payload, 1)
 
 
 def write_page(path: Path, text: str) -> None:
-    # Replaced in one step, so a reload never sees half a page.
+    # The temp file replaces the page in one step, so a reload never sees half a page.
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as out:

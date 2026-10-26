@@ -31,7 +31,7 @@ class LibraryEntry(BaseModel):
 
     @model_validator(mode="after")
     def validate_proof_of_concept(self) -> "LibraryEntry":
-        # Checked per app type, not across them: a finding installing several remints every copy.
+        # Checked per app type, not across them, because a finding that installs several types remints every copy.
         for channel, fragments in self.proof_of_concept.items():
             if not fragments:
                 raise ValueError(f"proof of concept for {channel} has no steps; omit the key instead")

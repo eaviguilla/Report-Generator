@@ -76,7 +76,8 @@ class ServeTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "terminate() is a hard kill on Windows, so the folder is not removed there")
     def test_serves_a_seeded_report_and_removes_its_folder_when_stopped(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:
-            # TMPDIR steers the script's temporary folder here, so the test can see it go.
+            # TMPDIR makes the script create its temporary folder here, so the test can check
+            # that the script removes it.
             env = {**os.environ, "TMPDIR": scratch, "PYTHONUNBUFFERED": "1"}
             process = subprocess.Popen(
                 [sys.executable, "-m", "scripts.ui_check", "--report", "finding"],

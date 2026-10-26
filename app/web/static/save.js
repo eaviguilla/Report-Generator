@@ -64,7 +64,7 @@
     const activeElement = document.activeElement;
     return activeElement?.matches(TEXT_ENTRY_SELECTOR) ? activeElement : null;
   };
-  // app.js calls this once per report page; it returns the report the page edits, the server's or a recovery copy.
+  // app.js calls this once per report page. It returns the report the page edits, which is the server's copy or a recovery copy.
   // pageNames maps each report page, by the last part of its address, to the name a tester sees.
   function start({root, serverReport, page, pageNames, saveCheck, onSaved, nameField}) {
     const diagnostics = window.VulnReportDiagnostics;
@@ -148,7 +148,7 @@
     }
     if (!Array.isArray(report.scope_targets)) report.scope_targets = clone(serverReport.scope_targets || []);
     if (!Array.isArray(report.vulnerabilities)) report.vulnerabilities = clone(serverReport.vulnerabilities || []);
-    // Left by the Undo, Redo or Restore that opened this page; a page gate's other page gets nothing.
+    // Left by the Undo, Redo or Restore that opened this page. The other page of a page gate gets nothing.
     let changedField = null;
     try {
       const pointer = JSON.parse(sessionStorage.getItem(changedFieldKey) || "null");
@@ -299,7 +299,7 @@
                 return;
               }
               try {
-                // The pointer first: a selection left behind would restore the copy at the next reload.
+                // Write the pointer first, because a selection left behind would restore the copy at the next reload.
                 pointNextPageAt(copyPage || page, candidate.envelope.field);
                 sessionStorage.setItem(recoverySelectionKey, candidate.key);
               } catch (error) {
@@ -525,8 +525,8 @@
       queueMicrotask(() => {
         if (!activeTextEntry()) {
           finalizeTextTransaction();
-          // The offer refresh sits out every tick while a field has focus, so leaving one is the
-          // moment a banner earned by typing can finally appear. queueReportChange writes nothing.
+          // The offer refresh skips every tick while a field has focus. A banner caused by typing
+          // therefore shows up only when the tester leaves the field. queueReportChange writes nothing.
           queueReportChange();
         }
       });
@@ -658,7 +658,7 @@
       return saveInFlight;
     }
     // Uploads and library inserts reach the server outside the ordinary save, so `save()` reports
-    // nothing pending while one is in flight. Navigation waits on this instead of stranding it.
+    // nothing pending while one is in flight. Navigation waits on this so it doesn't abandon one.
     let pendingMutation = null;
     function trackMutation(start) {
       const task = pendingMutation ? pendingMutation.then(start) : start();
@@ -685,14 +685,14 @@
     });
     document.querySelectorAll(".back-link").forEach(link => link.addEventListener("click", async event => {
       event.preventDefault();
-      // Back is never gated on any page: completeness is a forward requirement, and the flush below is
-      // what protects the edits. Refusing here would skip that flush entirely.
+      // Back is never gated on any page. Completeness is a forward requirement, and the flush below is
+      // what protects the edits. Refusing here would skip that flush.
       await waitForMutations();
       if (await save()) window.location.assign(link.dataset.href);
     }));
     // A library insert or upload adds its own history step when it settles, and reloading would
-    // abandon it, so history navigation picks its step only after pending mutations settle.
-    // A second request during that wait is dropped rather than stepping twice.
+    // abandon it. History navigation therefore picks its step only after pending mutations settle.
+    // settleThenStep ignores a second request during that wait rather than stepping twice.
     let historyStepWaiting = false;
     const settleThenStep = async step => {
       if (historyStepWaiting) return;

@@ -32,8 +32,9 @@ from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, Evidenc
 
 
 # Tests wait for "Saved" constantly, and the app autosaves after 5 s idle, so most of that wait was the
-# idle timer. This shortens it for every test, but yields to a value a test sets itself, whichever of
-# the two init scripts runs first (Playwright does not define their order), and to the legacy alias.
+# idle timer. This shortens it for every test. A value a test sets itself wins, and so does one set
+# through the legacy alias, whichever of the two init scripts runs first (Playwright does not define
+# their order).
 AUTOSAVE_TEST_DEFAULT = """(() => {
     let explicit = window.VULNREPORT_AUTOSAVE_IDLE_MS;
     Object.defineProperty(window, "VULNREPORT_AUTOSAVE_IDLE_MS", {
@@ -74,8 +75,8 @@ def setup_issue(field_name: str, value: str, environment: str = "production") ->
 class BrowserWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        # One server, Playwright and Chromium per class; starting them per test was most of the run.
-        # Class cleanups run last-in-first-out: browser, Playwright, then the server.
+        # One server, Playwright and Chromium per class. Starting them per test was most of the run.
+        # Class cleanups run last-in-first-out, so the browser closes first, then Playwright, then the server.
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         cls.addClassCleanup(sock.close)
@@ -96,9 +97,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         cls.addClassCleanup(cls.browser.close)
 
     def setUp(self) -> None:
-        # Registered first, so it is undone last: the context closes before the workspace goes back.
+        # Registered first, so it is undone last. The context closes before the workspace goes back.
         self.root = use_temp_workspace(self, "Browser QA")
-        # A fresh context per test: same origin every time, so localStorage would otherwise leak.
+        # A fresh context per test. The origin is the same every time, so localStorage would otherwise leak.
         self.context = self.browser.new_context()
         self.addCleanup(self.context.close)
         self.context.add_init_script(AUTOSAVE_TEST_DEFAULT)
@@ -130,8 +131,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.reload()
 
     def restore_recovery_draft(self) -> None:
-        """Take the recovery offer. Restoring reloads the page, so wait for that navigation itself:
-        wait_for_load_state() alone returns at once while the old page still counts as loaded."""
+        """Take the recovery offer. Restoring reloads the page, so wait for that navigation itself,
+        because wait_for_load_state() alone returns at once while the old page still counts as loaded."""
         with self.page.expect_navigation():
             self.page.get_by_role("button", name="Restore", exact=True).click()
 
@@ -256,8 +257,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/new")
 
-        # The browser must show exactly the server's wording, so each expected message is taken from
-        # setup_input_issues rather than typed out a second time.
+        # The browser must show exactly the server's wording, so the test takes each expected
+        # message from setup_input_issues instead of typing it out a second time.
         field_cases = [
             ("Application Name", "app_name", "Bad/App", "[Portal]-2: (Web) #1"),
             ("CI Number", "ci_number", "CI_123", "CI-123"),
@@ -321,7 +322,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         # Test Coverage carries the star for its Start, End and Time in both environments, so none of the six has one of its own.
         self.assertEqual(page.locator(".date-pair label.is-required").count(), 0)
         self.assertEqual(page.locator(".date-pair input[aria-required='true']").count(), 6)
-        # The star is generated content: visible, but not in the label's text.
+        # The star is generated content. It is visible, but not in the label's text.
         self.assertIn("*", page.eval_on_selector("label.is-required", "el => getComputedStyle(el, '::after').content"))
         self.assertEqual(page.eval_on_selector("label.is-required", "el => el.firstChild.nodeValue"), "Segment")
         self.assertEqual(page.locator("h2 > .required-star").count(), 2)
@@ -911,7 +912,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIsNone(tester.get_attribute("aria-invalid"))
 
     def _paste_text(self, field, text: str, selection: tuple[int, int] | None = None) -> None:
-        """Paste as a browser does: the page's paste handlers, then the default insert unless one cancelled it."""
+        """Paste as a browser does. The page's paste handlers run, then the default insert unless one cancelled it."""
         field.evaluate("""(element, [pasted, selection]) => {
             element.focus();
             const [start, end] = selection || [element.value.length, element.value.length];
@@ -996,7 +997,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         app_name.click()
         before = app_name.input_value()
 
-        # Only the page's handler is under test: a disabled box gets no native paste to simulate.
+        # Only the page's handler is under test, because a disabled box gets no native paste to simulate.
         custom_name.evaluate("""element => {
             const clipboard = new DataTransfer();
             clipboard.setData("text/plain", " leaked text ");
@@ -1595,7 +1596,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_a_cached_draft_written_before_the_two_box_scope_still_accepts_typing(self) -> None:
         """A tab open across the deploy restores scope_text holding a bare string. This script is not
         in strict mode, so writing .component onto that string would no-op and swallow every
-        keystroke -- no error, and the stale value saved instead."""
+        keystroke, with no error and the stale value saved instead."""
         report_id = self.ready_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["tested_channels"] = ["mobile"]
@@ -2009,14 +2010,14 @@ class BrowserWorkflowTests(unittest.TestCase):
         component = page.get_by_role("textbox", name="Thick Client Component", exact=True).first
         description = page.get_by_role("textbox", name="Thick Client Description", exact=True).first
 
-        # Description only: the component box is what names a target, so this is still empty scope.
+        # Description only. The component box is what names a target, so this is still empty scope.
         description.fill("Main desktop client")
         page.locator("#next").click()
         notice = page.locator("#setup-validation-note")
         self.assertEqual(notice.text_content(), "1 thing to fix before Findings. It is marked above, and the cursor is on it.")
         self.assertTrue(component.evaluate("input => input.classList.contains('validation-error')"))
 
-        # Component only: now a target exists, and the missing description is named by component.
+        # Component only. Now a target exists, and the missing description is named by component.
         component.fill("Acme.exe")
         description.fill("")
         page.locator("#next").click()
@@ -2038,14 +2039,14 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator("#next").click()
         page.wait_for_url("**/findings")
 
-        # The pair survives the round trip, which is the whole point of storing it on the target.
+        # The pair survives the round trip because it is stored on the target.
         page.goto(f"{self.base_url}{page.url.split(self.base_url)[1].replace('/findings', '/setup')}")
         self.assertEqual(page.get_by_role("textbox", name="Thick Client Component", exact=True).first.input_value(), "Acme.exe")
         self.assertEqual(page.get_by_role("textbox", name="Thick Client Description", exact=True).first.input_value(), "Main desktop client")
 
     def test_thick_client_and_mobile_swap_silently_but_ask_when_scope_would_be_lost(self) -> None:
         """The request is a silent swap. Silent is right when the outgoing panel is empty, and wrong
-        when it holds typed work -- which is deleted with no undo."""
+        when it holds typed work, which the swap deletes with no undo."""
         page = self.page
         page.goto(f"{self.base_url}/new")
         page.get_by_label("Test Mobile").check()
@@ -2576,7 +2577,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         saved = main.workspace.load(report_id).vulnerabilities[0]
         self.assertEqual(saved.scope.target_ids, ["tgt_uat"])
-        # The captioned screenshot stays as a supporting image; the empty Production tile goes.
+        # The captioned screenshot stays as a supporting image. The empty Production tile goes.
         self.assertEqual(
             [fragment.caption for content in saved.contents for fragment in content.fragments if fragment.type == "image" and fragment.environment == "production"],
             ["Production evidence caption"],
@@ -2814,7 +2815,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".image-preview").count(), 1)
 
     def paste_png(self, selector: str | None = None) -> None:
-        """Dispatch a genuine paste event carrying a PNG, on one card or on the page itself."""
+        """Dispatch a real paste event carrying a PNG, on one card or on the page itself."""
         image_data = png_bytes(2, 2)
         self.page.evaluate(
             """([selector, encoded]) => {
@@ -2868,7 +2869,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_pasting_a_screenshot_attaches_it_as_evidence(self) -> None:
         """Both clipboard shapes must attach. OneNote and Word put HTML on the clipboard beside the
-        picture, which leaves `clipboardData.files` empty; reading only that list dropped the paste
+        picture, which leaves `clipboardData.files` empty. Reading only that list dropped the paste
         with no message."""
         for clipboard, paste in (("file list", self.paste_png), ("item only", self.paste_png_as_item_only)):
             with self.subTest(clipboard=clipboard):
@@ -2889,8 +2890,8 @@ class BrowserWorkflowTests(unittest.TestCase):
                 self.assertEqual(page.locator(".evidence-thumb span").count(), 0, "the prompt stayed on a filled image")
 
     def test_pasting_an_image_from_a_focused_editor_uses_the_armed_evidence_slot(self) -> None:
-        """Text focus must not steal an image paste from the evidence image the tester armed, and
-        the editor receiving the event must retain its text rather than acquiring clipboard noise."""
+        """Text focus must not steal an image paste from the evidence image the tester armed. The
+        editor that receives the event must keep its text and take nothing from the clipboard."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -3039,7 +3040,8 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_pasting_with_nothing_armed_imports_nothing(self) -> None:
         """The old fallback filled the first empty image anywhere in the pane, which is how a
-        screenshot landed on a finding the tester was not looking at. Now it goes nowhere and says so."""
+        screenshot landed on a finding the tester was not looking at. Now it imports nothing and
+        shows a notice."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -3048,12 +3050,12 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.paste_png()
         page.wait_for_selector("#evidence-notice.is-visible", timeout=5_000)
         self.assertIn("evidence image", page.locator("#evidence-notice").inner_text())
-        # Deliberately a pause: this checks an upload did NOT happen, and one would only start after
-        # an asynchronous file read, so there is no event to wait for instead.
+        # Deliberately a pause. This checks that an upload did NOT happen, and one would only start
+        # after an asynchronous file read, so there is no event to wait for instead.
         page.wait_for_timeout(800)
         self.assertEqual(page.locator(".image-preview").count(), 0)
-        # The draft is the assertion, not the screen: an image that reached the report without a
-        # fragment to hold it would leave the pane looking exactly this empty.
+        # The assertion is on the draft, not the screen, because an image that reached the report
+        # without a fragment to hold it would leave the pane looking exactly this empty.
         self.assertEqual(main.workspace.load(report_id).evidence, {})
 
     def test_a_pasted_screenshot_lands_in_the_armed_image_and_advances(self) -> None:
@@ -3061,7 +3063,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.locator(".evidence-tile").first.wait_for(timeout=5_000)
-        # A second empty image is the whole point: with one, landing in the armed image and landing
+        # A second empty image is needed. With only one, landing in the armed image and landing
         # in the first empty image are the same event and prove nothing.
         page.get_by_role("button", name="Add another screenshot").first.click()
         page.wait_for_function("() => document.querySelectorAll('.evidence-tile:not(.has-evidence)').length >= 2", timeout=5_000)
@@ -3697,7 +3699,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIn("requires image", rows.first.inner_text())
 
     def _finding_in_both_environments(self, target_ids: list[str]) -> tuple[str, object]:
-        """A report testing both environments whose finding has the given locations, slots synced."""
+        """A report testing both environments. Its finding has the given locations and its image slots are synced."""
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
         report.engagement.tested_environments = ["production", "non_production"]
@@ -4107,8 +4109,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         stale_page.close()
 
     def test_editable_import_content_page_matches_server_readiness_verdict(self) -> None:
-        """An imported draft that still has gaps: the Content page must agree with the server that it
-        is not ready. test_editable_import_of_an_asia_cvss_finding_reaches_ready_state covers the
+        """For an imported draft that still has gaps, the Content page must agree with the server that
+        it is not ready. test_editable_import_of_an_asia_cvss_finding_reaches_ready_state covers the
         ready side of the same agreement."""
         document = self.importable_docx()
         self.page.goto(f"{self.base_url}/")
@@ -4132,7 +4134,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_editable_import_and_first_save_keep_open_resolved_on_non_prod(self) -> None:
         """The status prints retest sections but is not one of the historical two-status cases.
-        Its parser round trip is unit-tested; this covers the browser's first canonical save after
+        Its parser round trip is unit-tested. This covers the browser's first canonical save after
         the manager imports the editable document."""
         source_id = self.ready_report(include_finding=True)
         source = main.workspace.load(source_id)
@@ -4353,7 +4355,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.reload()
         recovery = page.locator("#app-diagnostics")
         recovery.get_by_role("heading", name="Unsaved changes found").wait_for()
-        # Redo persisted before reloading, so the server holds the redone value; only the
+        # Redo persisted before reloading, so the server holds the redone value. Only the
         # aborted "Recovered value" edit is still unsaved.
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Undo this value")
         recovery.get_by_role("button", name="Restore", exact=True).click()
@@ -4423,7 +4425,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 expect(rows).to_have_count(count)
                 expect(search).to_be_focused()
                 expect(search).to_have_value("")
-                # The list stays open for the next pick, but nothing is highlighted: a stray Enter adds nothing.
+                # The list stays open for the next pick, but nothing is highlighted, so a stray Enter adds nothing.
                 expect(options.nth(1)).to_be_visible()
                 expect(page.locator('#library-results [aria-selected="true"]')).to_have_count(0)
         page.keyboard.type("token")
@@ -4453,7 +4455,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(search).to_have_attribute("aria-expanded", "false")
 
     def _report_testing_everywhere(self) -> tuple[str, list[str]]:
-        """A ready report whose engagement tests web and API in both environments: four targets."""
+        """A ready report whose engagement tests web and API in both environments, which makes four targets."""
         report_id = self.ready_report()
         report = main.workspace.load(report_id)
         report.engagement.tested_environments = ["production", "non_production"]
@@ -4468,8 +4470,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         return report_id, [target.target_id for target in report.scope_targets]
 
     def test_every_way_of_adding_a_finding_starts_with_every_location_selected(self) -> None:
-        """Blank, from the library bar, or a library title picked in a blank row: each starts with
-        every target of both environments ticked, and the tester unticks what it does not touch."""
+        """A finding added blank, from the library bar, or by picking a library title in a blank row
+        starts with every target of both environments ticked. The tester unticks what it does not touch."""
         report_id, target_ids = self._report_testing_everywhere()
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
@@ -4535,7 +4537,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
     def test_the_first_finding_added_to_an_emptied_list_opens(self) -> None:
-        """The first row opens once per empty list: after the last finding went, "the default was
+        """The first row opens once per empty list. After the last finding went, "the default was
         spent" used to leave every later finding folded."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
@@ -4580,7 +4582,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
         expect(titles).to_have_text(stored)
 
-        # Changing a severity here moves nothing: this page never sorts itself.
+        # Changing a severity here moves nothing, because this page never sorts itself.
         make_critical(rows.first)
         expect(titles).to_have_text(stored)
 
@@ -4610,7 +4612,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(page.locator('#save-button[data-save-state="saved"]')).to_be_visible()
         self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], in_content_order)
 
-        # Opened again the order already matches. Back saves whatever is pending, so an unchanged
+        # Opened again, the order already matches. Back saves whatever is pending, so an unchanged
         # save time shows that the arrival queued nothing.
         saved_at = main.workspace.load(report_id).saved_at
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -4695,7 +4697,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual([finding.title for finding in main.workspace.load(report_id).vulnerabilities], ["Critical one", "Low one"])
 
     def test_assessment_selects_are_wide_enough_for_their_longest_option(self) -> None:
-        """A select clipped to "Likelih…" or "Informationa" hides the value it holds. Each one is
+        """A select clipped to "Likelih..." or "Informationa" hides the value it holds. Each one is
         compared with how wide the same select is when left to size itself."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
@@ -4854,7 +4856,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 page.evaluate("window.releaseLibraryInsert()")
                 page.wait_for_function("window.pageMarker === undefined", timeout=10_000)
 
-                # The step undone is the insert, the newest step once the pending work settled, so the older severity edit stays.
+                # The step undone is the insert, the newest step once the pending work settled. The older severity edit stays.
                 self.assertEqual(rows.count(), 1)
                 self.assertEqual(rows.first.get_by_label("Severity", exact=True).input_value(), "medium")
                 saved = main.workspace.load(report_id)
@@ -5243,7 +5245,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].title, expected_title)
 
     def test_typing_a_vuln_id_updates_in_place_without_rebuilding_the_table(self) -> None:
-        """Blurring the ID cell used to rebuild the whole table, taking the fold state with it."""
+        """Blurring the ID cell used to rebuild the whole table and lose the fold state."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
@@ -5264,7 +5266,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(display.text_content(), "1234")
 
     def test_an_empty_vuln_id_cell_offers_a_dash_and_swaps_for_the_field(self) -> None:
-        """Run narrow: below 960px the field is no longer lifted out of flow, so [hidden] has to really hide."""
+        """Run narrow. Below 960px the field is no longer lifted out of flow, so [hidden] has to really hide."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.set_viewport_size({"width": 800, "height": 900})
@@ -5356,7 +5358,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         row.locator(".finding-title-cell input").fill("Located by typing")
         for select, value in zip(row.locator("select").all(), ["low", "low", "low"]):
             select.select_option(value)
-        # A new finding starts with every location selected; this one is about a finding with none.
+        # A new finding starts with every location selected. This one is about a finding with none.
         page.get_by_label("Select https://prod.example.test").uncheck()
         expect(page.locator("[data-location]:checked")).to_have_count(0)
         endpoints = page.locator("[data-custom-location]").first
@@ -5397,20 +5399,20 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         previous.click()
         page.wait_for_url(f"**/reports/{findings_report_id}/setup")
-        # Corroborating only: the blank finding reached disk. The flush guarantee itself is pinned by
-        # test_previous_saves_before_library_replacement_and_next_navigation.
+        # This only corroborates that the blank finding reached disk. The flush guarantee itself is
+        # pinned by test_previous_saves_before_library_replacement_and_next_navigation.
         self.assertEqual(len(read_json(main.workspace.find_path(findings_report_id))["vulnerabilities"]), 1)
 
         content_report_id = self.ready_report(include_finding=True)
         page.goto(f"{self.base_url}/reports/{content_report_id}/edit")
         self.assertEqual(page.locator("#issue-count").get_attribute("data-state"), "issues")
-        # Going back from Content is never gated: the tester is on their way to fix the gaps.
+        # Going back from Content is never gated, because the tester is on their way to fix the gaps.
         page.get_by_role("button", name="Previous: Findings").click()
         page.wait_for_url(f"**/reports/{content_report_id}/findings")
 
     def test_a_report_with_no_findings_can_still_reach_setup(self) -> None:
-        """The literal complaint: a brand-new report has nothing to fix and no field to highlight, so
-        refusing to let it back to Setup left the tester with no way forward or back."""
+        """The complaint as reported. A brand-new report has nothing to fix and no field to highlight,
+        so refusing to let it back to Setup left the tester with no way forward or back."""
         report_id = self.ready_report()
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
@@ -5488,7 +5490,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_matching_a_library_title_applies_metadata_without_a_confirm(self) -> None:
         """Title, likelihood, impact, severity, and library_ref apply immediately and silently on a
-        title match; there is no whole-finding confirm dialog, and content is left untouched."""
+        title match. There is no whole-finding confirm dialog, and content is left untouched."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
@@ -5507,7 +5509,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_library_remediation_offers_add_no_empty_starter_paragraph(self) -> None:
         """Whichever offer the tester takes, the section ends up holding only the library's own
-        fragments: no stray empty paragraph appended, and no blank starter left above them."""
+        fragments. No stray empty paragraph is appended, and no blank starter is left above them."""
         entry = main.library.get("VDB-047")
         for button in ("Fill from library", "Add below"):
             with self.subTest(button=button):
@@ -5515,7 +5517,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 page = self.page
                 # A finding linked to the library whose sections are still empty (an older draft, or a link
                 # made before the content was filled) is still offered the content. A title picked on the
-                # Findings page no longer leaves one: the next test covers that path.
+                # Findings page no longer leaves one. The next test covers that path.
                 report = main.workspace.load(report_id)
                 finding = report.vulnerabilities[0]
                 finding.title = entry["title"]
@@ -5632,8 +5634,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertTrue(page.get_by_text("text is required", exact=False).first.is_visible())
 
     def test_in_conclusion_opens_empty_and_offers_the_standard_sentence(self) -> None:
-        """The section is created but never written for you: an empty paragraph plus an offer, so the
-        tester owes a real conclusion rather than inheriting one the app made up."""
+        """The section is created but never filled in by the app. It holds an empty paragraph plus an
+        offer, so the tester writes a real conclusion instead of inheriting one the app made up."""
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
         report.vulnerabilities[0].status = "open_previously_discovered"
@@ -5726,7 +5728,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_a_line_break_typed_in_a_paragraph_is_saved(self) -> None:
         """Enter builds a <div> in the editor and Shift+Enter a newline character. The editor was read
-        back from its text nodes alone, so every Enter was saved as if it had not been pressed; the
+        back from its text nodes alone, so every Enter was saved as if it had not been pressed. The
         screen only looked right until the pane was drawn again."""
         report_id = self._paragraph_report({"f_enter": "", "f_shift_enter": ""})
         page = self.page
@@ -5764,7 +5766,8 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_line_breaks_in_a_paragraph_are_still_shown_when_the_pane_is_drawn_again(self) -> None:
         """Adding a fragment draws the whole pane again from the model, so this is the model's account
-        of what was typed. A blank line at the end counts: it is the one a plain newline would hide."""
+        of what was typed. A blank line at the end counts, because it is the one a plain newline
+        would hide."""
         report_id = self._paragraph_report({"f_between": "", "f_trailing": "", "f_saved": "Up\n\nDown"})
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -5787,8 +5790,8 @@ class BrowserWorkflowTests(unittest.TestCase):
                 self.assertEqual(self._visible_lines(description.locator(f'[data-fragment-id="{frag_id}"] .rich')), 3)
 
     def test_keeping_my_own_description_does_not_flatten_its_line_breaks(self) -> None:
-        """The report that found this: type a paragraph with a blank line, answer the library's offer
-        with Keep mine, and the blank line was gone."""
+        """Found by typing a paragraph with a blank line and answering the library's offer with Keep
+        mine. The blank line was gone."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._library_finding(report_id)
         next(content for content in finding.contents if content.type == "description").fragments = [
@@ -5815,7 +5818,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_the_editor_is_read_back_line_by_line(self) -> None:
         """What the browser builds for a line break depends on where Enter is pressed and which browser
         it is, so each shape is read as the lines it shows. One <br> or newline ends the last line
-        without starting another; it is the second that makes an empty line."""
+        without starting another. It is the second that makes an empty line."""
         shapes = [
             ("text, then a block", "one<div>two</div>", "one\ntwo", None),
             ("an empty block between", "one<div><br></div><div>three</div>", "one\n\nthree", None),
@@ -5877,8 +5880,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         return main.workspace.load(report_id).engagement
 
     def test_the_non_production_name_offers_presets_and_a_typed_option(self) -> None:
-        """The typed branch has no closed set behind it, so the browser message is the only thing
-        standing between a typo and a 422. It must read exactly as the server's does."""
+        """The typed branch has no closed set behind it, so the browser message is the only check
+        before a typo reaches the server and gets a 422. It must read exactly as the server's does."""
         report_id = self.ready_report()
         report = main.workspace.load(report_id)
         report.engagement.tested_environments = ["production", "non_production"]
@@ -5954,8 +5957,8 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         offer.get_by_role("button", name="Use it").click()
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
-        # The model, not just the textarea: assigning .value fires no event, so the [data-path]
-        # handler would never see it and the sentence would never reach the draft.
+        # Check the model as well as the textarea. Assigning .value fires no event, so the
+        # [data-path] handler would never see it and the sentence would never reach the draft.
         self.assertEqual(self._saved_engagement(report_id).limitations, "Retest only in PROD; no UAT testing.")
         self.assertEqual(page.get_by_label("Limitations").input_value(), "Retest only in PROD; no UAT testing.")
         self.assertEqual(page.get_by_label("Limitations").evaluate("input => input.validationMessage"), "")
@@ -5997,7 +6000,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator("#limitations-offer").count(), 0, "a dismissed offer returned on the next report change")
 
     def test_the_offer_follows_the_label_when_it_changes(self) -> None:
-        """The sentence is derived at paint time, not captured when the page loaded: a tester who
+        """The sentence is derived at paint time, not captured when the page loaded. A tester who
         renames the environment after seeing the offer must be offered the new wording."""
         report_id = self.ready_report()
         report = main.workspace.load(report_id)
@@ -6015,8 +6018,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIn("no STAGE testing.", page.locator("#limitations-offer").inner_text())
 
     def _non_production_retest(self, label: str = "UAT"):
-        """Non-production only: the name control is disabled unless that environment is covered, so
-        this is the one single-environment retest where a rename is reachable at all."""
+        """A retest of non-production only. The name control is disabled unless that environment is
+        covered, so this is the one single-environment retest where a rename is reachable at all."""
         report_id = self.ready_report()
         report = main.workspace.load(report_id)
         report.scope_targets = [ScopeTarget(target_id="tgt_np", environment="non_production", channel="web", value="https://uat.example.test")]
@@ -6024,8 +6027,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         return report_id, self._retest_setup(report_id, ["non_production"], label)
 
     def test_renaming_the_environment_offers_to_update_the_limitation_without_a_reload(self) -> None:
-        """The whole point is that it reacts to the rename in place. A test that reloads would pass
-        against a version that only ever recomputed on boot."""
+        """The offer must react to the rename in place. A test that reloads would pass against a
+        version that only ever recomputed on boot."""
         report_id, page = self._non_production_retest("UAT")
         offer = page.locator("#limitations-offer")
         offer.wait_for()
@@ -6033,7 +6036,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
         self.assertEqual(page.get_by_label("Limitations").input_value(), "Retest only in UAT; no PROD testing.")
 
-        # Same page, no reload: the rename alone must bring the offer back.
+        # Same page, no reload. The rename alone must bring the offer back.
         page.locator(".coverage-name").select_option("STAGE")
         offer = page.locator("#limitations-offer")
         offer.wait_for(timeout=5_000)
@@ -6045,7 +6048,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator("#limitations-offer").count(), 0)
 
     def test_a_typed_environment_name_updates_the_offer_while_it_is_being_typed(self) -> None:
-        """The redraw guard must be narrow enough to let this through: only the Limitations textarea
+        """The redraw guard must be narrow enough to let this through. Only the Limitations textarea
         blocks a repaint, because only it sits under the banner."""
         _report_id, page = self._non_production_retest("UAT")
         page.locator("#limitations-offer").wait_for()
@@ -6054,7 +6057,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         typed = page.locator(".coverage-name-custom")
         typed.wait_for()
         typed.fill("PREPROD")
-        # Waits on the banner's own state rather than its presence: the stale banner is still on
+        # Waits on the banner's own state rather than its presence. The stale banner is still on
         # screen, so a presence check would return the old wording immediately.
         page.wait_for_selector('#limitations-offer[data-offer-state*="PREPROD"]', timeout=5_000)
         self.assertIn("Retest only in PREPROD; no PROD testing.", page.locator("#limitations-offer").inner_text())
@@ -6062,7 +6065,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_the_update_offer_leaves_wording_the_tester_composed_alone(self) -> None:
         """Recognising only the sentence this app generates is what stops a rename rewriting prose
-        the tester wrote themselves. The offer is live here -- it simply must not fire."""
+        the tester wrote themselves. The offer is live here, but it must not fire."""
         report_id, page = self._non_production_retest("UAT")
         page.locator("#limitations-offer").wait_for()
         prose = "Retested UAT only, production was out of scope this cycle."
@@ -6132,7 +6135,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                          "In Conclusion was offered a type change, which provision would undo")
 
         # The Add menu offers no paragraph in a proof of concept, but converting to one there is
-        # deliberate: reusing that list would let a note convert out to a code block and never back.
+        # deliberate. Reusing that list would let a note convert out to a code block and never back.
         report = main.workspace.load(report_id)
         finding = report.vulnerabilities[0]
         next(c for c in finding.contents if c.type == "proof_of_concept").fragments.append(
@@ -6173,8 +6176,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertNotIn("text", stored)
 
     def test_a_lossless_conversion_asks_nothing(self) -> None:
-        """A dialog on a conversion that loses nothing is what trains a tester to click through the
-        one that matters."""
+        """A dialog on a conversion that loses nothing teaches a tester to click through the one
+        that matters."""
         report_id, page = self._convert_report()
         page.locator('[data-fragment-id="f_bare"] .fragment-convert').select_option("note")
         page.wait_for_selector('[data-fragment-id="f_bare"] .rich', timeout=5_000)
@@ -6219,9 +6222,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
     def test_a_proof_of_concept_note_can_become_a_paragraph_and_come_back(self) -> None:
-        """The Add menu has no paragraph here, so this is the one route to one -- and the reason the
-        conversion list is its own rather than borrowed from Add: a one-way door out of `note` would
-        strand anything converted by mistake."""
+        """The Add menu has no paragraph here, so converting is the only route to one. It is also the
+        reason the conversion list is its own rather than borrowed from Add. A one-way conversion out
+        of `note` would leave anything converted by mistake with no way back."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         next(c for c in finding.contents if c.type == "proof_of_concept").fragments.append(
@@ -6242,8 +6245,9 @@ class BrowserWorkflowTests(unittest.TestCase):
             self.assertEqual([run["text"] for run in stored["runs"]], ["Observed on every request."])
 
     def _two_list_proof(self, report_id: str, *, continue_second: bool):
-        """A proof of concept shaped steps -> image -> steps, which is the only shape the continue
-        option is reachable in: merge_step_lists would have collapsed two adjacent lists."""
+        """A proof of concept with steps, then an image, then steps. That is the only shape in which
+        the continue option is reachable, because merge_step_lists would have collapsed two
+        adjacent lists."""
         report, finding = self._complete_finding(report_id)
         proof = next(content for content in finding.contents if content.type == "proof_of_concept")
         first = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
@@ -6292,7 +6296,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_the_continue_control_appears_only_where_it_can_act(self) -> None:
         """Hidden on a section's first numbered list, which every proof of concept is guaranteed to
-        have -- a permanently disabled control on the most common card in the app explains nothing."""
+        have. A permanently disabled control on the most common card in the app explains nothing."""
         report_id = self.ready_report(include_finding=True)
         self._two_list_proof(report_id, continue_second=False)
 
@@ -6343,7 +6347,8 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_ticking_continue_numbering_does_not_disturb_a_dismissed_library_offer(self) -> None:
         """The library offer asks whether the section still matches the entry's content. Numbering
         presentation is not content, so the tick must leave the dismissal fingerprint alone. The
-        presence assertion is what stops this rotting into a green test that proves nothing."""
+        presence assertion makes the test fail, rather than pass while proving nothing, if the
+        fixture stops producing an offer."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._library_finding(report_id)
         description = next(content for content in finding.contents if content.type == "description")
@@ -6412,7 +6417,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         return conclusion
 
     def test_review_panel_labels_are_not_cut_off(self) -> None:
-        """"Steps to reproduce" used to read "Steps to repro…" in the panel's narrow first column."""
+        """"Steps to reproduce" used to read "Steps to repro..." in the panel's narrow first column."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -6433,8 +6438,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         finding.title = entry["title"]
         finding.status = "open_previously_discovered"
         finding.library_ref = LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=report.saved_at)
-        # The written steps are not the library's, so web steps are still on offer; so are the library's
-        # Description and Remediation, which differ from what the tester wrote.
+        # The written steps are not the library's, so web steps are still on offer. The library's
+        # Description and Remediation are on offer too, because they differ from what the tester wrote.
         finding.poc_variants = []
         conclusion = self._fill_retest_history(report, finding)
         conclusion.fragments[0].runs = [Run(text="Retest shows the header is still missing")]
@@ -6488,7 +6493,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".poc-offer").count(), 0, "web is already installed, so nothing is left to offer")
 
     def test_a_review_jump_leaves_one_red_mark_and_lets_go_when_you_look_away(self) -> None:
-        """Ringing every gap at once drowns the single one the panel just sent the tester to."""
+        """Ringing every gap at once makes the one the panel just sent the tester to hard to find."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -6601,9 +6606,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(page.locator(".poc-offer").count(), 0, "the finding no longer touches api, so its steps are not offered")
 
     def test_the_later_statuses_are_offered_and_save_with_the_retest_sections(self) -> None:
-        """The dropdown is the last thing to learn a status, because until the server, the document,
-        the importer, the recogniser and the builder all know it, offering it hands the tester a
-        value that loses work. Saving here is the first moment a draft on disk can hold one."""
+        """The dropdown is the last place to learn a status. Until the server, the document, the
+        importer, the recogniser and the builder all know it, offering it gives the tester a value
+        that loses work. Saving here is the first moment a draft on disk can hold one."""
         for value, label in (("open_resolved_on_non_prod", "Open (Resolved on Non-Prod)"), ("closed", "Closed")):
             with self.subTest(status=value):
                 report_id = self.ready_report(include_finding=True)
@@ -6684,7 +6689,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_switching_from_resolved_to_closed_removes_only_generated_remediation(self) -> None:
         """Closed shares Resolved's five sections but must not carry the app-generated claim that
-        remediation occurred. This exercises the client provisioning path, not just server models."""
+        remediation occurred. This exercises the client provisioning path as well as the server models."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/findings")
@@ -6709,8 +6714,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIsNone(remediation.fragments[0].generated)
 
     def test_gdt_closed_finding_keeps_pasted_evidence_without_asia_cvss_fields(self) -> None:
-        """GDT and Closed were added together, but exercise different rules: GDT must remain a
-        non-Asia segment while Closed must retain the proof image that receives a paste."""
+        """GDT and Closed were added together but exercise different rules. GDT must remain a
+        non-Asia segment, and Closed must retain the proof image that receives a paste."""
         report_id = self.ready_report(include_finding=True)
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/setup")
@@ -6794,8 +6799,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIn("Last year's step", steps, "the tester's previous proof survived the round trip")
 
     def test_a_status_change_with_nothing_written_asks_for_no_confirmation(self) -> None:
-        """The warning is about losing work. An untouched finding has none, so stopping to ask
-        trains the tester to dismiss the dialog that will one day matter."""
+        """The warning is about losing work. An untouched finding has none, so asking would teach
+        the tester to dismiss the same dialog when it does matter."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         finding.status = "open_previously_discovered"
@@ -6808,8 +6813,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#findings tr")
         status = page.locator("#findings tr").first.locator("select").last
         status.select_option("open_new")
-        # The confirmation is added to the page inside the change handler, so it would be here already;
-        # checked on this page, because after Next the editor could never show it.
+        # The change handler adds the confirmation to the page, so it would be here already.
+        # It is checked on this page because after Next the editor could never show it.
         self.assertEqual(page.locator("[data-dialog]").count(), 0, "nothing was written, so nothing needed confirming")
         page.locator("#next").click()
         page.wait_for_url("**/edit", timeout=10_000)
@@ -6857,7 +6862,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_switching_library_entries_reoffers_poc_for_the_same_channel_when_the_tester_wrote_steps(self) -> None:
         """The steps the first entry installed are the tester's now, so switching entries must not
-        overwrite them: the new entry's steps for the same channel are offered again instead."""
+        overwrite them. The new entry's steps for the same channel are offered again instead."""
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
         finding = report.vulnerabilities[0]
@@ -7180,8 +7185,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertNotIn("First note line", offer.inner_text())
 
     def test_the_default_conclusion_still_gets_offered_the_last_step(self) -> None:
-        """The whole sequence: a conclusion that holds nothing but the standard sentence is exactly
-        the state where quoting the last proof step is most useful, so the offer has to survive it."""
+        """This runs the whole sequence. A conclusion that holds nothing but the standard sentence
+        is exactly the state where quoting the last proof step is most useful, so the offer must
+        still appear."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         finding.status = "open_previously_discovered"
@@ -7234,8 +7240,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         return report_id, page, page.locator('.content-block[data-content-type="in_conclusion"]')
 
     def test_an_empty_conclusion_with_a_proof_step_gets_one_suggestion_for_the_step_and_the_sentence(self) -> None:
-        """It used to get two: one inserted the step as a paragraph of its own above the empty one, the
-        other put the standard sentence into the empty one. Now one suggestion fills one text box."""
+        """It used to get two suggestions. One inserted the step as a paragraph of its own above the
+        empty one, and the other put the standard sentence into the empty one. Now one suggestion
+        fills one text box."""
         report_id, page, conclusion = self._empty_conclusion_report()
         offers = conclusion.locator(".content-offer")
         expect(offers).to_have_count(1)
@@ -7253,8 +7260,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         paragraphs = next(content for content in saved.contents if content.type == "in_conclusion").fragments
         self.assertEqual(["".join(run.text for run in fragment.runs) for fragment in paragraphs], [step_and_sentence])
         self.assertEqual(saved.conclusion_offer_resolved, ["Observe the balance of another user."])
-        # What it wrote is the tester's conclusion with the sentence in it, not the bare default: nothing
-        # is left to block generation, on the page or on the server.
+        # What it wrote is the tester's conclusion with the sentence in it, not the bare default, so
+        # nothing is left to block generation, on the page or on the server.
         self.assertEqual(generation_issues(main.workspace.load(report_id)), [])
         expect(page.locator("#issue-count")).to_have_attribute("data-state", "ready")
         expect(page.get_by_role("button", name="Generate Report")).to_be_enabled()
@@ -7269,7 +7276,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(conclusion.locator(".rich").first).to_have_text('The finding "Browser finding" is still Open.')
 
     def test_a_written_conclusion_is_not_offered_the_step_and_sentence_together(self) -> None:
-        """The combined suggestion is for an empty field; text the tester wrote keeps its own offers."""
+        """The combined suggestion is for an empty field. Text the tester wrote keeps its own offers."""
         _report_id, page, conclusion = self._empty_conclusion_report()
         conclusion.locator(".rich").first.fill("Retest shows the header is still missing")
         conclusion.locator(".rich").first.blur()
@@ -7364,13 +7371,13 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertIn("Observe the balance of another user.", conclusion.locator("[data-conclusion-step]").inner_text())
 
         steps = page.locator('.content-block[data-content-type="proof_of_concept"] .list-textarea').last
-        # Drops the second line only; the list still has a step, so the offer should move up to it.
+        # Drops the second line only. The list still has a step, so the offer should move up to it.
         steps.fill("Log in as a standard user.")
         steps.blur()
         expect(conclusion.locator("[data-conclusion-step]"), "emptying the quoted step left the offer pointing at text that is gone").to_contain_text("Log in as a standard user.")
 
     def test_the_conclusion_offer_follows_the_proof_step_while_it_is_still_being_typed(self) -> None:
-        """Blurring first is what the other tests do, and it hid this: the refresh used to skip every
+        """Blurring first is what the other tests do, and it hid this. The refresh used to skip every
         block whenever any field held the caret, so the quote went stale until the tester clicked away."""
         _report_id, page = self._conclusion_step_report()
         conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
@@ -7386,7 +7393,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
     def test_a_status_round_trip_empties_the_conclusion_and_re_offers_both_prompts(self) -> None:
-        """Open (New) drops the conclusion outright, so coming back leaves an empty section: the
+        """Open (New) drops the conclusion outright, so coming back leaves an empty section. The
         standard sentence is offered first, and accepting it then offers the last proof step."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
@@ -7431,7 +7438,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_what_surrounds_the_default_conclusion_decides_whether_it_still_counts(self) -> None:
         """The app's own sentence is only boilerplate while it stands alone in its paragraph. A quoted
-        step or appended prose is the tester's own words; trailing whitespace is not."""
+        step or appended prose is the tester's own words. Trailing whitespace is not."""
         cases = [
             # name, how the paragraph's runs change, still just the default, page-load timeout
             ("quoted step in front", lambda runs: [Run(text="Observe the balance of another user. "), *runs], False, 30_000),
@@ -7500,7 +7507,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.add_fragment(description, "Description", "table")
         cell = page.locator(".table-cell-input").last
         cell.wait_for()
-        # The state the save-while-typing race leaves behind: on screen, but not in the model.
+        # The save-while-typing race leaves the text on screen but not in the model.
         cell.evaluate("node => { node.value = 'UNCOMMITTED'; }")
         description.get_by_role("button", name="Add row").click()
         page.wait_for_function("() => document.querySelectorAll('.table-cell-input').length > 4")
@@ -7517,7 +7524,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#issue-count")
         written = ("paragraph", "numbered_list", "bulleted_list", "image", "table", "note", "code_block")
         proof = ("numbered_list", "image", "bulleted_list", "instance_title", "note", "code_block")
-        # The types each section allows, and how many buttons sit in each group: text, lists, media and code, notes.
+        # The types each section allows, and how many buttons sit in each group. The groups are
+        # text, lists, media and code, and notes.
         sections = {
             "Description": (written, [1, 2, 3, 1]),
             "Recommended Remediation": (written, [1, 2, 3, 1]),
@@ -7959,8 +7967,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertLessEqual(abs(moved), 4, f"the section header slid {moved}px out from under the pointer")
 
     def test_taking_a_conclusion_prompt_leaves_the_section_where_it_was(self) -> None:
-        """Every prompt button ends in a redraw, and the redraw puts the scroll back before the
-        sections have grown to full height, so the position it asks for does not exist yet."""
+        """Every offer button ends in a redraw. The redraw puts the scroll back before the sections
+        have grown to full height, so the position it asks for does not exist yet."""
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
         finding = report.vulnerabilities[0]
@@ -7978,8 +7986,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
         page.wait_for_selector("[data-conclusion-sentence]")
-        # Clicked through the DOM: Playwright scrolls a button into view first, which would move the
-        # very thing being measured.
+        # Clicked through the DOM, because Playwright scrolls a button into view first, which would
+        # move the very thing being measured.
         moved = page.evaluate(
             """async () => {
               const pane = document.querySelector("#finding-editor");
@@ -7995,8 +8003,8 @@ class BrowserWorkflowTests(unittest.TestCase):
                       lost: Math.round(Math.max(0, tallBefore - pane.scrollHeight))};
             }"""
         )
-        # Taking the prompt removes the banner, and the pane is already at its end, so the content
-        # below cannot hold the view still. It may give up that much and no more.
+        # Taking the offer removes the banner, and the pane is already at its end, so the content
+        # below cannot hold the view still. The section may move by at most the height the pane lost.
         self.assertLessEqual(
             abs(moved["moved"]), moved["lost"] + 4,
             f"the section slid {moved['moved']}px while the pane lost only {moved['lost']}px",
@@ -8044,8 +8052,8 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_an_edited_library_section_is_offered_back_once_the_field_is_left(self) -> None:
         """The offer keys off the content itself, so a section that no longer matches its entry is
-        offerable however it got that way. Typing never redraws the pane -- it would destroy the
-        caret -- so the banner waits for the field to be left, but not for a reload."""
+        offerable however it got that way. Typing never redraws the pane, because that would
+        destroy the caret, so the banner waits for the field to be left, but not for a reload."""
         report_id = self.ready_report(include_finding=True)
         self._library_finding(report_id)
 
@@ -8091,7 +8099,8 @@ class BrowserWorkflowTests(unittest.TestCase):
 
     def test_refreshing_offers_never_changes_the_report(self) -> None:
         """The refresh runs inside a reportchange listener. A write there would call scheduleSave,
-        which dispatches reportchange again -- an unbounded save loop eating the one backup file."""
+        which dispatches reportchange again. The result is an unbounded save loop that keeps
+        overwriting the one backup file."""
         report_id = self.ready_report(include_finding=True)
         self._library_finding(report_id)
         page = self.page
@@ -8108,8 +8117,9 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(puts, [], "the offer refresh saved the report")
 
     def test_emptying_the_installed_steps_offers_them_again(self) -> None:
-        """A decline is permanent, an install is not: the record of installing describes content that
-        is no longer there. The two neighbouring tests only pass because their fixture types a step."""
+        """A decline is permanent, but an install is not, because the record of installing describes
+        content that is no longer there. The two neighbouring tests only pass because their fixture
+        types a step."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         report.engagement.tested_channels = ["web", "api"]
@@ -8153,7 +8163,7 @@ class BrowserWorkflowTests(unittest.TestCase):
 
         def untouched_supporting_slot(report, finding):
             # The finding covers production only, so an empty non-production slot is a supporting
-            # image nobody has started: both sides leave it out rather than demand it.
+            # image nobody has started. Both sides leave it out rather than demand it.
             report.scope_targets.append(ScopeTarget(target_id="tgt_uat", environment="non_production", channel="web", value="https://uat.example.test"))
             report.engagement.tested_environments = ["production", "non_production"]
             report.engagement.test_windows["non_production"] = TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))
@@ -8191,7 +8201,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             finding.scope = Scope(mode="custom", target_ids=["tgt_browser"], custom_locations={"production": {"web": ["https://dupe.test", "  https://dupe.test  "]}})
 
         def carried_section_holding_work(report, finding):
-            # Flipping to "open new" hides the previous proof; neither side may then ask for it.
+            # Flipping to "open new" hides the previous proof. Neither side may then ask for it.
             finding.status = "open_previously_discovered"
             main.provision(finding)
             previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
@@ -8218,7 +8228,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         def no_findings(report, finding):
             report.vulnerabilities = []
 
-        # Scope-rule drift is invisible here: a finding with no location cannot open the editor, so
+        # Scope-rule drift is invisible here. A finding with no location cannot open the editor, so
         # the loop below never reaches the comparison. Those cases live in the Findings-gate test.
         cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, untouched_supporting_slot, started_supporting_image_without_an_upload, untested_environment_image, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss, no_findings]
         for case in cases:
@@ -8251,7 +8261,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 )
 
     def test_additional_information_shows_only_the_fields_that_apply(self) -> None:
-        """The section has no visibility rule of its own: it appears when at least one of its fields
+        """The section has no visibility rule of its own. It appears when at least one of its fields
         does. That leaves exactly one hidden cell, and a rule stated twice could not."""
         cases = [
             ("JH", "open_new", []),
@@ -8315,7 +8325,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 self.assertEqual(page.evaluate(measure), expected)
 
         # A textarea opens at two rows and nothing else in the row does, so the tickets box would
-        # stand 16px taller than the field beside it.
+        # be 16px taller than the field beside it.
         heights = page.evaluate(
             """() => Object.fromEntries([...document.querySelectorAll('[data-content-type="additional_information"] .fragment')]
                  .map(card => [card.querySelector(".tag").textContent,
@@ -8336,7 +8346,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         )
 
     def test_a_typed_cvss_value_survives_a_reload_and_a_trip_off_asia(self) -> None:
-        """Keeping the value is the whole of the keep-and-hide rule: nothing clears it, so moving
+        """The keep-and-hide rule hides the field but keeps its value. Nothing clears it, so moving
         the segment away and back has to return it untouched."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
@@ -8452,10 +8462,10 @@ class BrowserWorkflowTests(unittest.TestCase):
         """The sibling of the readiness contract test, for the rules it cannot see.
 
         A finding with no location never opens the editor, so the readiness panel is the wrong
-        place to catch `scopeHasLocation` drifting from `scope_has_location`. The observable that
-        does move is the Findings gate: whether Next carries the tester through to Content. If the
-        client is laxer than the server the tester is bounced straight back, and if it is stricter
-        they are stranded on a report the server would have accepted."""
+        place to catch `scopeHasLocation` drifting from `scope_has_location`. The outcome that does
+        depend on that rule is the Findings gate. Next either carries the tester through to Content
+        or it doesn't. If the client is laxer than the server, the tester is bounced straight back.
+        If it is stricter, they are stuck on Findings with a report the server would have accepted."""
 
         def selected_target(report, finding):
             finding.scope = Scope(mode="custom", target_ids=["tgt_browser"])
@@ -8479,7 +8489,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         def nothing_at_all(report, finding):
             finding.scope = Scope(mode="custom", target_ids=[])
 
-        # The gate counts findings as well as checking them: none at all is a report the tester may generate.
+        # The gate counts findings as well as checking them. A report with none is one the tester may generate.
         def no_findings(report, finding):
             report.vulnerabilities = []
 
@@ -8497,7 +8507,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 page = self.page
                 page.goto(f"{self.base_url}/reports/{report_id}/findings")
                 page.wait_for_selector("#finding-summary b")
-                # Watch for the navigation request, not the resulting URL: when the client is laxer
+                # Watch for the navigation request, not the resulting URL. When the client is laxer
                 # than the server it still fires the request and the server's redirect hides it, so
                 # the landing page looks identical whether or not the two agree. A refusal marks the
                 # table instead, so each case waits for whichever happens first, not for a timeout.
@@ -8554,7 +8564,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         return report_id
 
     def _hold_generation(self, report_id: str) -> None:
-        """Park the page's generate request until it calls window.releaseGenerate()."""
+        """Park the page's generate request until the test calls window.releaseGenerate()."""
         self.page.evaluate(
             """reportId => {
                 const originalFetch = window.fetch.bind(window);
@@ -8672,7 +8682,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                 expect(popup).to_be_hidden()
 
     def test_word_report_popup_waits_for_a_prompt_the_tester_has_open(self) -> None:
-        """Generating takes a while, and a prompt opened meanwhile must not be answered for the tester."""
+        """Generating takes a while, and a dialog opened meanwhile must not be answered for the tester."""
         report_id = self._generatable_report()
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}/edit")
@@ -8700,7 +8710,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 60000")
         report_id = self.ready_report(include_finding=True)
         report = main.workspace.load(report_id)
-        # The file name carries the report year; pin it so the test does not expire with the calendar.
+        # The file name carries the report year. Pin it so the test does not expire with the calendar.
         report.engagement.report_date = date(2026, 1, 3)
         finding = report.vulnerabilities[0]
         next(content for content in finding.contents if content.type == "description").fragments[0].runs = [Run(text="Complete description")]
@@ -9271,9 +9281,9 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_editable_import_of_an_asia_cvss_finding_reaches_ready_state(self) -> None:
         """The Section/CVSS table round trip is parser-tested in isolation, and the Asia CVSS
         readiness rule is contract-tested against a directly-saved report. Neither proves that an
-        editable DOCX import of the same finding lands the browser at the same "ready" verdict, so
-        this drives the real upload and checks Generate is enabled with nothing chosen by hand,
-        network access included: the cover gives it back."""
+        editable DOCX import of the same finding lands the browser at the same "ready" verdict.
+        This test drives the real upload and checks that Generate is enabled with nothing chosen
+        by hand. Network access comes back from the cover too, so it is not chosen by hand either."""
         report_id = self.ready_report(include_finding=True)
         report, finding = self._complete_finding(report_id)
         report.engagement.segment = "Asia"
@@ -9469,7 +9479,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(self.page.locator("#app-diagnostics")).to_have_count(0)
 
     def test_a_word_report_that_fails_keeps_the_file_for_the_other_button(self) -> None:
-        """An editable copy refuses a Word report whose Limitations row lost its cell; a retest does
+        """An editable copy refuses a Word report whose Limitations row lost its cell. A retest does
         not read that table, so the same file still starts the next test."""
         document = Document(BytesIO(self.importable_docx()))
         limitations = next(table for table in document.tables if table.rows[0].cells[0].text.strip() == "Limitations")

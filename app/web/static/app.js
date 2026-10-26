@@ -10,9 +10,9 @@
   vocabulary.unicode_character_ranges = unicodeCharacterRanges;
   const reportId = serverReport.report_id;
   const reportTypeLabels = Object.fromEntries(vocabulary.report_types);
-  // The header names the engagement only once both halves are saved; a missing half falls back.
-  // Each fact gets its own chip: the old hyphen-joined string was unreadable against an application
-  // name that contains hyphens of its own.
+  // The header names the engagement only once both halves are saved. A missing half falls back to the
+  // generic title. Each fact gets its own chip because the old hyphen-joined string was unreadable
+  // when the application name contained hyphens of its own.
   const updateEngagementName = (saved = report) => {
     const heading = document.querySelector(".engagement-name");
     if (!heading) return;
@@ -42,7 +42,8 @@
   const requiresFragment = ["description", "recommended_remediation", "in_conclusion"];
   const RESOLVED_REMEDIATION = vocabulary.resolved_remediation;
   // Twin of report_service.status_conclusion_runs and STATUS_CONCLUSION_PATTERN. The builder and the
-  // recogniser must stay a pair: relax one and every default on disk freezes at its stored title.
+  // recogniser must stay a pair. If one is relaxed without the other, every default on disk freezes at
+  // its stored title.
   const statusConclusionWord = status => status === "resolved" ? "Resolved" : status === "closed" ? "CLOSED" : "Open";
   const statusConclusionRuns = (title, statusWord) => {
     const lead = statusWord === "Open" ? "is still " : statusWord === "CLOSED" ? "is now " : "is ";
@@ -90,11 +91,11 @@
     return kept;
   };
   // The list gutter draws the markers, so a pasted "1." would render as "1. 1.". A separator is
-  // required, which is what keeps "1.2.3.4 is the host" intact; roman and lettered markers are too
+  // required, which is what keeps "1.2.3.4 is the host" intact. Roman and lettered markers are too
   // close to prose to strip, and a wrong strip deletes text silently.
   const LIST_MARKER_PREFIX = /^\s*(\d{1,3}[.)]|\(\d{1,3}\)|[-*+•–—])\s+/;
   let updateSetupFieldIssues = () => {};
-  // The Setup fields a save will not leave blank whatever else is chosen, by the issue code that names
+  // The Setup fields a save will not leave blank whatever else is chosen, keyed by the issue code that names
   // each one. The same list highlights a field after Next and draws its * before anything is wrong.
   // Twin: the missing_* codes in setupResults (rules.js), except missing_report_name, which
   // CONDITIONAL_SETUP_FIELDS holds.
@@ -114,11 +115,11 @@
     missing_report_name:"engagement.report_name",
   };
   // A required field's label gets the `is-required` class and CSS draws the star, so the label's
-  // text stays exactly the field's name. A star typed into the label would turn "Application Name"
-  // into "Application Name*": tests and the undo history find fields by that text. Headings are
-  // not looked up that way, so they take a real star after their text. The coverage fields (Start,
-  // End and Time) are drawn per environment and take no star of their own: the Test Coverage
-  // heading's star covers all three, and each carries aria-required.
+  // text stays exactly the field's name. Don't type the star into a label. "Application Name" would
+  // become "Application Name*", and the tests and the undo history look fields up by that text.
+  // Headings are not looked up that way, so they take a real star after their text. The coverage
+  // fields (Start, End and Time) are drawn per environment and take no star of their own. The Test
+  // Coverage heading's star covers all three, and each carries aria-required.
   const requiredStar = () => {
     const star = document.createElement("span");
     star.className = "required-star";
@@ -133,7 +134,7 @@
       control?.setAttribute("aria-required", "true");
       control?.closest("label")?.classList.add("is-required");
     });
-    // no_tested_environment and missing_scope_target
+    // These two headings carry the stars for no_tested_environment and missing_scope_target.
     [root.querySelector("#test-windows")?.closest("section")?.querySelector(":scope > h2"), root.querySelector(".scope-heading h2")]
       .forEach(heading => heading?.firstChild?.after(requiredStar()));
     const legend = document.createElement("p");
@@ -146,7 +147,7 @@
   // Tells "nothing opened yet" apart from "the tester closed them all"; an empty set alone would
   // re-open the first finding every time the table is rebuilt.
   let findingFoldDefaulted = false;
-  // Creates stable client-side IDs for vulnerabilities, fragments, and evidence records.
+  // Creates a short client-side ID from a prefix, such as v_ for a finding and f_ for a fragment.
   const id = (prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
   const escape = window.vrPage.escapeHtml;
   const libraryOptionMarkup = (entry, includePlaceholder = false) => {
@@ -234,7 +235,7 @@
   let automaticChangesPending = false;
   const onSaved = () => { automaticChangesPending = false; updateEngagementName(); };
   const page = root.id === "setup" ? root.dataset.step : "edit";
-  // A Setup field's name: its section's heading text (a count is appended inside it), then what tells it apart there.
+  // A Setup field's name is its section's heading text (a count is appended inside it), then what tells it apart there.
   const headingText = container => container?.querySelector("h2")?.firstChild?.nodeValue || null;
   const setupFieldName = element => {
     const section = element?.closest?.("#setup > section");
@@ -248,7 +249,7 @@
       row: componentRow ? [...componentRow.parentElement.querySelectorAll(".scope-component-row")].indexOf(componentRow) : null,
     };
   };
-  // Marked as Go to marks; the cursor stays out, so Ctrl+Z still reaches the app.
+  // Marks the field as Go to does and leaves the cursor out of it, so Ctrl+Z still reaches the app.
   const markUntilClickElsewhere = field => {
     field.classList.add("is-review-target");
     const letGo = event => {
@@ -276,7 +277,8 @@
     if (row.classList.contains("finding-location-row")) {
       const label = control && element.getAttribute("aria-label");
       if (label) return {finding, label};
-      // Select all reads Deselect all once pressed, and its box before the row is enhanced has no label, so both go by environment.
+      // The Select all button reads Deselect all once pressed, and its checkbox has no label before the row
+      // is set up, so both go by environment.
       const group = element.closest("[data-location-group]")?.dataset.locationGroup;
       if (group) return {finding, group};
     }
@@ -440,10 +442,10 @@
     }
   });
   // Converts editor DOM content into normalized, storage-safe rich-text runs, one "\n" per line break.
-  // A line break is markup, not text: Enter makes a <div>, an empty line is <div><br></div>, and the
+  // A line break is markup, not text. Enter makes a <div>, an empty line is <div><br></div>, and the
   // editor is pre-wrap, so Shift+Enter makes a newline character. The editor is therefore read by the
   // lines it shows. The <br> or newline that ends the last line of a block, or of the editor, only
-  // closes that line and starts no new one; the second is what makes an empty line.
+  // closes that line and starts no new one. A second one is what makes an empty line.
   function runsFrom(element) {
     const lines = [];
     let line = null;
@@ -498,8 +500,8 @@
     const invalidCharacters = value => [...new Set([...value].filter(character => !allowed.test(character)))];
     return {label, invalidCharacters, valid:value => !invalidCharacters(value).length};
   };
-  // Built from the server's CHARACTER_RULES, judging letters and digits by the browser's own Unicode
-  // categories. Setup has always worked this way; the Content page uses serverCharacterRule instead.
+  // Built from the server's CHARACTER_RULES. The browser's own Unicode categories decide what counts as
+  // a letter or digit. Setup has always worked this way; the Content page uses serverCharacterRule instead.
   const browserCharacterRule = (rule, field, context = {}) => {
     const invalidCharacters = value => window.vrRules.invalidCharacters(value, rule);
     return {
@@ -558,9 +560,8 @@
     observeWidth(input, resize);
     return wrap;
   }
-  // Ensures a finding has the content blocks and required starter fragments for its status.
   const fragmentHasText = fragment => (fragment.runs || []).some(run => run.text?.trim());
-  // Any tester work at all, not just paragraph text: shared by the delete guard and the proof-of-concept offer.
+  // True for any tester work, whatever the fragment type. The delete guard and the proof-of-concept offer share it.
   const fragmentHasContent = fragment => fragmentHasText(fragment)
     || (fragment.items || []).some(item => (item.runs || []).some(run => run.text?.trim()))
     || [...(fragment.header || []), ...(fragment.rows || []).flat()].some(cell => (cell.runs || []).some(run => run.text?.trim()))
@@ -585,7 +586,7 @@
     const status = statusConclusionWord(vulnerability.status);
     const paragraphs = conclusion.fragments.filter(fragment => fragment.type === "paragraph");
     const generated = paragraphs.find(fragment => fragment.generated === "status_conclusion");
-    // The regex alone decides: the marker outlives the text and overwrote written conclusions.
+    // The regex alone decides. The marker outlives the text, and trusting it overwrote written conclusions.
     const defaultParagraph = paragraphs.find(hasDefaultStatusConclusion);
     if (!paragraphs.length) {
       // Created empty, never filled. The Content page offers the sentence instead.
@@ -605,8 +606,8 @@
   const contentTypesForStatus = status => status === "open_new"
     ? ["description","recommended_remediation","proof_of_concept"]
     : ["description","recommended_remediation","previous_proof_of_concept","proof_of_concept","in_conclusion"];
-  // Twin of report_service.content_has_work. Boilerplate this app wrote itself does not count: it
-  // is regenerated on demand, so counting it would make every finding look like it has work to lose.
+  // Twin of report_service.content_has_work. Boilerplate this app wrote itself does not count.
+  // It is regenerated on demand, so counting it would make every finding look like it has work to lose.
   const contentHasWork = content => (content.fragments || [])
     .filter(fragment => !(fragment.generated || isDefaultStatusConclusion(fragment)))
     .some(fragment =>
@@ -614,12 +615,13 @@
       || (fragment.items || []).some(item => (item.runs || []).some(run => run.text?.trim()))
       || fragment.text?.trim() || fragment.caption?.trim() || fragment.evidence_id
       || [...(fragment.header || []), ...(fragment.rows || []).flat()].some(cell => (cell.runs || []).some(run => run.text?.trim())));
+  // Gives a finding the content sections its status prints and the starter fragments each section needs.
   function provision(vulnerability) {
     const types = contentTypesForStatus(vulnerability.status);
     const existing = Object.fromEntries((vulnerability.contents || []).map(content => [content.type, content]));
     // A status change must not destroy work. A section this status does not print is kept when it
     // still holds something written, so changing status and back brings the tester's work with it.
-    // in_conclusion is the exception: it is a statement about the status, so carrying it would keep a
+    // in_conclusion is the exception. It is a statement about the status, so carrying it would keep a
     // sentence the status has just made false. It is dropped, and offered back fresh on the way in.
     const carried = (vulnerability.contents || []).filter(content => !types.includes(content.type) && content.type !== "in_conclusion" && contentHasWork(content));
     vulnerability.contents = [...types.map(type => existing[type] || {type, fragments:[]}), ...carried];
@@ -648,7 +650,7 @@
   };
   // syncConclusion has already rewritten the sentence by the time this runs at every call site, so
   // the caller passes what the paragraph said beforehand. Boilerplate gets a notice rather than a
-  // choice: "keep mine" on a sentence the app owns is a promise the next save would undo, because
+  // choice. "Keep mine" on a sentence the app owns is a promise the next save would undo, because
   // provision re-derives any paragraph that still contains a recognised sentence.
   async function offerConclusionRewrite(finding, previousText) {
     const conclusion = finding.contents?.find(content => content.type === "in_conclusion");
@@ -658,11 +660,11 @@
     const statusWord = statusConclusionWord(finding.status);
     const derived = statusConclusionRuns(finding.title, statusWord).map(run => run.text).join("");
     const before = previousText ?? conclusionText(first);
-    // Nothing to announce when there was no sentence: a status change that brings the section back
+    // Nothing to announce when there was no sentence. A status change that brings the section back
     // creates one rather than updating one.
     if (!before.trim()) return false;
     const span = defaultConclusionSpan(before);
-    // Nothing to announce when the sentence did not move: both open statuses read "Open".
+    // Nothing to announce when the sentence did not move, since both open statuses read "Open".
     if (span && before.slice(span[0], span[1]) === derived) return false;
     if (span) {
       await window.vrDialog.ask({
@@ -683,11 +685,11 @@
     return true;
   }
   const scopeTargetIds = scope => scope?.target_ids || [];
-  // Twin of report_service.scope_of_every_target: a finding added on the Findings page starts with
+  // Twin of report_service.scope_of_every_target. A finding added on the Findings page starts with
   // every place the engagement tests selected, and the tester unticks what it does not touch.
   const allTargetsScope = () => ({mode:"custom", target_ids:report.scope_targets.map(target => target.target_id), location_values:{}, custom_locations:{}});
-  // Twin of report_service.location_lines: blanks are nothing, a "#" line is a note to the tester,
-  // and a repeat is the same place said twice. The raw text stays in the draft; it just never counts.
+  // Twin of report_service.location_lines. Blanks are nothing, a "#" line is a note to the tester,
+  // and a repeat is the same place said twice. The raw text stays in the draft but never counts.
   const locationLines = values => {
     const cleaned = [];
     (values || []).forEach(value => {
@@ -724,7 +726,7 @@
   const COMPONENT_CHANNELS = vocabulary.component_channels;
   const isComponentChannel = channel => COMPONENT_CHANNELS.includes(channel);
   // scope_text holds a string for a location channel and {component, description} for a component
-  // one. Reading through these keeps every call site out of the business of knowing which.
+  // one. Reading through these helpers means no call site has to know which.
   const emptyScopeText = channel => isComponentChannel(channel) ? {component:"", description:""} : "";
   const componentText = value => typeof value === "string" ? value : typeof value?.component === "string" ? value.component : "";
   const descriptionText = value => typeof value?.description === "string" ? value.description : "";
@@ -738,8 +740,6 @@
       ? {component:componentText(current), description:value}
       : {component:value, description:descriptionText(current)};
   };
-  // Words rules.js's Setup results as report_service.setup_issues does, or the Setup notice and the
-  // server's page gate describe the same report differently.
   // Twin of report_service.affected_channels; keep both in step.
   const affectedChannels = finding => {
     const scope = finding.scope;
@@ -762,8 +762,8 @@
     return CHANNELS.filter(channel => channels.includes(channel) && (available[channel] || []).length);
   };
   const environmentName = environment => environment === "production" ? "Production" : "Non-Production";
-  // Twin of report_service.fragment_applies: what prints and what readiness checks. An image prints
-  // when its environment is tested; a supporting slot nobody has started is left out, not demanded.
+  // Twin of report_service.fragment_applies. It decides what prints and what readiness checks. An image
+  // prints when its environment is tested. A supporting slot nobody has started is left out, not demanded.
   const fragmentApplies = (fragment, finding, contentType) => {
     if (contentType === "previous_proof_of_concept" || !fragment.environment) return true;
     if (!report.engagement.tested_environments.includes(fragment.environment)) return false;
@@ -795,7 +795,7 @@
   // the proof of concept alone, so a carried previous-PoC image is never relabelled or counted here.
   const syncEvidenceImageSlots = finding => {
     const environments = affectedEnvironments(finding);
-    // Only an untested environment's empty slot goes: a tested one may be a supporting image the
+    // Only an untested environment's empty slot goes. A tested one may be a supporting image the
     // tester has not uploaded yet. An uploaded screenshot is never removed or relabelled here.
     finding.contents.filter(content => content.type !== "previous_proof_of_concept").forEach(content => {
       content.fragments = content.fragments.filter(fragment => !(
@@ -818,7 +818,7 @@
     });
     return moved;
   };
-  // Single owner of the rule: provisioning guarantees these fragments exist, so allowing a delete
+  // Single owner of the rule. Provisioning guarantees these fragments exist, so allowing a delete
   // would only have the next save put one back and make the editor look like it lost the change.
   const deletionBlockedReason = (fragment, content, finding) => {
     if (requiresFragment.includes(content.type)) {
@@ -840,8 +840,8 @@
     if (!content.fragments.some(fragment => fragment.type === "numbered_list")) content.fragments.unshift(newFragment("numbered_list"));
   };
   const CONVERTIBLE_TYPES = ["paragraph", "note", "code_block"];
-  // Not `allowed`: converting to a paragraph in a proof of concept is wanted even though Add forbids
-  // it there. in_conclusion is out because provision re-inserts a paragraph when none is left.
+  // Separate from `allowed` on purpose. Converting to a paragraph in a proof of concept is wanted even
+  // though Add forbids it there. in_conclusion is out because provision re-inserts a paragraph when none is left.
   const CONVERTIBLE_SECTIONS = ["description", "recommended_remediation", "previous_proof_of_concept", "proof_of_concept"];
   const conversionTargets = (fragment, content) => {
     if (!CONVERTIBLE_TYPES.includes(fragment.type) || !CONVERTIBLE_SECTIONS.includes(content?.type)) return [];
@@ -849,7 +849,7 @@
   };
   // provision rewrites or strips anything carrying `generated`, so a converted copy would not last.
   const conversionBlockedReason = fragment => (fragment.generated ? "The app maintains this text, so its type is fixed." : null);
-  // Deletes the source key, never leaves it: readiness branches on which key is present, not on type,
+  // Deletes the source key and never leaves it. Readiness branches on which key is present, not on type,
   // so a code block still holding `runs` reads complete here while the server refuses to generate it.
   const convertFragment = (fragment, targetType) => {
     const runs = fragment.runs;
@@ -871,8 +871,8 @@
   // Deep-clones library fragments with fresh frag_ids; frag_id uniqueness is report-wide, so nothing
   // copied in from the library may keep its original id. Shared by every replace/merge offer.
   const remintFragments = fragments => { const copied = JSON.parse(JSON.stringify(fragments)); copied.forEach(fragment => { fragment.frag_id = id("f"); }); return copied; };
-  // Twin of report_service.merge_step_lists; adjacent steps are one procedure, while an intervening
-  // note or other fragment is an ordering boundary that appended content must not cross.
+  // Twin of report_service.merge_step_lists. Adjacent steps are one procedure, while an
+  // intervening note or other fragment is an ordering boundary that appended content must not cross.
   const mergeStepLists = fragments => {
     const merged = [];
     fragments.forEach(fragment => {
@@ -885,8 +885,8 @@
     });
     return merged;
   };
-  // Twin of report_service.apply_poc_variant; keep both in step. mode "replace" overwrites the
-  // non-image fragments; "merge" appends the library's steps after what is already there.
+  // Twin of report_service.apply_poc_variant; keep both in step. Mode "replace" overwrites the
+  // non-image fragments, and "merge" appends the library's steps after what is already there.
   const applyPocVariant = (finding, steps, variants, mode = "replace") => {
     const proof = finding.contents.find(content => content.type === "proof_of_concept");
     if (!proof) return;
@@ -900,9 +900,9 @@
     finding.poc_variant_declined = (finding.poc_variant_declined || []).filter(channel => !variants.includes(channel));
   };
   const pocStepsFor = (finding, variant) => libraryEntryFor(finding)?.proof_of_concept?.[variant] || null;
-  // The conclusion quotes the steps, so only prose-bearing fragments have a "last line" at all. An
+  // The conclusion quotes the steps, so only fragments that hold prose have a "last line" at all. An
   // image or table has none, and a command line or a heading quoted into a conclusion reads as a bug.
-  // Consequence: a proof of concept ending in a code block is offered the line above it.
+  // As a result, a proof of concept ending in a code block is offered the line above it.
   const pocLastStep = finding => {
     const fragments = finding.contents?.find(content => content.type === "proof_of_concept")?.fragments || [];
     for (let index = fragments.length - 1; index >= 0; index -= 1) {
@@ -920,8 +920,8 @@
   // A library entry's description/recommended_remediation fragments, for the Content-page offer.
   const libraryContentFor = (entry, type) => entry?.contents?.find(content => content.type === type)?.fragments || [];
   // Absent, null and false read identically to a tester, but the server dumps every optional field
-  // explicitly, so a freshly typed section changes shape the first time it is saved. Coerce rather
-  // than strip, or a fingerprint taken before a save stops matching the moment the save returns.
+  // explicitly. A freshly typed section therefore changes shape the first time it is saved. Coerce
+  // rather than strip, or a fingerprint taken before a save stops matching the moment the save returns.
   const normalizedRuns = runs => (runs || []).map(run => [run.text || "", run.bold ? 1 : 0, run.italic ? 1 : 0, run.underline ? 1 : 0]);
   const normalizedCells = cells => (cells || []).map(cell => normalizedRuns(cell.runs));
   const normalizedSection = fragments => JSON.stringify((fragments || []).map(fragment => [
@@ -929,13 +929,13 @@
     normalizedCells(fragment.header), (fragment.rows || []).map(normalizedCells),
     fragment.text || "", fragment.caption || "", fragment.evidence_id || "",
     fragment.environment || "", fragment.generated || "",
-    // continue_numbering is deliberately absent. The library offer asks whether this section still
-    // matches the entry's content, and numbering presentation is not content -- including it would
+    // continue_numbering is left out on purpose. The library offer asks whether this section still
+    // matches the entry's content, and numbering presentation is not content. Including it would
     // make ticking the box re-open an offer whose only remedy would wipe the tick.
   ]));
   // frag_ids are reminted on every copy, so they are the one thing two identical sections never share.
   const sameFragments = (left, right) => normalizedSection(left) === normalizedSection(right);
-  // 32-bit FNV-1a over the same normalisation. Client-only: Python stores the string and never
+  // 32-bit FNV-1a over the same normalisation. Client-only. Python stores the string and never
   // computes it, so this is not a twin. A collision hides one banner until the next edit, and the
   // length prefix means a collision needs a matching length too.
   const sectionFingerprint = fragments => {
@@ -948,11 +948,11 @@
     return `${text.length}-${(hash >>> 0).toString(16)}`;
   };
   // Dismissals of the conclusion step offer, for this sitting only. The persisted record cannot do
-  // this job: while the conclusion is still boilerplate the offer is meant to keep standing, so a
+  // this job. While the conclusion is still boilerplate the offer is meant to keep standing, so a
   // Dismiss that only wrote to the draft would be redrawn immediately and mean nothing.
   const dismissedStepOffers = new Set();
   const dismissedSentenceOffers = new Set();
-  // Whether the tester has written any steps. Images are excluded deliberately: a screenshot is not
+  // Whether the tester has written any steps. Images are excluded on purpose. A screenshot is not
   // a step, and "I have a screenshot but no steps" is exactly the state worth offering.
   const pocHasWrittenSteps = finding => (finding.contents?.find(content => content.type === "proof_of_concept")?.fragments || [])
     .some(fragment => fragment.type !== "image" && fragmentHasContent(fragment));
@@ -962,8 +962,8 @@
     const entry = libraryEntryFor(finding);
     if (!entry) return [];
     const offers = ["description", "recommended_remediation"]
-      // Stays first: a resolved finding's remediation renders locked, with no fragment editors, so
-      // a banner there would offer an action the tester has no way to complete.
+      // Stays first, because a resolved finding's remediation renders locked, with no fragment editors,
+      // so a banner there would offer an action the tester has no way to complete.
       .filter(type => !(finding.status === "resolved" && type === "recommended_remediation"))
       .filter(type => libraryContentFor(entry, type).length)
       .map(type => ({type, fragments: finding.contents?.find(content => content.type === type)?.fragments || []}))
@@ -981,9 +981,9 @@
     return offers;
   };
   // A finding that comes from the library starts with the entry's Description and Remediation and the
-  // proof-of-concept steps for every app type it touches, web first, so the Content page has no
+  // proof-of-concept steps for every app type it touches, web first. The Content page then has no
   // banner to click. A section the tester has already written is left alone and keeps its banner.
-  // In Conclusion is never filled: it holds the tester's own words. Twin: insert_library in main.py.
+  // In Conclusion is never filled, because it holds the tester's own words. Twin: insert_library in main.py.
   // The finding's library_ref must be set first, because the steps are read through it.
   const installLibraryContent = (finding, entry) => {
     provision(finding);
@@ -999,8 +999,8 @@
     const variants = applicablePocVariants(finding);
     if (variants.length && !pocHasWrittenSteps(finding)) applyPocVariant(finding, variants.flatMap(variant => pocStepsFor(finding, variant) || []), variants);
   };
-  // One shape for every library prompt, quieter than the section it offers to rewrite.
-  // Module scope, not inside continuousEditor: the Setup page needs it too, and the dispatch at the
+  // One shape for every library offer, quieter than the section it would rewrite.
+  // Module scope, not inside continuousEditor. The Setup page needs it too, and the dispatch at the
   // bottom of this file runs one or the other, never both.
   const buildOffer = (className, message) => {
     const banner = document.createElement("div");
@@ -1295,7 +1295,7 @@
         ? [report.engagement.tested_environments]
         : ["production", "non_production"];
     report.engagement.tested_environments = Object.keys(environmentLabels).filter(environment => recoveredEnvironments.includes(environment));
-    // Twin of the last two branches of models.resolve_tested_channels: never fall back to web while
+    // Twin of the last two branches of models.resolve_tested_channels. Never fall back to web while
     // the report's own targets can answer, because that would drop every API and mobile location.
     const recoveredChannels = Array.isArray(report.engagement.tested_channels)
       ? report.engagement.tested_channels
@@ -1328,7 +1328,7 @@
       CHANNELS.forEach(channel => {
         const current = report.scope_text[environment][channel];
         // A total normalisation, not an undefined-fill. A tab cached before component channels
-        // gained two boxes restores a bare string here, and this script is not in strict mode, so a
+        // gained two boxes restores a bare string here. This script is not in strict mode, so a
         // later `.component = value` on that string would no-op and swallow every keystroke.
         if (current === undefined || current === null) {
           const seeded = report.scope_targets.filter(target => target.environment === environment && target.channel === channel).sort((left, right) => left.order - right.order);
@@ -1382,7 +1382,7 @@
           reportNameInput.dataset.setupValidated = "true";
           reportNameInput.validateSetupRule(false);
         } else {
-          // A name nothing prints is not checked, so it must not hold Next back, and a refusal left on a
+          // A name nothing prints is not checked, so it must not hold Next back. A refusal left on a
           // field nobody can see would still be the first message focusFirstSetupMessage reaches for.
           delete reportNameInput.dataset.setupValidated;
           reportNameInput.setCustomValidity("");
@@ -1396,7 +1396,7 @@
     }
     updateSetupValidationNotice();
     // Offered, never written. A retest that covered one environment usually says so in Limitations,
-    // but the wording stays the tester's to accept. Client-only: nothing server-side re-derives
+    // but the wording stays the tester's to accept. Client-only. Nothing server-side re-derives
     // limitations, so unlike the In Conclusion sentence there is no Python half to keep in step.
     const dismissedLimitations = new Set();
     const limitationsSuggestion = () => {
@@ -1415,7 +1415,7 @@
     // is what keeps the update offer away from wording the tester composed.
     const GENERATED_LIMITATIONS = [/^Retest only in PROD; no .+ testing\.$/, /^Retest only in .+; no PROD testing\.$/];
     const renderLimitationsOffer = () => {
-      // Only the Limitations textarea blocks a redraw: the banner sits directly above it, so
+      // Only the Limitations textarea blocks a redraw. The banner sits directly above it, so
       // inserting one would shift the line under its own caret. Typing the environment name
       // elsewhere should keep updating the offer live.
       const focused = activeTextEntry();
@@ -1425,7 +1425,7 @@
       const current = (report.engagement.limitations || "").trim();
       // "N/A" is the app's own default, so it means the tester has not written limitations yet.
       const blank = current === "" || current === "N/A";
-      // Also true when the environment selection changed, which dates the sentence the same way.
+      // Also true when the environment selection changed, which makes the sentence out of date in the same way.
       const stale = !blank && current !== suggestion && GENERATED_LIMITATIONS.some(shape => shape.test(current));
       const wanted = suggestion && !dismissedLimitations.has(suggestion) && (blank || stale);
       if (!wanted) return existing?.remove();
@@ -1548,7 +1548,7 @@
       });
     };
     const count = (total, word) => `${total} ${word}${total === 1 ? "" : "s"}`;
-    // Screenshots are never deleted by a Setup change: those whose environment is still tested become
+    // Screenshots are never deleted by a Setup change. Those whose environment is still tested become
     // supporting images, and those whose environment is unticked stop printing until it returns.
     const screenshotFate = ({supporting = 0, untested = 0}) => [
       supporting && (supporting === 1
@@ -1682,7 +1682,7 @@
         tone: "danger",
       });
     };
-    // Mirrors reconcile_targets: a target only survives an edit if its exact text is still listed
+    // Mirrors reconcile_targets. A target only survives an edit if its exact text is still listed
     // under an app type the report still covers.
     const survivingAfterScopeText = () => report.scope_targets.filter(target => {
       if (!report.engagement.tested_channels.includes(target.channel)) return false;
@@ -1738,7 +1738,7 @@
       typeHeading.textContent = "App Types";
       const typeOptions = document.createElement("div");
       typeOptions.className = "test-type-options";
-      // Rendered from the static channel list, never from tested_channels: an imported empty
+      // Rendered from the static channel list, never from tested_channels. An imported empty
       // selection would otherwise show no boxes on the only page that can put one back.
       CHANNELS.forEach(channel => {
         const option = document.createElement("label");
@@ -1790,9 +1790,9 @@
         const isSelected = selected(report.engagement.tested_environments, environment);
         // Non-Production shows its environment label as a picker; the checkbox keeps the stable environment name.
         const stored = report.engagement.non_production_label || "";
-        // A stored label that is not a preset -- an old draft, or an imported one -- must open the
-        // text box holding its own value, or the render would show a preset and the next change
-        // event would write it back over a label the tester never touched.
+        // A stored label that is not a preset, such as one from an old or imported draft, must open
+        // the text box holding its own value. Otherwise the render would show a preset and the next
+        // change event would write it back over a label the tester never touched.
         const showCustom = typingCustomLabel || !nonProductionLabels.includes(stored);
         const options = [...nonProductionLabels, OTHERS_OPTION]
           .map(value => `<option value="${value}" ${(showCustom ? OTHERS_OPTION : stored) === value ? "selected" : ""}>${value}</option>`).join("");
@@ -1805,7 +1805,7 @@
         if (coverageName) {
           coverageName.onchange = event => {
             if (event.target.value === OTHERS_OPTION) {
-              // Nothing is written yet: the stored label stays until the tester types one.
+              // Nothing is written yet. The stored label stays until the tester types one.
               typingCustomLabel = true;
               renderCoverage();
               panel.parentElement?.querySelector(".coverage-name-custom")?.focus();
@@ -1822,7 +1822,7 @@
           attachSimpleSetupMessage(customName);
           wireSetupRule(customName, setupRules.non_production_label);
           attachSetupCharacterLimit(customName, customName.maxLength, customName.getAttribute("aria-label"));
-          // No renderCoverage here: it rebuilds this input and would take the caret mid-word.
+          // No renderCoverage here, because it rebuilds this input and would take the caret mid-word.
           customName.oninput = () => {
             report.engagement.non_production_label = customName.value.trim();
             scheduleSave();
@@ -1852,8 +1852,8 @@
           return;
         }
         const [startDate, endDate] = panel.querySelectorAll("input[type=date]");
-        // Scoped to the date pair: the Non-Production panel also holds the typed label box, which
-        // is a text input and comes first.
+        // Scoped to the date pair, because the Non-Production panel also holds the typed label box,
+        // which is a text input and comes first.
         const timeInput = panel.querySelector('.date-pair input[type="text"]');
         startDate.value = testWindow.start_date || "";
         endDate.value = testWindow.end_date || "";
@@ -2256,7 +2256,7 @@
         // against the old entry would go on suppressing the new one's offer.
         finding.content_offer_dismissed = {};
       }
-      // Severity stays blank when the entry gives none: the tester rates the finding, and Next waits for it.
+      // Severity stays blank when the entry gives none. The tester rates the finding, and Next waits for it.
       Object.assign(finding, {title:entry.title, likelihood:entry.default_likelihood, impact:entry.default_impact, severity:entry.default_severity || null, library_ref:{library_id:entry.library_id, source_id:entry.source_id, inserted_at:new Date().toISOString()}});
       // The only title write that did not re-derive the sentence. Harmless while the server fixed it
       // on the next save; not harmless now the tester is prompted about that sentence right here.
@@ -2482,7 +2482,7 @@
     };
     const renderFindings = () => {
     rememberFocusedField();
-    // An empty list starts the default over: its first finding opens, as the first finding of a page
+    // An empty list starts the default over, so its first finding opens, as the first finding of a page
     // does. Without this the default stays spent once any list has been shown, so after the last
     // finding goes every new one starts folded.
     if (!report.vulnerabilities.length) {
@@ -2544,7 +2544,7 @@
         finding.status = nextStatus;
         const conclusionBeforeStatus = conclusionParagraphText(finding);
         provision(finding);
-        // Strictly after the status dialog settles: vrDialog cancels whatever is already open.
+        // Strictly after the status dialog settles, because vrDialog cancels whatever is already open.
         await offerConclusionRewrite(finding, conclusionBeforeStatus);
         scheduleSave();
       };
@@ -2714,7 +2714,7 @@
         .map(([, field]) => root.querySelector(`[data-path="engagement.${field}"]`));
       const undated = results.filter(result => result.code === "missing_test_dates").map(result => result.environment);
       const untimed = results.filter(result => result.code === "missing_test_time").map(result => result.environment);
-      // Per environment, in page order: its dates, then its time.
+      // Per environment, in page order, its dates and then its time.
       const requiredCoverage = [...root.querySelectorAll("#test-windows .environment-window")].flatMap(panel => {
         const environment = panel.querySelector('input[type="checkbox"]')?.value;
         return [
@@ -2742,8 +2742,8 @@
       if (results.length || !inputsValid) {
         if (reveal) {
           incompleteSetup.forEach(input => input.classList.add("validation-error"));
-          // Mark the box the tester has to type into: the component when none is named, the
-          // description when one is named without it.
+          // Mark the box the tester has to type into. That is the component when none is named, and
+          // the description when one is named without it.
           missingScopePanels.forEach(panel => panel.querySelectorAll('[data-scope-field="component"]').forEach(input => input.classList.add("validation-error")));
           const blankDescriptionBoxes = blankDescriptions.map(({environment, app_type, component}) =>
             [...root.querySelectorAll(`#scope-grid .scope-panel.${environment} .scope-channel[data-component-channel="${app_type}"] tbody tr`)]
@@ -2823,22 +2823,22 @@
     remove: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M9 6V4h6v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
   };
   // A pasted image goes to the evidence image the tester armed, or nowhere. Module scope because
-  // both the tile and the editor's paste listener need it, and it outlives the pane rebuild that
-  // every caption keystroke triggers -- which is why it holds a frag_id and never an element.
+  // both the tile and the editor's paste listener need it. It outlives the pane rebuild that every
+  // caption keystroke triggers, which is why it holds a frag_id and never an element.
   let pasteTargetId = null;
   // Case-insensitive because userAgentData reports "macOS" while the legacy platform says "MacIntel".
   const pasteShortcut = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? "\u2318V" : "Ctrl+V";
   const pasteHintText = (filled, armed) => {
     if (filled) return armed ? `Press ${pasteShortcut} to replace` : "";
-    // No "ready" wording: the ring says that, and the thumbnail column is too narrow to spend a
+    // No "ready" wording, because the ring says that and the thumbnail column is too narrow to spend a
     // line on saying it twice.
     return armed ? `Press ${pasteShortcut} to paste<br><small>or click to browse</small>` : "Click to choose, or drag an image here";
   };
   // "paste" is written only where pasting will actually land, so the other images stop advertising
   // something one of them alone can do.
   const refreshPasteHints = () => {
-    // A target the pane no longer shows is not a target: another finding selected, the section
-    // collapsed, the image deleted. Clearing here covers every one of those in a single place.
+    // A target the pane no longer shows is not a target, whether another finding was selected, the
+    // section collapsed or the image deleted. Clearing here covers every one of those in a single place.
     if (pasteTargetId && !document.querySelector(`.evidence-tile[data-fragment-id="${pasteTargetId}"]`)) pasteTargetId = null;
     document.querySelectorAll(".evidence-tile").forEach(tile => {
       const armed = tile.dataset.fragmentId === pasteTargetId;
@@ -2869,10 +2869,8 @@
     clearTimeout(evidenceNoticeTimer);
     evidenceNoticeTimer = setTimeout(() => notice.classList.remove("is-visible"), 4000);
   };
-  // One screenshot in an evidence set. Order is the fragment order, so the position control writes
-  // straight into content.fragments and the report comes out in the order the tiles are shown.
   // `files` is empty when the source also puts HTML on the clipboard, which OneNote and Word both
-  // do; the image is still there as an item.
+  // do. The image is still there as an item.
   const clipboardImageFile = clipboard => {
     if (!clipboard) return null;
     const dropped = [...(clipboard.files || [])].find(file => file.type.startsWith("image/"));
@@ -2884,6 +2882,8 @@
     }
     return null;
   };
+  // One screenshot in an evidence set. Order is the fragment order, so the position control writes
+  // straight into content.fragments and the report comes out in the order the tiles are shown.
   function renderEvidenceTile(fragment, content, rerender, finding, position) {
     const evidence = report.evidence?.[fragment.evidence_id];
     const tile = document.createElement("div");
@@ -2892,8 +2892,8 @@
     tile.tabIndex = 0;
     tile.dataset.pasteLabel = `${contentNames[content.type]} screenshot ${position}`;
     tile.setAttribute("aria-label", tile.dataset.pasteLabel);
-    // pointerdown lands before the label activates its file input, so aiming at the thumbnail arms
-    // the card and opens the picker rather than the two competing for the same click.
+    // pointerdown lands before the label activates its file input. Aiming at the thumbnail therefore
+    // arms the card and opens the picker, rather than the two competing for the same click.
     tile.addEventListener("pointerdown", () => armPasteTarget(fragment.frag_id));
     tile.addEventListener("focusin", () => armPasteTarget(fragment.frag_id));
     const upload = document.createElement("input");
@@ -3103,9 +3103,10 @@
     tile.append(spine, main, upload);
     return tile;
   }
-  // The buttons of an add row, grouped by purpose and in one order in every section: text, lists, media and code, notes.
-  // A section that does not allow a type has no button for it and the others keep their order. A type added to
-  // `allowed` needs a place in ADD_ROW_GROUPS, or it gets no button, and an entry in ADD_ROW_ICONS, or its button reads "undefined".
+  // The buttons of an add row, grouped by purpose and in one order in every section. The groups are text,
+  // lists, media and code, and notes. A section that does not allow a type has no button for it and the
+  // others keep their order. A type added to `allowed` needs a place in ADD_ROW_GROUPS, or it gets no
+  // button, and an entry in ADD_ROW_ICONS, or its button reads "undefined".
   const ADD_ROW_GROUPS = [["paragraph"], ["numbered_list", "bulleted_list"], ["image", "table", "code_block"], ["note", "instance_title"]];
   const addRowIcon = (shapes, size = 14, weight = 1.7) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${weight}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes}</svg>`;
   const ADD_ROW_ICONS = {
@@ -3121,7 +3122,7 @@
   };
   // The row that ends a section. One click adds that kind of fragment at the end of it. The row is one Tab stop and
   // the arrow keys move inside it. The name of the button under the pointer or the cursor shows to the right of the
-  // row, outside it and out of the layout, so no tooltip covers anything and nothing shifts.
+  // row, outside it and out of the layout. No tooltip covers anything and nothing shifts.
   function renderAddRow(sectionName, allowedTypes, onAdd) {
     const row = document.createElement("div");
     row.className = "add-row";
@@ -3237,7 +3238,6 @@
     article.append(set);
     return article;
   }
-  // Renders one content fragment with its type-specific editing controls.
   // How many items a continued list has to count past. The scan stops at the start of its own
   // section, which is what stops a proof of concept continuing the previous proof of concept.
   const numberingOffset = (fragment, content) => {
@@ -3254,6 +3254,7 @@
     }
     return offset;
   };
+  // Renders one content fragment with its type-specific editing controls.
   function renderFragment(fragment, content, rerender, finding) {
     const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger fragment-delete" type="button" aria-label="Delete fragment" title="Delete">&#215;</button></div>`;
     const removeButton = card.querySelector(".danger");
@@ -3286,8 +3287,8 @@
         const targetType = convert.value;
         convert.value = "";
         if (!targetType) return;
-        // Only when the loss is real: a dialog on a lossless conversion trains the tester to click
-        // through the one that matters.
+        // Only when the loss is real, because a dialog on a lossless conversion trains the tester to
+        // click through the one that matters.
         const formatted = targetType === "code_block" && (fragment.runs || []).some(run => run.bold || run.italic || run.underline);
         if (formatted && !await window.vrDialog.confirm({
           title: "Make this a code block?",
@@ -3302,7 +3303,7 @@
           confirmLabel: "Delete it and convert", cancelLabel: "Keep the code block",
         })) return;
         convertFragment(fragment, targetType);
-        // Never optional: the editor body is chosen by payload key, so a stale input would write the
+        // Never optional. The editor body is chosen by payload key, so a stale input would write the
         // old key back and lose whatever was typed into it.
         rerender();
         scheduleSave();
@@ -3352,7 +3353,7 @@
       gutter.className = "list-gutter";
       gutter.setAttribute("aria-hidden", "true");
       // Inserted from here, never from the shared head markup, so every other fragment head is
-      // untouched. A label rather than a button: a head rule sizes every button to a 20px square.
+      // untouched. A label rather than a button, because a head rule sizes every button to a 20px square.
       if (numbered) {
         const fragments = content?.fragments || [];
         const index = fragments.indexOf(fragment);
@@ -3381,7 +3382,7 @@
       measure.className = "list-line-measure";
       editor.append(gutter, input, measure);
       const renderGutter = () => {
-        // Read at paint time, never captured: the repaint below relies on a fresh count.
+        // Read at paint time and never captured, because the repaint below relies on a fresh count.
         let itemNumber = numberingOffset(fragment, content);
         renderLineMarkers(input, gutter, measure, line => line.trim() ? numbered ? `${++itemNumber}.` : "\u2022" : "", "list-marker");
       };
@@ -3532,7 +3533,7 @@
       });
     }
     else if (fragment.type === "image") {
-      // Images never reach here: the content loop routes each run of them to renderEvidenceSet.
+      // Images never reach here. The content loop routes each run of them to renderEvidenceSet.
       card.append(renderEvidenceTile(fragment, content, rerender, finding, 1));
     } else {
       const isCode = fragment.type === "code_block";
@@ -3556,7 +3557,7 @@
     const nav = document.querySelector("#finding-nav");
     const pane = document.querySelector("#finding-editor");
     // Images are routed by the armed evidence image, text by focus. Neither can use the other's
-    // destination, so an image is taken even from inside a caption -- honouring focus there would
+    // destination, so an image is taken even from inside a caption. Honouring focus there would
     // drop the screenshot into a box that cannot hold it.
     document.addEventListener("paste", event => {
       if (!clipboardImageFile(event.clipboardData)) return;
@@ -3587,7 +3588,7 @@
       }
       return fields;
     };
-    // A `<details>` rendered `open` unconditionally springs back the moment an autosave rebuilds.
+    // A `<details>` rendered `open` unconditionally reopens as soon as an autosave rebuilds it.
     const collapsedReviewGroups = new Set();
     // Held as state rather than left behind as a class, so a re-render cannot drop the highlight
     // before the tester has dealt with the field.
@@ -3611,7 +3612,7 @@
         return [fragment.text, fragment.caption].filter(Boolean).join(" ");
       };
       const fragmentIssues = finding => {
-        // Affected environments: the ones whose screenshots are required rather than supporting.
+        // Affected environments are the ones whose screenshots are required rather than supporting.
         const relevant = affectedEnvironments(finding);
         const printed = contentTypesForStatus(finding.status);
         // Environments the per-environment rule already reports, so a slot serving one stays quiet.
@@ -3720,7 +3721,7 @@
       count.textContent = issues.length ? `${issues.length} to fill in` : "Ready";
       count.dataset.state = issues.length ? "issues" : "ready";
       // Empty evidence slots are ringed only when their own Go to action reveals them. Any jump
-      // silences every competing mark so the requested field stands alone.
+      // clears every competing mark, so the requested field is the only one marked.
       const incomplete = reviewTargetId
         ? new Set(issues.filter(issue => issue.evidenceSlot && issue.fragmentId === reviewTargetId).map(issue => issue.fragmentId))
         : new Set(issues.filter(issue => issue.fragmentId && issue.fragmentId !== justAddedFragmentId && !issue.evidenceSlot && (issue.level || "error") === "error").map(issue => issue.fragmentId));
@@ -3745,8 +3746,8 @@
         generateButton.title = issues.length ? "Fill in the remaining details before generating" : "Generate Word report";
       }
       // One card per finding, so a finding with five gaps reads as one row rather than five.
-      // Library offers ride along as warnings: they are suggestions, so they are listed but never
-      // counted, or the verdict and the Generate button would disagree with the server.
+      // Library offers are listed as warnings. They are suggestions and are never counted, or the
+      // verdict and the Generate button would disagree with the server.
       const offers = report.vulnerabilities.flatMap(finding => pendingLibraryOffers(finding).map(offer => ({
         finding,
         level: "warning",
@@ -3807,7 +3808,7 @@
         updateFoldAllReview();
       };
       updateFoldAllReview();
-      // The whole row is the target; the arrow stays a real button so keyboard and AT still reach it.
+      // The whole row is the target, and the arrow stays a real button so keyboard and assistive technology still reach it.
       panel.querySelectorAll(".review-row").forEach(row => {
         row.onclick = event => {
           if (event.target.closest("button")) return;
@@ -3846,7 +3847,7 @@
       return issues;
     };
     document.addEventListener("reportchange", updateReadinessPanel);
-    // The jump marker is a pointer, not a verdict: it lets go when the tester looks elsewhere.
+    // The jump marker shows where Go to landed. It is not a verdict, so it clears when the tester clicks elsewhere.
     document.addEventListener("click", event => {
       if (!reviewTargetId) return;
       // A click in the panel is how a jump is asked for, so it must not undo the one just made.
@@ -3856,11 +3857,11 @@
       updateReadinessPanel();
     });
     // The banners are pure functions of current state, so they can be rebuilt without redrawing the
-    // pane. Declared out here, taking the finding explicitly, so both render() and the refresh below
-    // produce byte-identical nodes from one source.
+    // pane. They are declared out here and take the finding as an argument, so both render() and the
+    // refresh below produce byte-identical nodes from one source.
     let contentOffersFor = () => [];
-    // render() is the only thing that rebuilds the pane, and typing never calls it -- deliberately,
-    // because it would destroy the caret. Without this, an offer earned by an edit waited for a
+    // render() is the only thing that rebuilds the pane. Typing never calls it, on purpose, because a
+    // rebuild would destroy the caret. Without this refresh, an offer caused by an edit waited for a
     // section toggle or a reload. reportchange already fires 100ms after every keystroke.
     const refreshContentOffers = () => {
       const finding = report.vulnerabilities.find(candidate => candidate.uid === selectedFindingUid);
@@ -3885,7 +3886,7 @@
     };
     document.addEventListener("reportchange", refreshContentOffers);
     // Focus leaving the fragment just added ends the wait for its red ring. The Add button that made it is removed
-    // with the old pane and reports a focusout of its own, which is not about the new fragment, so only focus
+    // with the old pane and reports a focusout of its own, which is not about the new fragment. Only focus
     // leaving the fragment's own fields counts. A window that loses focus keeps the cursor where it was.
     pane.addEventListener("focusout", event => {
       const card = justAddedFragmentId && pane.querySelector(`[data-fragment-id="${justAddedFragmentId}"]`);
@@ -3924,8 +3925,8 @@
         jump.innerHTML = `<span class="finding-nav-title">${escape(finding.title || "Untitled finding")}</span><span class="finding-nav-meta"><em>${escape(finding.severity || "not set")}</em><i aria-hidden="true">&middot;</i><span>${escape(finding.display_id || "No ID")}</span></span>`;
         jump.onclick = () => { selectedFindingUid = finding.uid; expandedContentTypes = undefined; render(); };
         nav.append(jump);
-        // A long list can leave the open finding scrolled out of the rail, which is the other half
-        // of losing track of it. Scrolled by hand rather than with scrollIntoView, which would move
+        // A long list can leave the open finding scrolled out of the rail, so the tester loses sight
+        // of it. The rail is scrolled by hand rather than with scrollIntoView, which would move
         // every scrollable ancestor too and undo the pane position render() has just restored.
         if (finding.uid === selectedFindingUid) requestAnimationFrame(() => {
           const item = jump.getBoundingClientRect();
@@ -3934,7 +3935,7 @@
           else if (item.bottom > rail.bottom) nav.scrollTop += item.bottom - rail.bottom;
         });
       });
-      // Setup context travels to Content so evidence choices don't depend on memory.
+      // Setup context is shown on Content, so evidence choices don't depend on the tester's memory.
       const contextLabels = {production: "Production", non_production: "Non-Production"};
       const context = document.createElement("details");
       context.className = "engagement-context";
@@ -4035,8 +4036,8 @@
           const nodes = [];
           // An empty field with a step to quote gets one suggestion that writes the step and the
           // standard sentence into the one text box. Otherwise the step and the sentence are offered
-          // separately, and both can show at once: the step above, the sentence below, so the pair
-          // reads as a preview of the finished section.
+          // separately, and both can show at once, the step above and the sentence below. The pair
+          // then reads as a preview of the finished section.
           if (content.type === "in_conclusion" && contentTypesForStatus(finding.status).includes("in_conclusion")) {
             const resolved = finding.conclusion_offer_resolved || [];
             const lastStep = pocLastStep(finding);
@@ -4045,7 +4046,7 @@
             const onlyDefault = content.fragments.length === 1 && hasDefaultStatusConclusion(content.fragments[0]) && isDefaultStatusConclusion(content.fragments[0]);
             const stepKey = `${finding.uid}|${lastStep}`;
             const stepOffered = Boolean(lastStep) && !dismissedStepOffers.has(stepKey) && (onlyDefault || !resolved.includes(lastStep));
-            // Taking the step and dismissing it both answer it, so it is not offered again; a dismissal
+            // Taking the step and dismissing it both answer it, so it is not offered again. A dismissal
             // also holds for this sitting, which is what keeps a standing offer from redrawing itself.
             const answerStep = dismissed => {
               if (dismissed) dismissedStepOffers.add(stepKey);
@@ -4081,7 +4082,7 @@
                 const firstText = first ? conclusionText(first) : "";
                 const sentenceStart = first ? defaultConclusionStart(firstText) : -1;
                 const prefix = sentenceStart >= 0 ? firstText.slice(0, sentenceStart).trimEnd() : firstText;
-                // Only a paragraph still holding a line this banner wrote is replaced; once the tester
+                // Only a paragraph still holding a line this banner wrote is replaced. Once the tester
                 // edits it, it is theirs and a corrected step is inserted as a new one instead.
                 const quoted = first && resolved.includes(prefix) ? first : null;
                 const resolve = write => {
@@ -4117,8 +4118,8 @@
                 nodes.push(banner);
               }
             }
-            // Written, but not stating where the finding landed. Offered, never written for them:
-            // their wording is the conclusion, and only they can say whether it is kept.
+            // Written, but not stating where the finding landed. Offered, never written for them.
+            // Their wording is the conclusion, and only they can say whether it is kept.
             if (!emptied.length && writtenParagraphs.length && !content.fragments.some(hasDefaultStatusConclusion) && !dismissedSentenceOffers.has(finding.uid)) {
               const {banner, actions} = buildOffer("content-offer", "This conclusion does not state whether the finding is open or resolved.");
               banner.dataset.conclusionSentence = "";
@@ -4188,7 +4189,7 @@
             }
           }
           if (content.type === "description" || content.type === "recommended_remediation") {
-            // Derived from current state, like the proof-of-concept offer: survives a reload, never double-fires.
+            // Derived from current state, like the proof-of-concept offer, so it survives a reload and never double-fires.
             const offer = pendingLibraryOffers(finding).find(candidate => candidate.type === content.type);
             if (offer) {
               const entry = offer.entry;
@@ -4202,7 +4203,7 @@
                   content.fragments = mode === "replace" ? copied : [...(written ? content.fragments : []), ...copied];
                 }
                 if (previousEvidence) dropUnreferencedEvidence(previousEvidence);
-                // Recorded after the mutation, so the rule reads as one sentence: the banner
+                // Recorded after the mutation, so the rule reads as one sentence. The banner
                 // remembers what the section looked like when the tester left it. "Add below"
                 // needs it most, since merged content still differs from the entry.
                 (finding.content_offer_dismissed ||= {})[content.type] = sectionFingerprint(content.fragments);
@@ -4278,7 +4279,7 @@
           return block;
         };
         // Fixed, typed fields rather than free fragments, so there is no Content behind this block.
-        // Its visibility is the union of its fields': hidden only for a non-Asia Open (New) finding.
+        // Its visibility is the union of its fields'. It is hidden only for a non-Asia Open (New) finding.
         const buildAdditionalInformationBlock = fields => {
           const block = document.createElement("div");
           const isExpanded = expandedContentTypes.has("additional_information");
@@ -4317,7 +4318,7 @@
             control.value = finding[field.key] || "";
             control.placeholder = field.placeholder;
             control.setAttribute("aria-label", field.label);
-            // A textarea starts at two rows, which would stand 16px taller than the single-line
+            // A textarea starts at two rows, which would be 16px taller than the single-line
             // fields beside it; grow() takes it from one row upwards as tickets are typed.
             if (field.multiline) control.rows = 1;
             const grow = () => { control.style.height = "auto"; control.style.height = `${control.scrollHeight}px`; };
@@ -4376,13 +4377,13 @@
         requestAnimationFrame(() => { const focusedFinding = document.getElementById(`finding-${focusedFindingUid}`); focusedFinding?.scrollIntoView({behavior:"smooth", block:"start"}); focusedFinding?.focus({preventScroll:true}); });
       } else if (restoreScroll) {
         // Lists, tables and code blocks read scrollHeight to size themselves, which only answers once
-        // they are in the document, so the pane is still short a frame from here and clamps this to
-        // whatever currently fits. Asked again once it has grown, the position survives.
+        // they are in the document. The pane is therefore still short a frame from here and clamps this
+        // to whatever currently fits. Asked again once it has grown, the position survives.
         pane.scrollTop = restoreScroll;
         requestAnimationFrame(() => { pane.scrollTop = restoreScroll; });
       }
     };
-    // Marked as Go to marks, but not focused, so Ctrl+Z still reaches the app.
+    // Marked the way Go to marks a field, but not focused, so Ctrl+Z still reaches the app.
     const pointed = changedField && report.vulnerabilities.some(finding => finding.uid === changedField.finding) ? changedField : null;
     if (pointed) selectedFindingUid = pointed.finding;
     render();

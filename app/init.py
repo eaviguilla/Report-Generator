@@ -22,17 +22,19 @@ REQUIREMENTS = ROOT / "requirements.txt"
 STAMP = VENV_DIR / ".requirements-sha256"
 RELAUNCH_FLAG = "VULNREPORT_BOOTSTRAPPED"
 
-# The three names below are shared with the Burp extension (report_generator_burp.py, at the release root), which starts
+# The two names below are shared with the Burp extension (report_generator_burp.py, at the release root), which starts
 # this script and reads its output. A test pins them on both sides. Started from Burp, this script prints the address
-# line once the app is ready and nothing else unless something is wrong: the tab shows every other line as a problem.
+# line once the app is ready and nothing else unless something is wrong, because the tab shows every other line as
+# a problem.
 BURP_FLAG = "VULNREPORT_STARTED_BY_BURP"
 ADDRESS_LINE = "Report Generator is running at "
-# The data folder rule is app/main.py's: the variable when set and not empty, else data/ in the app folder.
+# The data folder rule is app/main.py's. It uses the variable when it is set and not empty, and
+# data/ in the app folder otherwise.
 DATA_ENV = "VULNREPORT_DATA_DIR"
 LOCK_NAME = "server.lock"
 MOVED_NOTE = "DATA-MOVED.txt"
 
-# Modules app.main loads when it is imported, compiled parts included: a copied .venv that passes this
+# Modules app.main loads when it is imported, compiled parts included. A copied .venv that passes this
 # import can start the app. jinja2 and PIL._imaging are the two a plain `import PIL` would not exercise.
 VENV_PROBE_MODULES = ["fastapi", "uvicorn", "pydantic", "jinja2", "python_multipart", "docx", "PIL._imaging"]
 
@@ -50,7 +52,7 @@ def venv_python() -> Path:
 def inside_venv() -> bool:
     """True when this interpreter is the project virtual environment.
 
-    Compares prefixes rather than executables: on macOS and Linux the venv
+    Compares prefixes rather than executables. On macOS and Linux the venv
     interpreter is a symlink to the system one, so resolved paths are equal.
     """
     try:
@@ -149,7 +151,7 @@ def pin_data_dir() -> None:
 
 
 def count_reports(folder: Path) -> int:
-    """Reports the workspace would find in a data folder: every apps/*/*/draft.json, readable or not."""
+    """Count the reports the workspace would find in a data folder. That is every apps/*/*/draft.json, readable or not."""
     return sum(1 for _ in (folder / "apps").glob("*/*/draft.json"))
 
 
@@ -193,7 +195,7 @@ def take_server_lock(folder: Path, wait: float | None = None):
 
 
 def lock_is_held(folder: Path) -> bool:
-    """Whether a server holds this folder's lock. Creates nothing: no lock file means no server."""
+    """Whether a server holds this folder's lock. It creates nothing, because no lock file means no server."""
     lock_file = folder / LOCK_NAME
     if not lock_file.is_file():
         return False
@@ -208,7 +210,7 @@ def lock_is_held(folder: Path) -> bool:
 def guard_start() -> None:
     """Refuse to start a second server on one data folder, or on a folder whose data has moved away.
 
-    The relaunched child skips this: its parent, which stays alive while it serves, already holds the lock.
+    The relaunched child skips this because its parent, which stays alive while it serves, already holds the lock.
     """
     global _server_lock
     if os.environ.get(RELAUNCH_FLAG):
@@ -226,7 +228,7 @@ def guard_start() -> None:
 # --- serving -----------------------------------------------------------------------------------------
 
 def _stop_at_end_of_input(server) -> None:
-    """Under Burp, the tab closing our input is the request to stop: same flag uvicorn's signal handler sets."""
+    """Under Burp, the tab closing our input is the request to stop. It sets the same flag uvicorn's signal handler sets."""
     stream = getattr(sys.stdin, "buffer", None)
     if stream is None:
         return
@@ -257,10 +259,10 @@ def serve() -> None:
                 threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
 
     # Run as a script path (python app/init.py), Python searches app/ for modules, not the release root, and
-    # uvicorn.Config adds no directory of its own, so "app.main" would not import. Here rather than at the top
-    # of the file so importing this module (tests, --data-status) has no side effect.
+    # uvicorn.Config adds no directory of its own, so "app.main" would not import. The insert is here rather
+    # than at the top of the file, so importing this module (tests, --data-status) has no side effect.
     sys.path.insert(0, str(ROOT))
-    # From Burp only warnings and errors are logged: the tab shows every line the app prints as a problem.
+    # From Burp only warnings and errors are logged, because the tab shows every line the app prints as a problem.
     quiet = {"log_level": "warning", "access_log": False} if from_burp else {}
     server = AnnouncingServer(uvicorn.Config("app.main:app", host="127.0.0.1", port=port, **quiet))
     if from_burp:
@@ -272,10 +274,10 @@ def serve() -> None:
         pass
 
 
-# --- commands for the Burp extension (standard library only: they run before .venv exists) -----------
+# --- commands for the Burp extension (standard library only, so they run before .venv exists) --------
 
 def data_status() -> int:
-    """One JSON line about the data folder. Reads only: it must never create or change anything."""
+    """One JSON line about the data folder. It only reads, and it must never create or change anything."""
     folder = data_dir()
     print(json.dumps({
         "data": str(folder),
@@ -308,7 +310,7 @@ def bring_over(old_argument: str) -> int:
     """Move a previous release's data (and finished documents) here, then copy its .venv.
 
     Every check comes first and changes nothing. The data folder is renamed, never copied, so there is
-    one store, and nothing is deleted: an empty data folder a Start already made here is set aside.
+    one store, and nothing is deleted. An empty data folder a Start already made here is set aside.
     """
     if not old_argument:
         return _refuse("Give the previous release folder: app/init.py --bring-over <folder>.")

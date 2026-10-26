@@ -1,4 +1,4 @@
-# runtime state — app recreates these on boot
+# runtime state that the app recreates on boot
 data/apps/
 data/.locks/
 data/prefs.json
@@ -21,7 +21,7 @@ tools/star_map/.star_map-*.tmp
 # release packaging output
 /dist/
 
-# agent tooling: CLAUDE.md and .claude/ are committed; only local state is ignored
+# local tool state
 CLAUDE.local.md
 .claude/settings.local.json
 .impeccable/

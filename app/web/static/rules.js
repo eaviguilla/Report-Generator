@@ -1,4 +1,5 @@
-// Page-free report rules returning {kind, code, ...context}; twins in report_service, cases in tests.test_rule_cases.
+// Page-free report rules that return {kind, code, ...context}. Their twins are in report_service,
+// and their cases are in tests.test_rule_cases.
 (() => {
   "use strict";
 
@@ -20,7 +21,8 @@
 
   const scopeBoxText = raw => [typeof raw === "string" ? raw : asString(raw?.component), asString(raw?.description)];
 
-  // Twin of report_service.WORD_REFUSED_CHARACTERS: outside XML 1.0's Char production, so Word cannot store them.
+  // Twin of report_service.WORD_REFUSED_CHARACTERS. These are the characters outside XML 1.0's Char
+  // production, so Word cannot store them.
   const wordRefused = character => /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/.test(character)
     || (character.length === 1 && character.charCodeAt(0) >= 0xd800 && character.charCodeAt(0) <= 0xdfff);
   const inRanges = (character, ranges) => {
@@ -103,10 +105,10 @@
   // Twin of report_service.USERNAME_PATTERN, which the vocabulary does not serve.
   const USERNAME_PATTERN = /^[A-Za-z0-9._@\\-](?:[ A-Za-z0-9._@\\-]*[A-Za-z0-9._@\\-])?$/;
 
-  // In UTF-16 units, which is what length and maxlength count. Twin: report_service.text_length.
+  // In UTF-16 units, which is what length and maxlength count. Twin of report_service.text_length.
   const tooLong = (value, limit) => limit != null && value.length > limit;
 
-  // What a save says about one username, in order: invalid characters or a space at either end, then length.
+  // What a save says about one username. It checks invalid characters or a space at either end first, then the length.
   const usernameRefusals = (username, vocabulary) => {
     if (!username || username === "N/A") return [];
     const rule = vocabulary.character_rules.username;
@@ -120,7 +122,7 @@
   };
 
   // Whether a segment types its own report name, so Setup shows the field and the rules require it.
-  // Twin: the segment test in report_service.setup_results and setup_field_refusals.
+  // Twin of the segment test in report_service.setup_results and setup_field_refusals.
   const hasOwnReportName = (engagement, vocabulary) => vocabulary.report_name_segments.includes(engagement?.segment);
 
   // Twin of report_service.setup_field_refusals.
@@ -135,7 +137,7 @@
       if (tooLong(value, rule.max_length)) refuse("too_long", {field, ...context, limit:rule.max_length});
     };
     ["app_name", "report_name", "ci_number", "bsn_number", "app_owner", "tester"].forEach(field => {
-      // Typed, printed and checked only under a segment that has a report name of its own. Twin: setup_field_refusals.
+      // Typed, printed and checked only under a segment that has a report name of its own. Twin of setup_field_refusals.
       if (field === "report_name" && !hasOwnReportName(engagement, vocabulary)) return;
       check(field, engagement[field]);
     });
@@ -183,7 +185,7 @@
       const testWindow = engagement.test_windows?.[environment] || {};
       if (!testWindow.start_date || !testWindow.end_date) issue("missing_test_dates", {environment});
       // A window with no stored time takes the default when the page opens, so only a time that is
-      // there and blank, or only blanks, counts as missing. Twin: setup_results in report_service.
+      // there and blank, or only blanks, counts as missing. Twin of setup_results in report_service.
       if (Object.hasOwn(testWindow, "test_time") && !strip(asString(testWindow.test_time))) issue("missing_test_time", {environment});
       const named = targets.filter(target => target.environment === environment);
       if (!named.length) issue("missing_scope_target", {environment});

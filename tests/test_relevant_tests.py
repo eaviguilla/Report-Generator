@@ -128,7 +128,7 @@ class SelectorTests(unittest.TestCase):
         self.assertLessEqual({"setup", "continuousEditor"}, names)
 
     def test_a_change_to_the_instructions_or_their_claude_copies_selects_the_drift_test(self) -> None:
-        """.github/ and .claude/ otherwise select nothing, so this pair could drift unnoticed."""
+        """The instruction files and their generated rule copies otherwise select no tests, so a pair could drift unnoticed."""
         modules = test_modules()
         for path in (".github/instructions/tests.instructions.md", ".claude/rules/tests.md"):
             self.assertEqual(select("affected", {path: None}, modules).python, {RULE_SYNC_TEST}, path)

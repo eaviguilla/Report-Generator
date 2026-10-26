@@ -18,7 +18,8 @@ STAMP = VENV_DIR / ".requirements-sha256"
 RELAUNCH_FLAG = "VULNREPORT_BOOTSTRAPPED"
 
 ADDRESS_LINE = "Report Generator is running at "
-# The data folder rule is app/main.py's: the variable when set and not empty, else data/ in the app folder.
+# The data folder rule is app/main.py's. It uses the variable when it is set and not empty, and
+# data/ in the app folder otherwise.
 DATA_ENV = "VULNREPORT_DATA_DIR"
 LOCK_NAME = "server.lock"
 MOVED_NOTE = "DATA-MOVED.txt"
@@ -37,7 +38,7 @@ def venv_python() -> Path:
 def inside_venv() -> bool:
     """True when this interpreter is the project virtual environment.
 
-    Compares prefixes rather than executables: on macOS and Linux the venv
+    Compares prefixes rather than executables. On macOS and Linux the venv
     interpreter is a symlink to the system one, so resolved paths are equal.
     """
     try:
@@ -151,7 +152,7 @@ def take_server_lock(folder: Path, wait: float | None = None):
 def guard_start() -> None:
     """Refuse to start a second server on one data folder, or on a folder whose data has moved away.
 
-    The relaunched child skips this: its parent, which stays alive while it serves, already holds the lock.
+    The relaunched child skips this because its parent, which stays alive while it serves, already holds the lock.
     """
     global _server_lock
     if os.environ.get(RELAUNCH_FLAG):
@@ -184,8 +185,8 @@ def serve() -> None:
             print("Close this window to stop the application.", flush=True)
             threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
 
-    # Defensive: this already matches where python puts ROOT on sys.path when run as a script, but
-    # being explicit costs nothing.
+    # Python already puts ROOT on sys.path when it runs a script. Inserting it again is harmless and
+    # doesn't rely on that default.
     sys.path.insert(0, str(ROOT))
     server = AnnouncingServer(uvicorn.Config("app.main:app", host="127.0.0.1", port=port))
     try:

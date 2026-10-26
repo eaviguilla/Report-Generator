@@ -78,7 +78,7 @@ NO_FINDINGS_UNCONFIRMED = "This report has no findings. Reload the page and pres
 
 
 def configure_error_logging() -> None:
-    """Write actionable server diagnostics without allowing the log to grow unbounded."""
+    """Send server diagnostics to a rotating log file, so the log can't grow without limit."""
     ERROR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if any(getattr(handler, "baseFilename", None) == str(ERROR_LOG_PATH.resolve()) for handler in logger.handlers):
         return
@@ -98,7 +98,7 @@ def request_function(request: Request) -> str:
 
 
 def detail_message(detail) -> str:
-    """Extract a concise human message while preserving structured response details."""
+    """Reduce an error detail (text, dict or validation list) to one human-readable message."""
     if isinstance(detail, str):
         return detail
     if isinstance(detail, dict):
@@ -150,7 +150,7 @@ def api_error_response(
     code: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    """Return a backward-compatible API error with structured diagnostics."""
+    """Log a failed request and return a JSON error that keeps FastAPI's `detail` and adds a diagnostic record."""
     diagnostic = error_diagnostic(request, status, detail, code=code)
     logger.warning(
         "[%s] %s %s failed in %s with %s (%s): %s",
@@ -331,7 +331,7 @@ def expected_revision(request: Request, fallback: datetime) -> datetime:
 
 
 def save_if_current(report: Report, expected_saved_at: datetime) -> Path:
-    """Persist a report or expose a consistent stale-write response."""
+    """Save a report if its revision is still current, otherwise raise a 409 with the stale-report detail."""
     try:
         return workspace.save_if_current(report, expected_saved_at)
     except StaleReportError as error:
@@ -355,8 +355,8 @@ async def read_upload_limited(file: UploadFile, limit: int, label: str) -> bytes
 
 def is_report_docx(contents: bytes) -> bool:
     """A .docx is itself a ZIP, so without this the bundle branch claims it and dies on a missing
-    draft.json. No bundle can hold this name: set equality already limits one to draft.json plus
-    evidence PNGs."""
+    draft.json. No bundle can hold this name, because set equality already limits one to draft.json
+    plus evidence PNGs."""
     if not zipfile.is_zipfile(io.BytesIO(contents)):
         return False
     with zipfile.ZipFile(io.BytesIO(contents)) as archive:
@@ -547,7 +547,7 @@ def export_report(report_id: str):
 
 @app.get("/reports/{report_id}/generate")
 def generate_report(report_id: str, confirm_no_findings: bool = False):
-    """Render and download a complete report through the canonical Word template."""
+    """Render and download a complete report from its Word master template."""
     report, _, contents, _ = finalized_report(report_id, confirm_no_findings=confirm_no_findings)
     filename = report_export_filename(report, ".docx")
     return Response(
@@ -595,8 +595,8 @@ def finalized_report(report_id: str, *, save_to_folder: bool = False, confirm_no
 
 def unused_export_path(path: Path) -> Path:
     """Number repeat exports so regenerating never overwrites an earlier report. A name within the file name limit
-    gives up the characters its number needs, so a numbered copy stays within it too; an older, longer name keeps
-    its whole stem."""
+    gives up the characters its number needs, so a numbered copy stays within the limit too. An older, longer
+    name keeps its whole stem."""
     candidate = path
     counter = 2
     while candidate.exists():
@@ -939,7 +939,7 @@ async def save_report(report_id: str, request: Request):
                 {"message": "Correct the invalid Setup fields", "issues": error.setup_issues},
                 code="invalid_setup",
             )
-        # Its own code: invalid_setup's message sends the tester to a page that does not hold the field.
+        # Its own code, because invalid_setup's message sends the tester to a page that does not hold the field.
         return api_error_response(
             request,
             422,
@@ -978,11 +978,11 @@ def insert_library(request: Request, report_id: str, library_id: str):
     if entry is None:
         raise HTTPException(404, "Library entry not found")
     # Every target starts selected, so the tester removes what a finding does not touch instead of
-    # ticking everything it does. Severity is left blank unless the entry gives one: the finding is
+    # ticking everything it does. Severity is left blank unless the entry gives one. The finding is
     # not complete, and Next on the Findings page waits, until the tester has rated it.
     vulnerability = Vulnerability(uid=f"v_{uuid.uuid4().hex[:8]}", title=entry["title"], likelihood=entry.get("default_likelihood"), impact=entry.get("default_impact"), severity=entry.get("default_severity"), scope=scope_of_every_target(report), library_ref=LibraryRef(library_id=entry["library_id"], source_id=entry["source_id"], inserted_at=datetime.now().astimezone()), contents=copy.deepcopy(entry.get("contents", [])))
-    # This finding *is* the entry, so the Content page must not offer to install what it already
-    # holds. Only the sections actually copied are answered; the rest still get their offer.
+    # This finding is the entry itself, so the Content page must not offer to install what it already
+    # holds. Only the sections copied from the entry are answered. The rest still get their offer.
     vulnerability.content_offer_resolved = {content.type: entry["library_id"] for content in vulnerability.contents}
     assign_fresh_fragment_ids(vulnerability)
     provision(vulnerability)
@@ -990,7 +990,8 @@ def insert_library(request: Request, report_id: str, library_id: str):
     sync_evidence_image_slots(vulnerability, report)
     variants = applicable_poc_variants(vulnerability, report, entry.get("proof_of_concept"))
     if variants:
-        # Web first, then API: CHANNELS order. They arrive as one list, as the Content page's offer joins them.
+        # Variants come in CHANNELS order, so web before API. They arrive as one list,
+        # as the Content page's offer joins them.
         steps = [fragment for variant in variants for fragment in Content(type="proof_of_concept", fragments=entry["proof_of_concept"][variant]).fragments]
         apply_poc_variant(vulnerability, steps, variants)
     save_if_current(report, expected_revision(request, report.saved_at))
@@ -1033,7 +1034,7 @@ async def upload_evidence(request: Request, report_id: str, file: UploadFile = F
 
 @app.get("/reports/{report_id}/evidence/{evidence_id}")
 def get_evidence(report_id: str, evidence_id: str):
-    """Safely serve one normalized evidence image belonging to a report."""
+    """Serve one evidence image of a report, and only a file directly inside its evidence folder."""
     report = report_or_404(report_id)
     evidence = report.evidence.get(evidence_id)
     if evidence is None:
@@ -1048,7 +1049,8 @@ def get_evidence(report_id: str, evidence_id: str):
     return FileResponse(file_path, media_type="image/png")
 
 
-# Authoring tool, deliberately untracked and off by default. Absent in a fresh clone by design.
+# Authoring tool, off by default. The release builds leave library_editor.py out,
+# so mount it only when the file is there.
 if os.environ.get("VULNREPORT_LIBRARY_EDITOR") and (Path(__file__).parent / "library_editor.py").is_file():
     from .library_editor import register as register_library_editor
 

@@ -1,12 +1,12 @@
 """Pick the unittest targets a change needs, in three tiers, and optionally run them.
 
-    .venv/bin/python scripts/relevant_tests.py              # iterate: only the tests you added or changed
-    .venv/bin/python scripts/relevant_tests.py --affected   # before calling it done: what the change can reach
-    .venv/bin/python scripts/relevant_tests.py --full       # everything; only when the user asked for it
+    .venv/bin/python scripts/relevant_tests.py              # while iterating, only the tests you added or changed
+    .venv/bin/python scripts/relevant_tests.py --affected   # before calling it done, what the change can reach
+    .venv/bin/python scripts/relevant_tests.py --full       # everything; run it only when you want the whole suite
     add --run to execute them; browser tests then run in parallel chunks
 
-"Changed" means the working tree against HEAD, untracked files included. The same rules are written
-out for people and assistants in .github/copilot-instructions.md, "Running tests in this repo".
+"Changed" means the working tree against HEAD, untracked files included. The contributor
+instructions describe the same rules under "Running tests in this repo".
 """
 from __future__ import annotations
 
@@ -39,10 +39,11 @@ FEATURE_PATTERNS = [
     (re.compile(r'/generate|name="Generate Report"'), "generate"),
 ]
 
-# --affected: which browser tests a changed file can reach. Checked in order; the first match wins.
+# --affected looks up which browser tests a changed file can reach. The rows of FILE_PAGES are checked
+# in order and the first match wins.
 NO_TESTS = ("docs/", ".github/", ".claude/", "graphify-out/")
-# The Claude rules in .claude/rules/ are generated from .github/instructions/, so a change to either side
-# runs the one test that compares them, even though both folders otherwise select nothing.
+# The rule copies are generated from the instruction files, so a change to either side runs the one
+# test that compares them, even though the folders that hold them otherwise select nothing.
 RULE_COPIES = (".github/instructions/", ".claude/rules/")
 RULE_SYNC_TEST = "tests.test_ai_rules_sync"
 FILE_PAGES: list[tuple[str, frozenset[str]]] = [
@@ -56,16 +57,16 @@ FILE_PAGES: list[tuple[str, frozenset[str]]] = [
     ("app/web/templates/library_editor.html", frozenset()),  # no browser test loads it; test_app covers it
     ("app/web/templates/_", ALL_PAGES),
     ("app/library_editor.py", frozenset()),
-    ("app/init.py", frozenset()),  # the Burp build's launcher: covered by tests.test_launcher, which the all-Python tier runs
-    ("run.py", frozenset()),  # the default build's launcher: same, covered by tests.test_launcher
+    ("app/init.py", frozenset()),  # the Burp build's launcher, covered by tests.test_launcher, which the all-Python tier runs
+    ("run.py", frozenset()),  # the default build's launcher, covered by tests.test_launcher the same way
     ("resources/vuln_library.json", frozenset({"findings", "content"})),
     ("app/docx_", frozenset()),  # reaches the browser only through import and generate, see FILE_FEATURES
     ("resources/", frozenset()),
-    ("app/", ALL_PAGES),  # models, report_service, main, workspace, storage, library: the server every page talks to
+    ("app/", ALL_PAGES),  # models, report_service, main, workspace, storage, library, which every page talks to
     ("tests/support.py", ALL_PAGES),
     ("tests/__init__.py", ALL_PAGES),
     ("requirements", ALL_PAGES),
-    ("report_generator_burp.py", frozenset()),  # the Burp extension: same, and a Python 2.7 syntax test
+    ("report_generator_burp.py", frozenset()),  # the Burp extension, covered by tests.test_launcher, which includes a Python 2.7 syntax test
     (".gitignore", frozenset()),
     ("scripts/", frozenset()),
 ]
@@ -195,7 +196,7 @@ def changed_tests(module: TestModule, lines: set[int] | None) -> tuple[set[str],
         if owner is None:
             if not text or text.startswith("#") or any(a <= number <= b for a, b in module.imports):
                 continue  # blank lines, comments and imports change no behaviour on their own
-            return set(), set(), True  # a class attribute or module-level statement: rerun the module
+            return set(), set(), True  # a class attribute or module-level statement could change any test, so rerun the module
         if owner.cls and owner.name in CLASS_WIDE:
             ids |= {module.test_id(unit) for unit in module.tests() if unit.cls == owner.cls}
         elif owner.cls and owner.name.startswith("test"):
@@ -215,7 +216,7 @@ DECLARATION = re.compile(r"^  (?:async\s+)?(?:function\*?\s+([\w$]+)|(?:const|le
 
 
 def app_js_pages(source: str, lines: set[int] | None) -> set[str]:
-    """Pages whose code a change to app.js touches: setup() drives Setup and Findings, continuousEditor()
+    """Pages whose code a change to app.js touches. setup() drives Setup and Findings, continuousEditor()
     drives Content, and everything else in the file (save machine, twin rules, renderers) runs on all three."""
     if lines is None:
         return set(REPORT_PAGES)
@@ -235,7 +236,7 @@ def app_js_pages(source: str, lines: set[int] | None) -> set[str]:
 # --- browser tests by page ----------------------------------------------------------------------------
 
 def browser_tags(module: TestModule) -> dict[str, set[str]]:
-    """Test id -> pages and flows it exercises. A test nothing matches counts for every page."""
+    """Map each test id to the pages and flows it exercises. A test nothing matches counts for every page."""
     tags = {}
     for test in module.tests():
         body = module.body(test)
@@ -369,7 +370,7 @@ def run(chosen: Selection, modules: dict[str, TestModule | None]) -> int:
         jobs += [browser[index::chunks] for index in range(chunks)]
 
     def execute(targets: list[str]) -> tuple[list[str], int, str]:
-        # Output goes to a file, not a pipe: Chromium helpers outlive the test process and would hold a
+        # Output goes to a file, not a pipe. Chromium helpers outlive the test process and would hold a
         # pipe open, so waiting for its end of file can take minutes after the tests have finished.
         with tempfile.TemporaryFile("w+", encoding="utf-8") as output:
             code = subprocess.run([sys.executable, "-m", "unittest", *targets], cwd=ROOT, stdout=output, stderr=subprocess.STDOUT).returncode

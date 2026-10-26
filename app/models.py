@@ -22,7 +22,7 @@ Channel = Literal["web", "api", "mobile", "thick_client"]
 # from this module, so putting it anywhere else would invert the dependency direction.
 CHANNELS: tuple[Channel, ...] = ("web", "api", "mobile", "thick_client")
 # App types scoped as a named component plus a description rather than as a list of locations.
-# Mutually exclusive with each other: one report describes one kind of binary.
+# They are mutually exclusive, because one report describes one kind of binary.
 COMPONENT_CHANNELS: tuple[Channel, ...] = ("mobile", "thick_client")
 # app/vocabulary.py sends this table to the browser, so a channel without a label fails at import
 # instead of printing "undefined" in a message or a checkbox.
@@ -30,8 +30,8 @@ CHANNEL_LABELS: dict[Channel, str] = {"web": "Web", "api": "API", "mobile": "Mob
 RETIRED_SCOPE_MODES = ("all", "all_production", "all_non_production")
 # The retired compound token set, kept only to read drafts written before app types became a list.
 LEGACY_TEST_TYPE_CHANNELS: dict[str, list[str]] = {"web": ["web"], "api": ["api"], "mobile": ["mobile"], "web_api": ["web", "api"]}
-# Only labels the Proof of Concept evidence groups; it never renames the environment itself.
-# Free text rather than a Literal so a tester can type their own, but docx_import needs a fixed set
+# Only labels the Proof of Concept evidence groups. It never renames the environment itself.
+# Free text rather than a Literal, so a tester can type their own. docx_import still needs a fixed set
 # to recognise the heading on the way back in, so the presets are canonical and shared.
 NonProductionLabel = Annotated[str, Field(min_length=1, max_length=40)]
 NON_PRODUCTION_LABEL_PRESETS: tuple[str, ...] = ("NON-PROD", "MOD", "UAT", "STAGE")
@@ -54,7 +54,7 @@ StableId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z
 
 
 def _channel_list(value) -> list:
-    """Accept the one malformed shape the retired migration produced: a bare channel string."""
+    """Accept the one malformed shape the retired migration produced, a bare channel string."""
     if isinstance(value, str):
         return [value]
     return list(value) if isinstance(value, list) else []
@@ -161,9 +161,9 @@ class Content(BaseModel):
 
 
 class Scope(BaseModel):
-    # One legal value: a finding's locations are always the explicit targets it selected. The field
-    # survives so normalise_scope_modes can still see a retired token and resolve it; extra="ignore"
-    # would drop that signal and leave the finding with no locations at all.
+    # The only legal value is "custom", so a finding's locations are always the explicit targets it
+    # selected. The field is kept so normalise_scope_modes can still see a retired token and resolve
+    # it. extra="ignore" would drop that signal and leave the finding with no locations at all.
     mode: Literal["custom"] = "custom"
     target_ids: list[str] = Field(default_factory=list)
     location_values: dict[str, str] = Field(default_factory=dict)
@@ -173,10 +173,10 @@ class Scope(BaseModel):
     @field_validator("mode", mode="before")
     @classmethod
     def accept_retired_modes(cls, value):
-        """Last resort for a scope that reached validation without passing normalise_scope_modes --
-        a bare Scope.model_validate, or an undo replay. Coercing leaves the finding visibly
-        incomplete; raising would demote the whole draft to the manager's legacy list instead.
-        Note this never runs when mode is absent: the default supplies "custom" there."""
+        """Last resort for a scope that reached validation without passing normalise_scope_modes,
+        such as a bare Scope.model_validate or an undo replay. Coercing leaves the finding visibly
+        incomplete. Raising would demote the whole draft to the manager's legacy list instead.
+        This never runs when mode is absent, because the default supplies "custom" there."""
         return "custom" if value in RETIRED_SCOPE_MODES else value
 
 
@@ -224,7 +224,7 @@ class Vulnerability(BaseModel):
     poc_variants: list[Channel] = Field(default_factory=list)
     poc_variant_declined: list[Channel] = Field(default_factory=list)
     # Per content section, the library_id whose keep/replace/add offer has been resolved. Write-only
-    # since the offer started keying off content instead: kept because dropping a declared field
+    # since the offer started keying off content instead. It is kept because dropping a declared field
     # silently deletes it from every draft on the next save.
     content_offer_resolved: dict[ContentType, StableId] = Field(default_factory=dict)
     # Per content section, an opaque client-computed fingerprint of what that section held when its
@@ -303,9 +303,9 @@ def _migrate_poc_variant(vulnerability):
 
 
 def normalise_scope_modes(report_mapping) -> None:
-    """Freeze a retired scope mode into the explicit target IDs it resolved to, **in place**.
+    """Freeze a retired scope mode into the explicit target IDs it resolved to, in place.
 
-    Mutating rather than returning a copy is the contract: `Workspace.repair_duplicate_fragment_ids`
+    Mutating rather than returning a copy is the contract. `Workspace.repair_duplicate_fragment_ids`
     writes the very mapping it passes in, so a fresh dict would be silently discarded. Resolution order
     matches docx_report's non-custom branch, so a migrated finding prints the locations it always
     printed. Resolving from scope_targets is also what filters out stale IDs, which were never
@@ -376,8 +376,8 @@ class Report(BaseModel):
         parse_import build a Report without ever going through it."""
         if not isinstance(data, dict):
             return data
-        # Above the engagement guard: a caller passing a pre-built Engagement still needs its scopes
-        # migrated, and this is the only hook every entry path shares.
+        # Above the engagement guard, because a caller passing a pre-built Engagement still needs its
+        # scopes migrated. This is the only hook every entry path shares.
         normalise_scope_modes(data)
         engagement = data.get("engagement")
         if engagement is not None and not isinstance(engagement, dict):

@@ -51,7 +51,7 @@ class ReportApiTests(unittest.TestCase):
 
     def test_network_access_starts_unset_and_a_stored_choice_survives_a_save(self) -> None:
         """A draft written before the field existed must keep loading, now as unset rather than as
-        a guessed Internal; a stored choice stays a choice."""
+        a guessed Internal. A stored choice must load as stored and survive a save."""
         report_id = self.new_report()
         self.assertIsNone(main.workspace.load(report_id).engagement.network)
         path = main.workspace.find_path(report_id)
@@ -174,8 +174,8 @@ class ReportApiTests(unittest.TestCase):
         renamed = self.client.patch(f"/reports/{report_id}/name", json={"app_name": "Renamed report"})
         self.assertEqual(renamed.status_code, 200)
         self.assertEqual(main.workspace.load(report_id).engagement.app_name, "Renamed report")
-        # A settled folder name is a filing decision made once; the manager groups by the live name,
-        # so the drift is invisible and nothing on disk has to churn.
+        # A settled folder name is chosen once and then kept. The manager groups by the live name,
+        # so the mismatch is invisible and nothing on disk has to move.
         self.assertEqual(main.workspace.find_path(report_id).parent.parent.name, "Regression_Report")
         self.assertEqual(self.client.patch(f"/reports/{report_id}/name", json={"app_name": " "}).status_code, 422)
 
@@ -300,7 +300,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(main.workspace.load(report_id).engagement.app_name, name)
 
     def test_an_application_name_with_brackets_and_a_hash_is_saved_listed_and_reloaded(self) -> None:
-        """The name becomes a folder segment, and [ ] are glob characters: the report must still be
+        """The name becomes a folder segment, and [ ] are glob characters. The report must still be
         found by the manager's listing and by a reload, and a rename to another such name must work."""
         report_id = self.new_report()
         name = "[Acme] Portal #2"
@@ -507,7 +507,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(scope.target_ids, ["tgt_live"])
 
     def test_a_scope_mode_that_escapes_the_migration_still_loads(self) -> None:
-        """The field coercion is the net under the report-level migration. It degrades to a visibly
+        """The field coercion backs up the report-level migration. It degrades to a visibly
         incomplete finding rather than a ValidationError, which would hide the report entirely."""
         self.assertEqual(Scope.model_validate({"mode": "all"}).mode, "custom")
         # The coercion never runs when mode is absent; the default supplies it there.
@@ -719,7 +719,7 @@ class ReportApiTests(unittest.TestCase):
 
     def test_the_non_production_name_is_only_validated_when_that_environment_is_covered(self) -> None:
         """An unticked Non-Production leaves the field disabled, and a disabled input is exempt from
-        browser validation -- so validating it here would 422 a save the client could not block."""
+        browser validation. Validating it here would 422 a save the client could not block."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["non_production_label"] = "UAT@2"
@@ -779,7 +779,7 @@ class ReportApiTests(unittest.TestCase):
     def test_the_fourth_and_fifth_statuses_save_with_the_retest_sections(self) -> None:
         """Every section rule is written as "is it new" or "is it resolved", so both later statuses
         inherit the retest shape without rules of their own. Neither may claim a remediation happened
-        or rewrite one the tester typed, and both must survive a save: widening the enum is what lets
+        or rewrite one the tester typed, and both must survive a save. Widening the enum is what lets
         a draft hold them."""
         for status in ("open_resolved_on_non_prod", "closed"):
             with self.subTest(status=status):
@@ -815,9 +815,10 @@ class ReportApiTests(unittest.TestCase):
                 self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].status, status, "the status did not survive the round trip")
 
     def test_a_closed_finding_loses_unmarked_remediated_boilerplate_on_load(self) -> None:
-        """Deliberate, and the one place the app does touch a Closed remediation. The load repair
-        cannot tell a typed copy from boilerplate written before the marker existed, and Closed is in
-        the same class as the open statuses: it must not ship claiming a fix that never happened."""
+        """This is deliberate, and it is the one place the app touches a Closed remediation. The load
+        repair cannot tell a typed copy from boilerplate written before the marker existed. Closed is
+        in the same class as the open statuses, so it must not ship claiming a fix that never
+        happened."""
         report_id = self.new_report()
         path = main.workspace.find_path(report_id)
         for status, expected_runs in (("closed", []), ("resolved", [{"text": report_service.RESOLVED_REMEDIATION}])):
@@ -972,7 +973,7 @@ class ReportApiTests(unittest.TestCase):
             *((segment, {"segment": segment}, f"{segment} \u2013 Northstar Banking \u2013 Annual Pentest 2026") for segment in SEGMENTS_WITHOUT_OWN_REPORT_NAME),
             ("the year follows the Report Date", {"report_date": date(2027, 1, 2)}, "JH \u2013 Northstar Banking \u2013 Annual Pentest 2027"),
             ("a blank application name prints N/A", {"app_name": " "}, "JH \u2013 N/A \u2013 Annual Pentest 2026"),
-            # Kept under another segment, and never printed there.
+            # The typed name is kept under another segment and never printed there.
             ("a name typed under GWAM is ignored", {"report_name": "GWAM - Typed Name - Retest 2026"}, "JH \u2013 Northstar Banking \u2013 Annual Pentest 2026"),
         ]
         for label, changes, expected in cases:
@@ -1239,7 +1240,7 @@ class ReportApiTests(unittest.TestCase):
 
     def test_component_scope_pairs_each_line_with_its_description_by_raw_index(self) -> None:
         """Pairing after cleaning would let one commented component line shift every description
-        below it onto the wrong binary -- wrong, silent, and printed into the delivered report."""
+        below it onto the wrong binary. The error is silent and prints into the delivered report."""
         report_id = self.new_report()
         saved = self.client.put(f"/reports/{report_id}", json=self._component_scope_payload(report_id, "thick_client", {
             "component": "# not a binary\nAcme.exe\n\nAcme.Updater.exe",
@@ -1481,8 +1482,8 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(self.client.put(f"/reports/{report_id}", json=widened).status_code, 200)
 
     def test_removing_one_of_several_scope_lines_still_saves(self) -> None:
-        """A finding holding four locations used to be refused outright when any one of them went,
-        with no dialog first and no way forward but unticking it by hand on every finding."""
+        """A finding holding four locations used to be refused outright when any one of them went.
+        There was no dialog first and no way forward but unticking it by hand on every finding."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({"app_name": "Partial", "ci_number": "CI-PART", "tested_channels": ["web"], "tested_environments": ["production"]})
@@ -1511,7 +1512,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(set(stored.vulnerabilities[0].scope.target_ids), surviving)
 
     def test_removing_a_findings_only_location_is_still_refused(self) -> None:
-        """The relaxation must not reach the case it was never about: a finding left with nothing."""
+        """The relaxation was never about a finding left with nothing, so it must not reach that case."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({"app_name": "Only", "ci_number": "CI-ONLY", "tested_channels": ["web"], "tested_environments": ["production"]})
@@ -1630,7 +1631,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(len(production_slots), 1, "narrowing must not leave two Production slots to fill")
 
     def test_an_empty_slot_for_a_dropped_environment_stops_being_asked_for(self) -> None:
-        """An untouched slot for an environment the finding no longer affects is nobody's to fill."""
+        """An untouched slot for an environment the finding no longer affects does not need filling."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({"app_name": "Slot Drop", "ci_number": "CI-SLOT", "tested_environments": ["production", "non_production"]})
@@ -1664,8 +1665,8 @@ class ReportApiTests(unittest.TestCase):
 
     def test_a_status_change_keeps_the_previous_proof_but_not_the_conclusion(self) -> None:
         """Switching a finding to "open new" hides last year's proof; it must not delete it, because
-        switching back is a correction the tester is allowed to make. The conclusion is the exception:
-        it is a statement about the status, so keeping it would preserve a sentence now made false."""
+        switching back is a correction the tester is allowed to make. The conclusion is the exception.
+        It is a statement about the status, so keeping it would preserve a sentence now made false."""
         finding = Vulnerability(uid="v_carry", title="Carried finding", status="open_previously_discovered")
         provision(finding)
         previous = next(content for content in finding.contents if content.type == "previous_proof_of_concept")
@@ -1730,8 +1731,8 @@ class ReportApiTests(unittest.TestCase):
         self.assertIn(message, generation_issues(saved))
 
     def test_the_previous_proof_slot_is_born_with_an_environment(self) -> None:
-        """Provisioning creates this slot, so provisioning owes it the environment that generation
-        then demands; nothing else ever assigns one."""
+        """Provisioning creates this slot, so it has to set the environment that generation later
+        requires. Nothing else ever assigns one."""
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({"app_name": "Prev Env", "ci_number": "CI-PREV", "tested_environments": ["production"]})
@@ -1906,8 +1907,8 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/reports/{report_id}/edit", follow_redirects=False).status_code, 303)
 
     def test_an_additional_location_alone_opens_the_content_page(self) -> None:
-        """The counterpart to the three above: a typed endpoint really is an affected location, and
-        a finding that has only one must not be held back."""
+        """This is the counterpart to the three tests above. A typed endpoint really is an affected
+        location, and a finding that has only one must not be held back."""
         report_id = self._report_with_one_target("Typed only")
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["vulnerabilities"] = [self._located_finding(custom={"production": {"web": ["https://web.production.test/admin"]}})]
@@ -2085,8 +2086,8 @@ class ReportApiTests(unittest.TestCase):
 
     def test_a_library_insert_does_not_offer_back_the_content_it_just_copied(self) -> None:
         """The finding arrives holding the entry's own description and remediation, so the Content
-        page must not greet the tester with an offer to install what is already there. The
-        proof-of-concept offer is tracked by poc_variants instead, so it is not this field's to mark."""
+        page must not offer to install what is already there. The proof-of-concept offer is
+        tracked by poc_variants instead, so this field does not mark it."""
         report_id = self.new_report()
         finding = self.client.post(f"/reports/{report_id}/library/VDB-047").json()["finding"]
 
@@ -2221,7 +2222,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertIn("Choose Mobile or Thick Client, not both.", report_service.setup_issues(report))
         self.assertFalse(report_service.setup_is_complete(report))
 
-        # Savable and loadable: the tester must be able to reach Setup and untick one.
+        # The report must stay savable and loadable, so the tester can reach Setup and untick one.
         main.workspace.save(report)
         self.assertEqual(main.workspace.load(report_id).engagement.tested_channels, ["mobile", "thick_client"])
         self.assertIn("incomplete=setup", self.client.get(f"/reports/{report_id}/findings", follow_redirects=False).headers["location"])
@@ -2260,7 +2261,7 @@ class ReportApiTests(unittest.TestCase):
 
     def test_a_component_without_a_description_blocks_setup_and_names_itself(self) -> None:
         """A blank description would reach the binaries table as an empty cell. Naming the component
-        is the point: a tally cannot say which of ten rows is missing one."""
+        is the point, because a tally cannot say which of ten rows is missing one."""
         report_id = self.new_report()
         self.assertTrue(report_service.setup_is_complete(self._component_scope_report(report_id, "thick_client", "Windows desktop client")))
 
@@ -2430,8 +2431,8 @@ class ReportApiTests(unittest.TestCase):
         self.assertTrue(output_path.is_file())
 
     def test_two_reports_saved_at_once_under_one_typed_name_both_survive(self) -> None:
-        """Two applications can type the same GWAM report name, and their report locks are separate,
-        so the shared generated folder has to serialize the pick of a free name and the write."""
+        """Two applications can type the same GWAM report name, and their report locks are separate.
+        The shared generated folder therefore has to serialize the pick of a free name and the write."""
         first = self._generatable_report(segment="GWAM", app_name="First application", report_name="Quarterly Review")
         second = self._generatable_report(segment="GWAM", app_name="Second application", report_name="Quarterly Review")
         both_in_word = threading.Barrier(2)
@@ -2449,8 +2450,8 @@ class ReportApiTests(unittest.TestCase):
             if len(picked) == 2:
                 both_picked.set()
             # Without a lock the second request picks within milliseconds and this returns at once, so
-            # the unlocked race is certain. With one, the second request cannot pick until this one has
-            # written, so the wait times out; the short bound only costs that case half a second.
+            # the race always happens. With a lock the second request cannot pick until this one has
+            # written, so the wait times out. The short timeout costs that case only half a second.
             both_picked.wait(timeout=0.5)
             return chosen
 
@@ -2727,7 +2728,7 @@ class ReportApiTests(unittest.TestCase):
                     self.assertEqual(report_service.default_conclusion_span(written), (0, len(written)))
 
     def test_the_conclusion_builder_writes_the_exact_sentence_each_status_owns(self) -> None:
-        """Recognition alone is not enough: the widened pattern accepts `is CLOSED.` just as readily
+        """Recognition alone is not enough. The widened pattern accepts `is CLOSED.` just as readily
         as `is now CLOSED.`, so a missing verb arm would pass the test above while printing the wrong
         sentence into a delivered document."""
         for status, expected in (
@@ -2761,7 +2762,7 @@ class ReportApiTests(unittest.TestCase):
 
     def test_an_emptied_conclusion_paragraph_is_not_refilled(self) -> None:
         """The app used to claim the first text-less paragraph, which wrote boilerplate above a
-        conclusion the tester had just written. A paragraph they emptied is theirs to leave empty."""
+        conclusion the tester had just written. A paragraph they emptied must stay empty."""
         finding = Vulnerability(uid="v_conc", title="Emptied", status="open_previously_discovered")
         provision(finding)
         conclusion = next(content for content in finding.contents if content.type == "in_conclusion")
@@ -2781,7 +2782,7 @@ class ReportApiTests(unittest.TestCase):
 
     def test_a_conclusion_section_is_created_empty_rather_than_written_for_you(self) -> None:
         """A DOCX import arrives with an empty in_conclusion and a status that prints it, so the
-        section has to exist -- but the sentence is offered on the Content page, never written here."""
+        section has to exist. The sentence is offered on the Content page and never written here."""
         finding = Vulnerability(uid="v_imported", title="Imported", status="open_previously_discovered")
         finding.contents = [Content(type="in_conclusion", fragments=[])]
         provision(finding)
@@ -2925,7 +2926,7 @@ class ReportApiTests(unittest.TestCase):
         self.assertIs(by_id["f_set"]["continue_numbering"], True, "an explicit value did not survive the round trip")
 
     def test_offer_memory_fields_round_trip_and_refuse_null(self) -> None:
-        """Each offer remembers its answer in a field of its own; both must survive a save as sent,
+        """Each offer remembers its answer in a field of its own. Both must survive a save as sent,
         and neither may be nulled, because null would read as "never asked" and ask again."""
         cases = [
             ("conclusion_offer_resolved", "open_previously_discovered", ["Observe the balance of another user."]),
@@ -2982,11 +2983,11 @@ class ReportApiTests(unittest.TestCase):
 
 
 class TwinRuleTests(unittest.TestCase):
-    """A rule living in two languages is only as findable as the pointers between its halves.
+    """A rule that lives in two languages is only findable through the pointers between its halves.
 
     `docs/DATA_MAP.md` section 12 lists roughly thirty such pairs and only one of them has a
-    behavioural drift guard. These tests do not check that the halves agree -- that needs a browser
-    -- but they do keep the pointers honest, so a rename cannot quietly orphan one side."""
+    behavioural drift guard. These tests do not check that the halves agree, which needs a browser.
+    They keep the pointers honest, so a rename cannot quietly orphan one side."""
 
     MODULES = {"report_service": report_service, "models": models, "docx_report": docx_report}
     # `models.py` reads as module.symbol to the regex below but names a file, not a rule.
@@ -3053,7 +3054,8 @@ class TwinRuleTests(unittest.TestCase):
         self.assertEqual(missing, [], f"DATA_MAP section 12 names Python symbols that no longer exist: {missing}")
 
     def test_the_data_map_has_one_verification_note_and_no_prose_line_over_400_characters(self) -> None:
-        """Read and search tools cut a line at 2,000 characters, and agents added a header note per change."""
+        """Some viewers and search tools cut a line at 2,000 characters, and the file had grown
+        a header note with every change."""
         lines = (Path(__file__).resolve().parent.parent / "docs" / "DATA_MAP.md").read_text(encoding="utf-8").splitlines()
         notes = [line[:70] for line in lines if line.startswith(("> Last verified", "> Latest verification"))]
         self.assertLessEqual(len(notes), 1, f"DATA_MAP.md should hold one verification note, not {len(notes)}: {notes}")

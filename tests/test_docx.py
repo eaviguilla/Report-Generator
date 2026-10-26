@@ -87,7 +87,7 @@ class DocxReportTests(unittest.TestCase):
                     network="Internal",
                     tested_environments=["production", "non_production"],
                     tested_channels=["web", "api"],
-                    # Pinned, not defaulted: the assertion below counts "UAT:" headings.
+                    # Pinned rather than defaulted, because the assertion below counts "UAT:" headings.
                     non_production_label="UAT",
                     test_windows={
                         "production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST"),
@@ -503,7 +503,7 @@ class DocxReportTests(unittest.TestCase):
                 network="Internal",
                 tested_environments=["production"],
                 tested_channels=["web"],
-                # Pinned, not defaulted: the caller counts "UAT:" headings.
+                # Pinned rather than defaulted, because the caller counts "UAT:" headings.
                 non_production_label="UAT",
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2), test_time="22:00 EST")},
             ),
@@ -692,8 +692,8 @@ class DocxReportTests(unittest.TestCase):
             self.assertNotIn("{{", cell.text, "the token survived, which aborts generation")
 
     def test_a_value_with_no_separator_inside_the_limit_still_breaks(self) -> None:
-        """Breaking runs back to the nearest special character; a value offering none is cut
-        at the limit, because letting the line run widens the table."""
+        """A break moves back to the nearest special character. A value with none is cut at the
+        limit, because letting the line run on would widen the table."""
         # A special character inside the limit is preferred over cutting mid-token.
         self.assertEqual(
             _wrap_long_value("https://prod.example.test/accounts/123/details/extra", 36),
@@ -719,8 +719,8 @@ class DocxReportTests(unittest.TestCase):
                         )
 
     def test_a_query_string_breaks_on_its_own_separators(self) -> None:
-        # Fixed limit: this pins where the algorithm breaks, not the shipped column widths.
-        # Counting back from the 36th character lands on "=" rather than the earlier "?".
+        # The limit is fixed here, so this pins where the algorithm breaks and not the shipped column
+        # widths. Counting back from the 36th character lands on "=" rather than the earlier "?".
         self.assertEqual(
             _wrap_long_value("https://api.example.test/search?q=session+fixation&environment=production", 36),
             ["https://api.example.test/search?q=", "session+fixation&environment=", "production"],
@@ -835,8 +835,8 @@ class DocxReportTests(unittest.TestCase):
             steps = [details[text] for text in ("First step", "Second step", "Third step", "Fourth step")]
             self.assertEqual(len({numbering_id for numbering_id, _, _ in steps}), 1, "a continued list did not join the list above it")
             self.assertEqual(len({nsid for _, nsid, _ in steps}), 1)
-            # One numId means one w:num, so there is one startOverride behind all four paragraphs --
-            # the count is restarted once, at the top of the chain, and never again inside it.
+            # One numId means one w:num, so there is one startOverride behind all four paragraphs.
+            # The count is restarted once, at the top of the chain, and never again inside it.
             self.assertEqual({override for _, _, override in steps}, {1}, "a continued list restarted the count")
 
             self.assertNotEqual(
@@ -845,8 +845,8 @@ class DocxReportTests(unittest.TestCase):
             )
 
     def test_two_numbered_lists_in_one_section_restart_independently_by_default(self) -> None:
-        """New coverage, not a re-assertion: nothing else pins this, and it is what stands between a future edit
-        and silently renumbering every report on disk."""
+        """This is new coverage, not a re-assertion. Nothing else pins this, so a future edit could
+        silently renumber every report on disk."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             details = self._numbered_sections(Path(temporary_directory), continue_second=False)
 
@@ -890,7 +890,7 @@ class DocxReportTests(unittest.TestCase):
 
     def test_a_list_that_ends_a_section_adds_no_blank_of_its_own(self) -> None:
         """The blank below a list is spacing between fragments. At the end of a section the template's own
-        blank already stands between it and the next heading, and a second one would be a gap no other
+        blank already separates it from the next heading. A second one would be a gap no other
         section has."""
         for kind in ("numbered_list", "bulleted_list"):
             with self.subTest(list=kind), tempfile.TemporaryDirectory() as temporary_directory:
@@ -951,7 +951,8 @@ class DocxReportTests(unittest.TestCase):
                 text_of(item) for item in document.element.body.iterchildren()
                 if item.tag == qn("w:p") and "Production" in text_of(item)
             ]
-            # The tester's own number goes too: the position in the section is the truth, not the typing.
+            # The tester's own number goes too. The position in the section decides the number,
+            # not the typing.
             self.assertEqual(titles, ["Instance 1: Production", "Instance 2: Non-Production"])
 
     def test_an_instance_label_is_normalized_regardless_of_case(self) -> None:
@@ -1095,8 +1096,8 @@ class DocxReportTests(unittest.TestCase):
                     self.assertFalse(_keeps_next(previous), f"the walk above {title!r} must stop at the blank")
             self.assertGreater(blanks_checked, 0, "no heading had a blank above it, so the walk's stop went unchecked")
 
-            # Filled by token replacement rather than an anchor, so the walk cannot reach it. Pinned
-            # so the gap stays visible instead of being mistaken for coverage.
+            # Filled by token replacement rather than an anchor, so the walk cannot reach it. This pins
+            # the gap so it stays visible instead of being mistaken for coverage.
             ticket = next(item for item in document.paragraphs if item.text.strip() == "Severity Review Ticket (if applicable):")
             self.assertFalse(_keeps_next(ticket._p))
             title = next(item for item in document.paragraphs if item.text.strip() == "Layout finding")
@@ -1189,15 +1190,16 @@ class DocxReportTests(unittest.TestCase):
         self.assertTrue(_is_blank_paragraph(above.getprevious()), "the caption lost the space that separates it from the steps")
 
     def test_two_code_blocks_in_a_proof_of_concept_are_laid_out_as_they_were(self) -> None:
-        """Adjacent code blocks never had a spacer between them; removing the one above a code block
-        must not start eating the first block's own paragraph."""
+        """Adjacent code blocks never had a spacer between them. Removing the spacer above a code block
+        must not remove the first block's own paragraph."""
         first = CodeFragment(frag_id="f_first", type="code_block", caption=None, text="POST /login")
         second = CodeFragment(frag_id="f_code", type="code_block", caption=None, text="GET /accounts/123")
         above, body, text_of = self._code_block_above([first, second])
         self.assertEqual(text_of(above), "POST /login")
 
     def test_a_code_block_outside_the_proof_of_concept_keeps_its_blank_line(self) -> None:
-        """The request was about the proof of concept; a Description keeps the layout it has."""
+        """Only the proof of concept loses the blank line above a code block. A Description keeps
+        the layout it has."""
         intro = ParagraphFragment(frag_id="f_p", type="paragraph", runs=[Run(text="The request is:")])
         code = CodeFragment(frag_id="f_code", type="code_block", caption=None, text="GET /accounts/123")
         above, body, text_of = self._code_block_above([intro, code], section="description")
@@ -1531,7 +1533,8 @@ class DocxReportTests(unittest.TestCase):
             rendered = Document(BytesIO(render_report_docx(report, main_template_path(report, resources), report_folder)))
 
             table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Component")
-            # One cloned row per component: stacked paragraphs would misalign every row below a wrap.
+            # One cloned row per component, because stacked paragraphs would misalign every row
+            # below a wrap.
             self.assertEqual([(row.cells[0].text, row.cells[1].text) for row in table.rows[1:]], [
                 ("Acme.exe", "Main client"),
                 ("Acme.Updater.exe", "Background updater"),
@@ -1681,7 +1684,7 @@ class DocxReportTests(unittest.TestCase):
             table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Section")
 
             # ReportHeading2 also carries static sections like "Findings Summary", so the bookmarks
-            # are what identify a finding title -- and what a Section cell can point at.
+            # are what identify a finding title. They are also what a Section cell can point at.
             headings = [
                 paragraph.text
                 for paragraph in rendered.paragraphs

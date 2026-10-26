@@ -130,7 +130,7 @@ def generation_issues(report: Report) -> list[str]:
             # A section this status does not print is carried for safekeeping, not for completing.
             if content.type not in printed:
                 continue
-            # Twin of the editor's requiresFragment rule: these carry the finding, so none is ever left empty.
+            # Twin of the editor's requiresFragment rule. These carry the finding, so none is ever left empty.
             if content.type in {"description", "recommended_remediation", "in_conclusion"} and not content.fragments:
                 issues.append(f"{label}: {content.type} needs at least one fragment")
             # The app writes this sentence itself, so leaving it is the same as leaving the section blank.
@@ -170,7 +170,8 @@ def generation_issues(report: Report) -> list[str]:
 def main_template_path(report: Report, resources: Path) -> Path:
     """Pick the main template on both axes: Asia segment, and whether a component app type is covered.
 
-    Sole owner of the choice, because `template_path.parent` is also the component fragment root."""
+    This function alone makes the choice, because `template_path.parent` is also the component
+    fragment root."""
     component = any(channel in report.engagement.tested_channels for channel in COMPONENT_CHANNELS)
     asia = report.engagement.segment == "Asia"
     stem = "MAIN_THICK_MOBILE" if component else "MAIN"
@@ -302,7 +303,7 @@ def _metadata(report: Report) -> dict[str, str]:
         "limitation-set": _display_value(engagement.limitations),
     }
     # The two component templates spell the same token in opposite orders. Both keys are always
-    # supplied: _replace_metadata no-ops on a token the template does not carry.
+    # supplied, because _replace_metadata does nothing for a token the template does not carry.
     values["mobile-thick"] = values["thick-mobile"] = _component_channel_label(report)
     for index in range(2):
         account = accounts[index] if index < len(accounts) else None
@@ -367,10 +368,10 @@ def _find_table(document: DocumentType, header: str) -> Table:
 
 
 def _optional_table(document: DocumentType, header: str) -> Table | None:
-    """For a table only some of the four templates carry.
+    """Find a table that only some of the four templates carry, or return None.
 
     Keyed on the table being present rather than on the report, so rendering stays a function of
-    the template it was handed -- the scripts pass MAIN.docx to reports of every shape."""
+    the template it was handed. The scripts pass MAIN.docx to reports of every shape."""
     try:
         return _find_table(document, header)
     except ReportGenerationError:
@@ -381,7 +382,7 @@ def _append_prototype_row(table: Table, prototype):
     """Clone the template's data row so each entry keeps that row's own formatting.
 
     Stacking values as paragraphs inside one cell instead would misalign every row below the first
-    value that wraps -- silently, in the delivered document."""
+    value that wraps. Nothing would flag it, and it would only show in the delivered document."""
     row_element = deepcopy(prototype)
     table._tbl.append(row_element)
     return _Row(row_element, table)
@@ -406,8 +407,8 @@ def _wrap_long_value(value: str, limit: int) -> list[str]:
     Count to the limit, walk back to the first character that is not a letter or
     digit, and break after it; counting then restarts from the break. A stretch
     offering no such character is cut at the limit rather than left to overflow.
-    Characters inside "://" are skipped so a long host cannot strand the scheme on a
-    line of its own.
+    Characters inside "://" are skipped so a long host cannot leave the scheme alone
+    on a line.
     """
     scheme = value.find("://")
     offset = scheme + 3 if scheme != -1 else 0
@@ -486,7 +487,7 @@ def _populate_scope_tables(document: DocumentType, report: Report) -> None:
 
     accounts = _find_table(document, "User Roles")
     prototype = _strip_data_rows(accounts)
-    # A blank row is a leftover from Add: it stays in the draft for the tester, not in the document.
+    # A blank row is a leftover from Add. It stays in the draft for the tester, not in the document.
     for account in (account for account in engagement.test_accounts or [] if account.user_role.strip() or account.username.strip()):
         row = _append_prototype_row(accounts, prototype)
         _set_cell_lines(row.cells[0], [_display_value(account.user_role)])
@@ -799,8 +800,8 @@ def _render_finding_component(
     }
     for token, value in values.items():
         replace_component_token(elements, token, value)
-    # Runs, not the string path: only _set_run_text turns a newline into a real w:br. A no-op on
-    # new_finding.docx, which carries no such token.
+    # Use the runs path, not the string path. Only _set_run_text turns a newline into a real
+    # w:br. The call does nothing on new_finding.docx, which carries no such token.
     tickets = [line.strip() for line in finding.severity_review_tickets.splitlines() if line.strip()]
     printed = "\n".join(f"{SEVERITY_TICKET_PREFIX}{ticket}" for ticket in tickets) or "N/A"
     replace_component_token_runs(elements, "severity-review-tickets", [Run(text=printed)])
@@ -834,8 +835,8 @@ def _render_finding_component(
             label_images=proof_section,
             tight_code=proof_section,
         )
-        # Before the splice: the anchor has to still be present, and re-located each pass because
-        # an earlier replacement has already shifted the indices.
+        # This runs before the splice, while the anchor is still present. The anchor is re-located
+        # on each pass because an earlier replacement has already shifted the indices.
         _keep_anchor_lead_in(elements, anchor)
         elements = _replace_component_anchor(elements, anchor, rendered)
     return elements
@@ -903,7 +904,8 @@ def _unbold_runs_after_first(paragraph) -> None:
             if setting is None:
                 setting = OxmlElement(tag)
                 properties.append(setting)
-            # Off, not absent: the paragraph style may declare bold too.
+            # Set an explicit off rather than leaving it absent, because the paragraph style may
+            # declare bold too.
             setting.set(qn("w:val"), "0")
 
 
@@ -919,8 +921,8 @@ def _render_component_content(
     label_images: bool = False,
     tight_code: bool = False,
 ) -> list:
-    """Render one section's fragments. `tight_code` sits a code block directly under whatever
-    introduces it: a paragraph, list or note leaves a spacer behind it, and that spacer comes off
+    """Render one section's fragments. `tight_code` puts a code block directly under whatever
+    introduces it. A paragraph, list or note leaves a spacer behind it, and that spacer comes off
     when a code block follows. Only the proof-of-concept sections ask for it."""
     fragments = [] if content is None else [
         fragment
@@ -937,8 +939,8 @@ def _render_component_content(
     else:
         rendered = []
         labelled_environment = None
-        # Declared here, in the body, and nowhere higher: this is what confines a continued chain to
-        # one section. _render_component_content runs once per anchor per finding, so a numbered list
+        # Declared here, in the body, and nowhere higher. That confines a continued chain to one
+        # section. _render_component_content runs once per anchor per finding, so a numbered list
         # can never continue one from another section or another finding.
         numbering_carry: dict[tuple[Path, int], int] | None = None
         instance_number = 0
@@ -964,7 +966,7 @@ def _render_component_content(
                 rendered.extend(_render_environment_label(document, component_root, report, fragment.environment))
             if isinstance(fragment, ListFragment) and fragment.type == "numbered_list":
                 # Anything else between two lists leaves the carry alone, so a chain survives an
-                # image or an instance title -- the shape this option exists for.
+                # image or an instance title. That is the case this option exists for.
                 if not (fragment.continue_numbering and numbering_carry is not None):
                     numbering_carry = {}
                 fragment_numbering = numbering_carry
@@ -1001,7 +1003,7 @@ def _render_component_fragment(
     component_root: Path,
     allow_incomplete: bool,
     *,
-    # Never `{}`: a mutable default is built once at import and would join every list in the report
+    # Never default to `{}`. It is built once at import and would join every list in the report
     # into one chain. None means "your own cache", which is what makes each list restart.
     numbering_ids: dict[tuple[Path, int], int] | None = None,
     tight_code: bool = False,
@@ -1027,7 +1029,7 @@ def _render_component_fragment(
             )
             replace_component_token_runs(elements, token, item.runs)
             rendered.extend(elements)
-        # Only the component's first element: it ships with a trailing blank that would make two.
+        # Only the component's first element. It ships with a trailing blank that would make two.
         rendered.extend(_render_text_component(document, component_root, "paragraph", [])[:1])
         return rendered
     if isinstance(fragment, CodeFragment):
@@ -1088,7 +1090,7 @@ def _render_text_component(
 
 def _keep_broken_lines_together(elements: list) -> None:
     """A manual break means the lines belong together, as a lead-in does with the URL beneath it.
-    keepNext cannot help: Word is splitting inside one paragraph, not between two."""
+    keepNext cannot help, because Word is splitting inside one paragraph, not between two."""
     for element in elements:
         if element.tag != qn("w:p"):
             continue
@@ -1173,7 +1175,7 @@ def _keep_tables_with_lead_in(elements: list) -> None:
     """Tie each table to the paragraph that introduces it.
 
     Runs after the trim, so a table ending a section has already lost its spacer. A caption is not
-    enough on its own: the caption component carries a trailing blank, and most tables have no
+    enough on its own. The caption component carries a trailing blank, and most tables have no
     caption at all, so the walk reaches back to the real lead-in sentence.
     """
     for index, element in enumerate(elements):
@@ -1424,7 +1426,7 @@ def _keep_lines_together(paragraph_element) -> None:
     if properties.find(qn("w:keepLines")) is not None:
         return
     keep = OxmlElement("w:keepLines")
-    # CT_PPr is a sequence: w:keepLines sits after w:pStyle and w:keepNext, before everything else.
+    # CT_PPr is a sequence. w:keepLines goes after w:pStyle and w:keepNext, before everything else.
     anchor = properties.find(qn("w:keepNext")) or properties.find(qn("w:pStyle"))
     if anchor is None:
         properties.insert(0, keep)
@@ -1442,7 +1444,7 @@ def _keep_with_next(paragraph_element) -> None:
     if properties.find(qn("w:keepNext")) is not None:
         return
     keep = OxmlElement("w:keepNext")
-    # CT_PPr is a sequence: w:keepNext has to follow w:pStyle and precede every other child.
+    # CT_PPr is a sequence. w:keepNext has to follow w:pStyle and precede every other child.
     style = properties.find(qn("w:pStyle"))
     if style is None:
         properties.insert(0, keep)

@@ -661,7 +661,7 @@ class SaveModuleTests(unittest.TestCase):
         self.assertEqual(self.saves[1]["engagement"]["app_owner"], "Stale tab")
         self.assertEqual(self.page.locator("#app-diagnostics").count(), 0)
         self.assertEqual(self.recovery_copies(), [])
-        # The conflict is over: the next edit saves as usual.
+        # The conflict is over, so the next edit saves as usual.
         self.edit("Saved after the conflict")
         save_button.click()
         expect(save_button).to_have_attribute("data-save-state", "saved")
@@ -956,7 +956,7 @@ class SaveModuleTests(unittest.TestCase):
                 self.expect_attempts(2, settled=SAVED)
 
                 self.assertEqual(self.saves[1]["engagement"]["app_owner"], "Saved without storage")
-                # The failure notice replaced the warning; the save that cleared it brings the warning back.
+                # The failure notice replaced the warning. The save that cleared it brings the warning back.
                 expect(heading).to_have_text("Browser recovery unavailable")
 
     def test_restore_or_discard_that_storage_refuses_keeps_the_copy_and_says_so(self) -> None:

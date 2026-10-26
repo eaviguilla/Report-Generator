@@ -294,7 +294,7 @@ img.brand-mark {
   border-left-color: var(--line-strong);
 }
 
-/* The name yields first: the chips are short, and each one is a fact the name cannot spell out. */
+/* The name yields first, because the chips are short and each one is a fact the name cannot spell out. */
 .engagement-title {
   min-width: 0;
   overflow: hidden;
@@ -555,8 +555,8 @@ input[data-path*="scope"],
   max-width: var(--shell-max);
 }
 
-/* Setup sections use the Content page's card: the name on the left of a header strip, the
-   section's own state on the right, and the fields taking the full width back. */
+/* Setup sections use the Content page's card. The name goes on the left of a header strip, the
+   section's own state on the right, and the fields take the full width back. */
 #setup[data-step="setup"] > section {
   display: block;
   margin: 0 0 14px;
@@ -828,8 +828,8 @@ label,
   background: var(--accent-soft);
 }
 
-/* The Findings table borrows the Content page's card: column labels as the header strip, hairline
-   rows, and the assessment stated in the Content page's own vocabulary. */
+/* The Findings table borrows the Content page's card. The column labels form the header strip, the
+   rows are hairlines, and the assessment uses the Content page's own vocabulary. */
 .table-wrap {
   border: 1px solid var(--line-strong);
   background: var(--surface-raised);
@@ -868,9 +868,9 @@ label,
   background: var(--surface-quiet);
 }
 
-/* Likelihood, impact, id and status are facts, not warnings: quiet monospace, still live controls.
-   Sized to the cell, because a select left on auto takes the width of its longest option and pushes
-   into the next column. */
+/* Likelihood, impact, id and status are facts, not warnings, so they use a quiet monospace but stay
+   live controls. Sized to the cell, because a select left on auto takes the width of its longest
+   option and pushes into the next column. */
 #setup[data-step="findings"] td:nth-child(2) select,
 #setup[data-step="findings"] td:nth-child(3) select,
 #setup[data-step="findings"] td:nth-child(6) select {
@@ -892,7 +892,7 @@ label,
   width: 164px;
 }
 
-/* A select clipped to "Likelih…" or "Informationa" hides the value it holds. Each assessment column
+/* A select clipped to "Likelih..." or "Informationa" hides the value it holds. Each assessment column
    keeps a floor wide enough for its longest option, so a narrow table scrolls instead of cutting
    the value off. */
 #setup[data-step="findings"] th:nth-child(2),
@@ -1110,7 +1110,7 @@ button.finding-title-display:hover:not(:disabled) span {
   background: #5f6d81 !important;
 }
 
-/* Editor: fixed-height shell so the work surface scrolls, not the page. */
+/* Editor. The shell has a fixed height, so the work surface scrolls and the page doesn't. */
 #editor {
   width: 100%;
   max-width: none;
@@ -1207,7 +1207,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   align-items: center;
 }
 
-/* Severity is spelled out in its own colour, so the rail is not the only thing carrying it. */
+/* Severity is spelled out in its own colour, so the rail is not the only cue. */
 .finding-nav-meta em {
   color: var(--rail);
   font-style: normal;
@@ -1233,8 +1233,8 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 
 
 
-/* Every section is its own card, at full width or paired. Grid so inset children all stretch to
-   one width instead of each picking their own. */
+/* Every section is its own card, at full width or paired. The card is a grid so that inset children
+   all stretch to one width instead of each picking their own. */
 .content-block {
   display: grid;
   align-content: start;
@@ -1250,7 +1250,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   background: var(--canvas-deep);
   box-shadow: none;
 }
-/* ---- Finding header: title, then its details underneath. No card wraps the whole finding. ---- */
+/* ---- Finding header. The title comes first, then its details underneath. No card wraps the whole finding. ---- */
 .finding-card {
   overflow: visible;
   border: 0;
@@ -1281,7 +1281,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 }
 
 /* Anchored to the chip row, not the chip, so a chip near the right edge cannot push it out of the
-   pane -- which clips, because overflow-y makes overflow-x compute to auto. */
+   pane. The pane clips, because overflow-y makes overflow-x compute to auto. */
 .fchip-pop {
   position: absolute;
   top: calc(100% + 7px);
@@ -1353,7 +1353,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   font-size: 10px;
 }
 
-/* Severity is the only chip that earns colour, so it is the one the eye finds first. */
+/* Severity is the only chip with a colour of its own, so the eye finds it first. */
 .fchip-sev {
   --sev: var(--informational);
   border-color: color-mix(in srgb, var(--sev) 45%, transparent);
@@ -1375,7 +1375,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 .fchip-sev[data-severity="low"] { --sev: var(--low); }
 
 
-/* ---- Fragment chrome recedes until the card is reached for. ---- */
+/* ---- Fragment chrome is dimmed until the card is hovered or has focus. ---- */
 .fragment-head > .fragment-drag-handle,
 .fragment-head > .tag {
   opacity: 0.4;
@@ -1389,7 +1389,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   opacity: 1;
 }
 
-/* One border per fragment: the card already draws it, so the field inside does not repeat it. */
+/* One border per fragment. The card already draws it, so the field inside does not repeat it. */
 .fragment .rich,
 .fragment .list-textarea,
 .fragment textarea,
@@ -1418,7 +1418,7 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
   position: sticky;
   top: calc(var(--editor-inset) * -1);
   z-index: 2;
-  /* A button's auto width is fit-content and a percentage ignores the negative margins; both leave a
+  /* A button's auto width is fit-content and a percentage ignores the negative margins. Both leave a
      gap at the right edge that scrolling fragments show through once the header is pinned. */
   width: calc(100% + 48px);
   min-height: 48px;
@@ -1471,8 +1471,8 @@ button.content-toggle:hover:not(:disabled) small {
   gap: 10px;
 }
 
-/* Screenshots read as a numbered register rather than a card grid: the caption is the widest
-   thing in the row because the caption is the part the tester still has to write. */
+/* Screenshots read as a numbered register rather than a card grid. The caption is the widest
+   thing in the row, because it is the part the tester still has to write. */
 .evidence-tile {
   display: grid;
   overflow: hidden;
@@ -1600,7 +1600,8 @@ button.content-toggle:hover:not(:disabled) small {
   font-weight: 600;
 }
 
-/* A short word on evidence: a paste that had nowhere to go, or a move the production-first order undid. */
+/* A short notice about evidence, such as a paste that had nowhere to go or a move the
+   production-first order undid. */
 #evidence-notice {
   position: fixed;
   bottom: 18px;
@@ -1809,13 +1810,13 @@ button.content-toggle:hover:not(:disabled) small {
   background: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
-/* Red is what is still missing, amber is what the library offers: two verdicts, two hues. */
+/* Red is what is still missing and amber is what the library offers, so each verdict has its own hue. */
 
 .review-group[data-level="error"] {
   border-left: 3px solid var(--danger);
 }
 
-/* Dashed as well as amber, so the two rails differ by shape and not only by colour. */
+/* Dashed as well as amber, so the two rails differ in shape as well as colour. */
 .review-group[data-level="warning"] {
   border-left: 3px dashed var(--warning);
 }
@@ -1898,7 +1899,7 @@ button.content-toggle:hover:not(:disabled) small {
   font-size: 11px;
 }
 
-/* Folders stand on the page; only the app bar keeps a card. */
+/* The list has no card around it, so folders sit directly on the page. Only the app bar keeps a card. */
 .report-list {
   overflow: visible;
   border: 0;
@@ -1963,7 +1964,7 @@ button.content-toggle:hover:not(:disabled) small {
   color: var(--muted);
 }
 
-/* Neutral until reached for, the same as every other icon control in the app. */
+/* Neutral until hovered, the same as every other icon control in the app. */
 .report-actions a,
 .report-actions button {
   color: var(--muted);
@@ -2016,7 +2017,7 @@ body > main {
     display: none;
   }
 
-  /* Three panels into two columns: the sidebar stacks the findings list over the review list, and the
+  /* Three panels go into two columns. The sidebar stacks the findings list over the review list, and the
      editor spans both rows. Without the span the review panel opens an implicit second row that
      halves the editor and leaves the space beside the review list empty. */
   #finding-editor {
@@ -2239,7 +2240,7 @@ body > main {
 
 /* GitHub radius scale, applied once at the component layer. Two steps only:
    var(--radius-sm) for controls, chips and inline affordances, var(--radius) for containers.
-   Legacy 2/3/4/5px values scattered through the structure layer in app.css are superseded here. */
+   This block supersedes the legacy 2/3/4/5px values scattered through the structure layer in app.css. */
 button,
 .primary,
 .back-link,
@@ -2323,7 +2324,7 @@ textarea,
   background: var(--accent-soft);
 }
 
-/* Fragment chrome stays out of the way until the card is engaged. */
+/* Fragment chrome is dimmed until the card is hovered or has focus. */
 .fragment-head > * {
   margin-left: 0;
 }
@@ -2370,7 +2371,7 @@ textarea,
   transition: opacity 0.12s ease-out;
 }
 
-/* A state nobody can read at a glance is not a state, so a ticked box never recedes. */
+/* A ticked box never dims, because a dimmed state can't be read at a glance. */
 .fragment-head .list-continue.is-on {
   opacity: 1;
 }
@@ -2419,7 +2420,7 @@ textarea,
   min-height: 26px;
 }
 
-/* Hidden, not removed: the reserved space keeps the row's controls from shifting between fragments. */
+/* Hidden, not removed. The reserved space keeps the row's controls from shifting between fragments. */
 .fragment-move-up:disabled,
 .fragment-move-down:disabled {
   visibility: hidden;
@@ -2531,7 +2532,7 @@ textarea,
   line-height: 1.5;
 }
 
-/* Browser surfaces inherit the palette instead of the platform default. */
+/* Text selection uses the palette instead of the platform default. */
 ::selection {
   background: var(--accent-soft);
   color: var(--ink);
@@ -2639,7 +2640,7 @@ textarea,
 
 /* ============================================================================
    Content page, matched to the approved reference composition.
-   Kept last so it owns these values outright instead of racing earlier rules.
+   Kept last so these rules override earlier ones for the same elements.
    ============================================================================ */
 
 #finding-nav {
@@ -2756,7 +2757,7 @@ button.finding-nav.active:not(:disabled)::after {
 
 .finding-card .finding-header {
   /* Pinned so the finding's name and assessment stay readable while its sections scroll under them.
-     Chrome pins against the pane's content box, so top cancels the whole 14px inset -- anything less
+     Chrome pins against the pane's content box, so top cancels the whole 14px inset. Anything less
      leaves a strip above the header that scrolling content shows through. The inline pull-out and
      matching padding are that same inset, so the pinned bar spans the full pane width. */
   position: sticky;
@@ -2798,7 +2799,7 @@ button.finding-nav.active:not(:disabled)::after {
 
 
 /* ---- Section cards ---- */
-/* The pair answers to the pane, not the window: the side panels collapse at their own breakpoints,
+/* The pair answers to the pane, not the window. The side panels collapse at their own breakpoints,
    so a 1100px window can leave the pane wider than a 1280px one does. */
 .finding-card {
   container-type: inline-size;
@@ -2829,7 +2830,8 @@ button.finding-nav.active:not(:disabled)::after {
   gap: 8px;
 }
 
-/* The cards space themselves when stacked; inside the grid the gap owns that, or rows drift apart. */
+/* The cards space themselves when stacked. Inside the grid the gap does that, and a margin on top
+   of it would push rows apart. */
 .additional-grid > .fragment {
   margin-bottom: 0;
 }
@@ -2884,7 +2886,7 @@ button.finding-nav.active:not(:disabled)::after {
   line-height: 1;
 }
 
-/* No stylesheet reinstates the browser's [hidden] rule, so the display above would outlive it. */
+/* The display above would override the browser's [hidden] rule, and no stylesheet here restores it. */
 .content-flag[hidden] {
   display: none;
 }
@@ -2912,9 +2914,9 @@ button.finding-nav.active:not(:disabled)::after {
   visibility: visible;
 }
 
-/* One group at the right edge: formatting, then move, then delete, with no gap between them. */
+/* One group at the right edge, in the order formatting, move, delete, with no gap between them. */
 
-/* Convert joins that group rather than floating between the two auto margins: it starts the group
+/* Convert joins that group rather than floating between the two auto margins. It starts the group
    when there is no toolbar, and packs against one when there is. */
 .fragment-head > .fragment-convert {
   margin-left: auto;
@@ -2934,7 +2936,7 @@ button.finding-nav.active:not(:disabled)::after {
   margin-left: 0;
 }
 
-/* Delete is neutral until reached for; red on a resting control reads as an error. */
+/* Delete is neutral until hovered, because red on a resting control reads as an error. */
 .fragment-head > button.danger:not(:disabled) {
   color: var(--muted);
 }
@@ -3003,7 +3005,7 @@ button.finding-nav.active:not(:disabled)::after {
   font-size: 10px;
 }
 
-/* Sized here rather than with the head's other children: the button rule above wins the cascade and
+/* Sized here rather than with the head's other children. The button rule above wins the cascade and
    a <select> is not a button, so it would otherwise miss the row's one height. */
 .fragment-head .fragment-convert {
   width: auto;
@@ -3097,7 +3099,7 @@ button.finding-nav.active:not(:disabled)::after {
   line-height: 19px;
 }
 
-/* ---- Add row: one click adds a fragment at the end of its section ----
+/* ---- Add row. One click adds a fragment at the end of its section. ----
    The add row is a dashed strip like "Add another screenshot". It is as wide as its content and sits in the middle
    of the section. The buttons are grouped by purpose and keep one order in every section. The name of the button
    under the pointer or the cursor shows to the right of the strip, outside it and out of the layout, so a name never
@@ -3202,7 +3204,7 @@ button.finding-nav.active:not(:disabled)::after {
   }
 }
 
-/* ---- Readiness: a foldable card per finding, holding a dense Content/Needs table ---- */
+/* ---- Readiness. Each finding gets a foldable card with a dense Content/Needs table. ---- */
 .review-group {
   overflow: hidden;
   margin-bottom: 8px;
@@ -3420,7 +3422,7 @@ button.finding-nav.active:not(:disabled)::after {
   min-height: 24px;
 }
 
-/* Delete stays neutral until reached for, matching the fragment head. */
+/* Delete stays neutral until hovered, matching the fragment head. */
 .evidence-acts .danger:not(:disabled) {
   color: var(--muted);
 }
@@ -3436,7 +3438,7 @@ button.finding-nav.active:not(:disabled)::after {
   font-size: 11px;
 }
 
-/* ---- Table fragment, same border language as the rest ---- */
+/* ---- Table fragment, with the same borders as the rest ---- */
 .fragment .table-fragment {
   border-color: var(--line);
   font-size: 12px;
@@ -3465,7 +3467,7 @@ button.finding-nav.active:not(:disabled)::after {
   font-size: 10.5px;
 }
 
-/* Table controls are secondary, so they wear the neutral button, not the primary green. */
+/* Table controls are secondary, so they use the neutral button, not the primary green. */
 .fragment .table-controls button {
   width: auto;
   padding: 0 10px;

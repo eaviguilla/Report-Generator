@@ -286,7 +286,7 @@ class DataStatusTests(unittest.TestCase):
 
 
 def make_release(folder: Path, *markers: str) -> None:
-    """A release folder: `run.py` is how a release from before the launcher moved marks itself, `app/init.py` a current one."""
+    """A release folder. `run.py` marks a release from before the launcher moved, and `app/init.py` marks a current one."""
     folder.mkdir(parents=True, exist_ok=True)
     for marker in markers:
         (folder / marker).parent.mkdir(parents=True, exist_ok=True)
@@ -573,7 +573,7 @@ class ServeTests(unittest.TestCase):
     def test_address_line_is_printed_only_once_the_server_answers(self) -> None:
         process, lines = self.start(burp=False, stdin=subprocess.DEVNULL)
         url = self.address(lines)
-        with urlopen(url, timeout=5) as response:  # one request, no retry: the line must mean "ready"
+        with urlopen(url, timeout=5) as response:  # one request and no retry, because the line must mean "ready"
             self.assertEqual(response.status, 200)
 
     def test_a_burp_start_prints_nothing_but_its_address_line(self) -> None:
@@ -632,7 +632,7 @@ class ServeTests(unittest.TestCase):
 BURP_FILE = REPO / "report_generator_burp.py"
 DEFAULT_LAUNCHER = REPO / "run.py"
 # Words that must never appear in the default build's launcher (docs/plans/split-release-into-burp-and-default.md, Q3/Q8).
-# Checked case-insensitively: "burp" alone also catches BURP_FLAG, started_by_burp and report_generator_burp.py.
+# Checked case-insensitively, so "burp" alone also catches BURP_FLAG, started_by_burp and report_generator_burp.py.
 BURP_WORDS = ("burp", "--data-status", "--bring-over", "init.py")
 
 
@@ -683,7 +683,7 @@ def jython_or_reason(needs_venv: bool) -> tuple[str | None, str | None]:
 
 
 class BurpFileTests(unittest.TestCase):
-    """The extension is one Jython 2.7 file that no compiler checks, so these are what stands between a typo and a tester."""
+    """The extension is one Jython 2.7 file that no compiler checks, so these tests catch a typo before a tester hits it."""
 
     def test_burp_file_uses_only_python_2_7_syntax(self) -> None:
         probes = {
@@ -724,13 +724,13 @@ class BurpFileTests(unittest.TestCase):
 
 
 class DefaultLauncherTests(unittest.TestCase):
-    """run.py carries its own copy of app/init.py's shared logic (Q3/Q8): these prove the copy is sound."""
+    """run.py carries its own copy of app/init.py's shared logic (Q3/Q8). These tests prove the copy is sound."""
 
     def test_run_py_has_no_fragment_of_the_burp_build(self) -> None:
         source = DEFAULT_LAUNCHER.read_text(encoding="utf-8").lower()
         for word in BURP_WORDS:
             self.assertNotIn(word, source, f"run.py must not hint that a Burp build exists ({word})")
-        # Positive case: the probe words really do appear in the file this build leaves out, so the
+        # As a positive control, the probe words really do appear in the file this build leaves out, so the
         # checks above are not vacuous.
         launcher_source = (REPO / "app" / "init.py").read_text(encoding="utf-8").lower()
         self.assertTrue(any(word in launcher_source for word in BURP_WORDS), "the probe words must exist somewhere")
@@ -749,7 +749,7 @@ class DefaultLauncherTests(unittest.TestCase):
         )
 
     def test_run_py_also_refuses_a_second_start_on_the_same_data_folder(self) -> None:
-        """The locking code is copied, not shared (Q3/Q8): prove the copy still enforces one server per folder."""
+        """The locking code is copied, not shared (Q3/Q8). This test proves the copy still enforces one server per folder."""
         with tempfile.TemporaryDirectory() as directory:
             holder = hold_lock(Path(directory))
             try:
@@ -797,7 +797,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertFalse(name.endswith((".jar", ".class")), f"{name}: nothing compiled or downloaded ships")
 
     def test_no_release_ships_a_file_git_ignores(self) -> None:
-        """Ignored files are local state or tool output, such as the code graph `graphify update app` writes into app/."""
+        """Ignored files are local state or tool output, and none of them ships."""
         for script in (default_release, burp_release):
             with self.subTest(script.__name__), tempfile.TemporaryDirectory() as dist, patch.object(script, "DIST", Path(dist)):
                 with zipfile.ZipFile(script.build_release("release-test")) as bundle:

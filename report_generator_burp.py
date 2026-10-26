@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Report Generator launcher for Burp Suite: one Jython 2.7 file on Burp's legacy Extender API.
+"""Report Generator launcher for Burp Suite, one Jython 2.7 file on Burp's legacy Extender API.
 
 It starts the Report Generator web app as a separate Python 3 process (`app/init.py`, in the folder this
 file sits in), shows the app in the app window (Edge or Chrome with no address bar, docs/adr/0003), and
@@ -8,13 +8,16 @@ when it stopped, with the folder in its status line, and shows an error when the
 the address, and shows nothing else the app prints, because a healthy app prints nothing but its address.
 
 Three sections:
-  1. ServerProcess, AppWindow, LineBuffer and helpers: no `burp` import, so any Jython can run them.
-  2. LauncherPanel: plain Swing, with everything Burp-specific injected, so it can be driven headless.
-  3. BurpExtender: the only place the `burp` package is touched.
+  1. ServerProcess, AppWindow, LineBuffer and helpers. They have no `burp` import, so any Jython can run them.
+  2. LauncherPanel. It is plain Swing with everything Burp-specific injected, so it can be driven headless.
+  3. BurpExtender. It is the only place the `burp` package is touched.
 
-Jython 2.7 rules kept throughout: Python 2 syntax only, `u""` literals for text that meets Java,
-paths through java.io.File, every wait on a worker thread and never on the Swing thread, and an
-`except (Exception, Throwable)` wherever a Java exception can arrive.
+Jython 2.7 rules kept throughout:
+  - Python 2 syntax only.
+  - `u""` literals for text that meets Java.
+  - Paths through java.io.File.
+  - Every wait on a worker thread and never on the Swing thread.
+  - An `except (Exception, Throwable)` wherever a Java exception can arrive.
 """
 import json
 import shutil
@@ -36,8 +39,9 @@ from javax.swing import JButton, JFileChooser, JLabel, JOptionPane, JPanel, JScr
 from javax.swing import Timer
 from jarray import array
 
-# Shared with app/init.py (a test pins both): what its "ready" line starts with, and the variable that tells it
-# it was started from here. Nothing else is shared: the data folder and the port stay entirely in app/init.py.
+# These two names are shared with app/init.py, and a test pins both. The first is what its "ready" line starts
+# with. The second is the variable that tells it it was started from here. Nothing else is shared, and the data
+# folder and the port stay entirely in app/init.py.
 ADDRESS_LINE = u"Report Generator is running at "
 BURP_FLAG = u"VULNREPORT_STARTED_BY_BURP"
 
@@ -64,8 +68,8 @@ class LineBuffer(object):
     def add(self, line):
         with self._lock:
             if self.address is None and line.startswith(ADDRESS_LINE):
-                self.address = line[len(ADDRESS_LINE):]  # exactly as printed: never rewritten
-                return  # kept for opening the window: the tab never shows it
+                self.address = line[len(ADDRESS_LINE):]  # exactly as printed, never rewritten
+                return  # kept for opening the window, and the tab never shows it
             self._lines.append(line)
             self._count += 1
 
@@ -82,7 +86,7 @@ class LineBuffer(object):
 
 
 class _Reader(Runnable):
-    """Drains the server's output. It waits on nothing but the pipe: a full pipe would stall the server."""
+    """Drains the server's output. It waits on nothing but the pipe, so a full pipe never stalls the server."""
 
     def __init__(self, process, buffer):
         self._process = process
@@ -117,7 +121,7 @@ def launcher_file(app_folder):
 
 
 class ServerProcess(object):
-    """The app's process: start, stop by closing its input, Force stop, and whether it is still alive."""
+    """The app's process. It can start, stop by closing its input, Force stop, and say whether it is still alive."""
 
     def __init__(self, buffer, app_folder, python_words):
         self.buffer = buffer
@@ -157,7 +161,7 @@ class ServerProcess(object):
         return self.process.waitFor(int(seconds), TimeUnit.SECONDS)
 
     def stop(self):
-        """Close the server's standard input: app/init.py treats end of input as "finish what you are doing and exit"."""
+        """Close the server's standard input. app/init.py treats end of input as "finish what you are doing and exit"."""
         if self.process is None:
             return
         try:
@@ -166,7 +170,7 @@ class ServerProcess(object):
             pass
 
     def force_stop(self):
-        """End the server and the processes it had when this was called. Never by process name.
+        """End the server and the processes it had when this was called. It never ends a process by name.
 
         Returns the handles it killed, so a check can confirm they are gone.
         """
@@ -196,7 +200,7 @@ class ServerProcess(object):
 
 
 def run_command(words, folder=None):
-    """Run a command to its end and return (exit code, output). Blocks: worker threads only."""
+    """Run a command to its end and return (exit code, output). It blocks, so call it from a worker thread only."""
     builder = ProcessBuilder(_arguments(words))
     if folder is not None:
         builder.directory(File(folder))
@@ -213,7 +217,7 @@ def run_command(words, folder=None):
 
 
 def resolve_python(field):
-    """The interpreter to run: the tab's field when filled in, else the first usual name that says Python 3."""
+    """The interpreter to run. It is the tab's field when filled in, and otherwise the first usual name that says Python 3."""
     field = (field or u"").strip()
     if field:
         return [field]
@@ -305,8 +309,8 @@ def start_browser(words):
 
 
 class AppWindow(object):
-    """The app window (docs/adr/0003). `launch(words)` returns a java.lang.Process; `now()` is in milliseconds;
-    `later(job)` runs a job off the Swing thread."""
+    """The app window (docs/adr/0003). `launch(words)` returns a java.lang.Process, `now()` is in milliseconds,
+    and `later(job)` runs a job off the Swing thread."""
 
     def __init__(self, app_folder, places, launch, on_windows, now=None, later=None):
         self.folder = File(app_folder, APP_WINDOW_FOLDER)
@@ -341,8 +345,8 @@ class AppWindow(object):
         return note
 
     def _open(self, place, url):
-        """Under the folder lock: the tab's line if no window opened, and (generation, browser) to delete after
-        if it was dropped."""
+        """Runs under the folder lock. Returns the tab's line if no window opened, and (generation, browser) to
+        delete after if it was dropped."""
         with self._lock:
             current = self.browser
         joining = current is not None and current.isAlive()
@@ -385,7 +389,8 @@ class AppWindow(object):
         return u"closed"
 
     def close(self, for_good=False):
-        """End the browser this started, by its handle, never one found by name; `for_good` on unload. Any thread."""
+        """End the browser this started, by its handle and never one found by name. Pass `for_good` when the
+        extension unloads. Any thread may call it."""
         with self._lock:
             self._ended = self._ended or for_good
             browser, self.browser = self.browser, None
@@ -424,7 +429,7 @@ class AppWindow(object):
         shutil.rmtree(self.folder.getPath(), True)
 
     def _left_running(self):
-        """A browser holds the folder while its lock file is there and cannot be removed; a stale one goes."""
+        """A browser holds the folder while its lock file is there and cannot be removed. A stale lock file is removed."""
         lock = File(self.folder, u"lockfile")
         return lock.exists() and not lock.delete()
 
@@ -435,7 +440,7 @@ _error_sink = [None]
 
 
 def _report_error():
-    """Put a traceback where the tester can see it: the tab if it exists, else Extender's Errors pane."""
+    """Put a traceback where the tester can see it. That is the tab if it exists, otherwise Extender's Errors pane."""
     text = traceback.format_exc()
     sink = _error_sink[0]
     if sink is not None:
@@ -539,8 +544,8 @@ class SwingDialogs(object):
 
 
 class LauncherPanel(object):
-    """The tab. `settings` has get(key) and put(key, value); `window` is the app window (open, poll, close);
-    `dialogs.ask_bring_over(folder)` asks the first-run question; `log(text)` records a problem."""
+    """The tab. `settings` has get(key) and put(key, value). `window` is the app window (open, poll, close).
+    `dialogs.ask_bring_over(folder)` asks the first-run question, and `log(text)` records a problem."""
 
     def __init__(self, app_folder, settings, window, dialogs, log):
         self.app_folder = app_folder
@@ -644,7 +649,7 @@ class LauncherPanel(object):
         if self.server is not None:
             self.server.force_stop()
 
-    # -- starting, on a worker thread: nothing here may wait on the Swing thread except through wait_on_swing
+    # -- starting, on a worker thread. Nothing here may wait on the Swing thread except through wait_on_swing
 
     def _start_job(self, python_text):
         try:
@@ -668,7 +673,7 @@ class LauncherPanel(object):
             on_swing(self._go, u"stopped")
 
     def _settle_data(self, words):
-        """On a first Start with no reports, offer to bring a previous release's reports over. False to stop."""
+        """On a first Start with no reports, offer to bring a previous release's reports over. Return False to stop."""
         status = data_status(self.app_folder, words)
         fresh_key = u"fresh:" + self.app_folder
         if status is None or status.get(u"reports") != 0 or status.get(u"locked") or self.settings.get(fresh_key) == u"1":
@@ -729,8 +734,8 @@ class LauncherPanel(object):
             self.buffer.note(self._stopped_text())
 
     def shutdown(self):
-        """The extension is unloading (any thread): close the server's input and let it finish, and close the app
-        window now, since nothing watches the server after this."""
+        """The extension is unloading, and any thread may call this. Close the server's input and let it finish, and
+        close the app window now, since nothing watches the server after this."""
         server = self.server
         if server is not None:
             server.stop()
@@ -830,8 +835,8 @@ def _wait_until(condition, seconds):
 
 
 def self_check(app_folder, python_exe):
-    """Start the app and check it prints nothing but its address, stop it, start it again and force-stop it, and
-    check the reader drains a flood of output. 0 when all of it held."""
+    """Start the app and check it prints nothing but its address, stop it, start it again and force-stop it. Then
+    check the reader drains a flood of output. Return 0 when all of it held."""
     words = [python_exe]
     status = data_status(app_folder, words)
     if status is None:
@@ -923,8 +928,9 @@ class _FakeDialogs(object):
 
 
 def self_check_panel(app_folder, python_exe):
-    """Drive the tab headless with fakes: Start, the window opens, Stop closes it; Start, the window is
-    closed, the app stops. The log says only that the app ran and stopped. 0 when it behaved."""
+    """Drive the tab headless with fakes. In round 1, Start opens the window and Stop closes it. In round 2,
+    Start opens the window, the tester closes it and the app stops. The log says only that the app ran and
+    stopped. Return 0 when it behaved."""
     settings, dialogs, problems = _FakeSettings(), _FakeDialogs(), []
     root = tempfile.mkdtemp()
     edge = File(root, u"msedge.exe").getPath()
@@ -957,7 +963,7 @@ def self_check_panel(app_folder, python_exe):
         return any(text in line for line in panel.buffer.snapshot()[1])
 
     def opened(count):
-        """The window opens on a worker thread: wait until `count` opens have finished, so its browser is watched."""
+        """The window opens on a worker thread, so wait until `count` opens have finished. Only then is its browser watched."""
         return _wait_until(lambda: returned[0] == count, 10)
 
     SwingUtilities.invokeAndWait(_Call(lambda: panel.python_field.setText(python_exe)))
@@ -1020,7 +1026,7 @@ class _FakeBrowser(object):
 
 
 class _FakeLauncher(object):
-    """Starts nothing: records each command and hands back a browser the check can close."""
+    """Starts nothing. It records each command and hands back a browser the check can close."""
 
     def __init__(self):
         self.started = []
@@ -1038,7 +1044,7 @@ def _make_file(path):
 
 
 def self_check_window(_app_folder, python_exe):
-    """The app window without Burp, a server or a real browser: which browser starts, and how. 0 when it held."""
+    """Check the app window without Burp, a server or a real browser, covering which browser starts and how. Return 0 when it held."""
     failures = []
 
     def check(passed, text):

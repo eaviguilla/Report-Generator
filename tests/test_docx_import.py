@@ -416,9 +416,9 @@ class FragmentRecognitionTests(unittest.TestCase):
             self.assertEqual(conclusion["fragments"], [])
 
     def test_ticket_formats_from_older_reports_normalise_to_bare_digits(self) -> None:
-        """Liberal in what it accepts, strict in what survives. The last case is the point: mining
-        digits out of surrounding text would invent 2024 as a ticket, and a fabricated reference in
-        a delivered report reads exactly as plausibly as a real one."""
+        """Liberal in what it accepts, strict in what survives. The "GRIMPEN-3523 (closed 2024)"
+        case is the point. Taking digits out of surrounding text would invent 2024 as a ticket,
+        and a fabricated reference in a delivered report looks as plausible as a real one."""
         for printed, expected in (
             ("GRIMPEN-1234\nGRIMPEN-5678", "1234\n5678"),
             ("3454, 3453, 2323", "3454\n3453\n2323"),
@@ -434,8 +434,8 @@ class FragmentRecognitionTests(unittest.TestCase):
                 self.assertEqual(_parsed_ticket_lines(printed)[0], expected)
 
     def test_cvss_values_are_read_back_from_the_row_that_names_the_finding(self) -> None:
-        """The table carries a row per rendered finding while the importer drops every Resolved one,
-        so a Resolved finding first in the document is what proves the match is not positional."""
+        """The table carries a row per rendered finding while the importer drops every Resolved one.
+        A Resolved finding first in the document therefore proves the match is not positional."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             folder = Path(temporary_directory)
             report = self._retest_report(folder)
@@ -480,7 +480,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             )
 
     def test_a_template_without_the_section_table_imports_with_the_fields_empty(self) -> None:
-        """Three of the four templates have no such table, so its absence is normal and never raises."""
+        """Two of the four templates have no such table, so its absence is normal and never raises."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             folder = Path(temporary_directory)
             document = render_report_docx(self._retest_report(folder), TEMPLATE, folder)
@@ -526,9 +526,10 @@ class FragmentRecognitionTests(unittest.TestCase):
         return report
 
     def test_a_non_production_evidence_image_keeps_its_environment_through_a_round_trip(self) -> None:
-        """The heading above the screenshots is the label's only appearance in the document: the
-        scope rows read "Non-Production Environment" from the template, not the tester's label. Miss
-        it and the images below inherit the previous environment, so non-prod evidence files as prod."""
+        """The heading above the screenshots is the label's only appearance in the document. The
+        scope rows read "Non-Production Environment" from the template, not the tester's label. If
+        the importer misses it, the images below inherit the previous environment, so non-prod
+        evidence files as prod."""
         for label in ("NON-PROD", "STAGE", "TEST/MO"):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary_directory:
                 folder = Path(temporary_directory)
@@ -723,7 +724,7 @@ class FragmentRecognitionTests(unittest.TestCase):
 
     def test_editable_mode_rejects_invalid_nonempty_finding_scalars(self) -> None:
         resources = Path(__file__).resolve().parent.parent / "resources"
-        # None is the unedited document: it must import, or every refusal below proves nothing.
+        # None is the unedited document. It must import, or every refusal below proves nothing.
         cases = {
             None: None,
             "display_id": '"Authorization bypass" has an invalid finding ID "ABC". A finding ID is one to five digits.',
@@ -1063,7 +1064,7 @@ class FragmentRecognitionTests(unittest.TestCase):
 
     def test_the_blank_line_after_a_bulleted_list_is_not_imported(self) -> None:
         """A generated list is followed by an empty paragraph. Read back as a fragment it would be text the
-        tester never wrote, and it would stand between a list and the one after it."""
+        tester never wrote, and it would separate a list from the one after it."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             folder = Path(temporary_directory)
             report = self._report(folder)
@@ -1201,7 +1202,7 @@ class FragmentRecognitionTests(unittest.TestCase):
             Report.model_validate(payload)
 
     def test_a_title_with_extra_spaces_imports_back_as_typed(self) -> None:
-        """The heading and the Findings Summary table print the title as typed, so a report the app wrote
+        """The heading and the Findings Summary table print the title as typed. A report the app wrote
         must pair them whatever spaces the title holds, and the finding keeps the title as typed."""
         titles = (
             ("a double space", "Cross  site scripting"),
@@ -1687,8 +1688,8 @@ class FindingRowTests(unittest.TestCase):
 
 
 class RefusalMessageTests(unittest.TestCase):
-    """A refused Word report says which finding and which part of the report broke which rule, and what
-    the importer expected and found, in the words the report itself uses (see GLOSSARY.md)."""
+    """A refused Word report says which finding and which part of the report broke which rule. It also
+    says what the importer expected and found, in the words the report itself uses (see GLOSSARY.md)."""
 
     def assertRefused(self, data: bytes, *expected: str) -> None:
         self.assertTrue(expected, "a refusal test must say what the message has to name")
@@ -2218,7 +2219,7 @@ class FirstChangeTests(unittest.TestCase):
 
 
 class ImportRouteTests(unittest.TestCase):
-    """A .docx is itself a ZIP, so the sharpest risk here is the new branch stealing the bundle's."""
+    """A .docx is itself a ZIP, so the main risk here is the DOCX branch taking bundle uploads."""
 
     def test_supported_word_edits_survive_import_and_a_later_save(self) -> None:
         def edit(document):
@@ -2324,7 +2325,7 @@ class ImportRouteTests(unittest.TestCase):
     def test_a_retest_inherits_every_status_except_open_new(self) -> None:
         """A retest re-tests the distinction last year's status recorded, so only Open (New) is
         meaningless on one. Before this, anything outside a two-name set was dropped and reported as
-        resolved - which would have eaten a finding for carrying a status added after it was written."""
+        resolved. That would have lost a finding for carrying a status added after it was written."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             folder = Path(temporary_directory)
             report = FragmentRecognitionTests._report(folder)
@@ -2348,8 +2349,8 @@ class ImportRouteTests(unittest.TestCase):
 
     def test_every_segment_the_model_allows_parses_back_out_of_a_title(self) -> None:
         """The title parser holds the segment set a second time, as a literal tuple, and the two
-        copies have no other guard. Driving this from the Literal is what catches a segment added to
-        one and not the other -- a miss loses segment, app name and report type together, and raises
+        copies have no other guard. Driving this from the Literal catches a segment added to one
+        and not the other. A miss loses segment, app name and report type together and raises
         nothing, because the unknown-report-type error sits inside the branch a failed match never
         enters."""
         resources = Path(__file__).resolve().parent.parent / "resources"
@@ -2391,8 +2392,8 @@ class ImportRouteTests(unittest.TestCase):
                 self.assertEqual(engagement["report_type"], report_type)
 
     def test_a_retest_drops_closed_findings_and_keeps_the_open_ones(self) -> None:
-        """Closed borrows exactly one rule from Resolved -- the retest drop -- and a dropped finding
-        takes its evidence and typed work with it, so the summary is its only trace."""
+        """Closed borrows exactly one rule from Resolved, the retest drop. A dropped finding takes its
+        evidence and typed work with it, so the summary is its only trace."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             folder = Path(temporary_directory)
             report = FragmentRecognitionTests._report(folder)

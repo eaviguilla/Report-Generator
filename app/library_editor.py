@@ -1,7 +1,7 @@
 """
-Local-only vulnerability library editor. Deliberately untracked: it writes the file the app
-validates at import, so it never ships. Enable with VULNREPORT_LIBRARY_EDITOR=1 and open
-/library-editor. Nothing in tracked code links to it.
+Local-only vulnerability library editor. It writes the file the app validates at import,
+so the release builds leave it out. Enable it with VULNREPORT_LIBRARY_EDITOR=1 and open
+/library-editor. No page links to it.
 """
 
 from __future__ import annotations
@@ -138,7 +138,7 @@ def register(app, library_path: Path, rebind) -> None:
         index = next((position for position, entry in enumerate(document["entries"]) if entry["library_id"] == library_id), None)
         if index is None:
             raise HTTPException(404, "Library entry not found")
-        # Enforced here, not by hiding the button: the shipped entries are what saved reports cite.
+        # Enforced here, not by hiding the button, because the shipped entries are what saved reports cite.
         if not document["entries"][index].get("editor_added"):
             raise HTTPException(403, "Only entries created in this editor can be deleted")
         document["entries"].pop(index)

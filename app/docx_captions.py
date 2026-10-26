@@ -103,10 +103,10 @@ def flatten_section_number_fields(document: DocumentType) -> int:
     """Replace each computed section-number reference with its own text, minus the trailing period.
 
     The number Word reports is the heading's own list label, `%1.%2. `, so the period arrives with
-    it. Editing the field's result would not survive: settings.xml asks Word to refresh fields when
-    the document is opened, which the table of contents needs, and that would put the period back.
-    Only a field Word has already computed is flattened, so a document produced without Word keeps
-    its live field rather than losing the number."""
+    it. Editing the field's result would not survive, because settings.xml asks Word to refresh
+    fields when the document is opened. The table of contents needs that setting, and the refresh
+    would put the period back. Only a field Word has already computed is flattened, so a document
+    produced without Word keeps its live field rather than losing the number."""
     flattened = 0
     for paragraph in document.element.body.iter(qn("w:p")):
         for runs, instruction, result in _complex_fields(paragraph):
@@ -211,9 +211,9 @@ def add_native_image_captions(document: DocumentType) -> int:
         if caption is None or caption.tag != qn("w:p"):
             index += 1
             continue
-        # Either signal will do, and both still require the paragraph to sit directly under an image:
-        # our own generator centres captions and gives them no caption style, while a document that
-        # came from elsewhere carries the style but may be left aligned.
+        # Either signal will do, and both still require the paragraph to sit directly under an image.
+        # Our own generator centres captions and gives them no caption style. A document that came
+        # from elsewhere carries the style but may be left aligned.
         if _has_figure_sequence(caption):
             index += 1
             continue

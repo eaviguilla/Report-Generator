@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Star Map</title>
-<!-- Template: tools/star_map/star_map.py puts the work items in place of the data mark and writes star_map.html. -->
+<!-- Template for star_map.html. tools/star_map/star_map.py puts the work items in place of the data mark and writes the page. -->
 <style>
 :root {
   --bg: #05070d; --surface: #0a0f1d; --ink: #e2e8f0; --muted: #94a3b8; --line: #1e293b; --panel: 360px;
@@ -172,7 +172,7 @@ const STATUS = {
 const RECORD = { label: "Decision record", glyph: "§" };
 const OUT_OF_SCOPE = { label: "Out-of-scope idea", glyph: "✧" };
 const TYPES = { review: "Review item", plan: "Plan", spec: "Spec", map: "Wayfinder map", ticket: "Wayfinder ticket", issue: "Issue", adr: "Decision record", "out-of-scope": "Out-of-scope idea" };
-// Each status is a kind of star: core and glow paint it, label tints its name, chip tints the panel.
+// Each status is a kind of star. Core and glow paint it, label tints its name, and chip tints the panel.
 const SKY = {
   "needs-triage":    { core: "#f8fafc", glow: "#cbd5e1", label: "#e2e8f0", chip: "#e2e8f0" },
   "needs-info":      { core: "#ddd6fe", glow: "#8b5cf6", label: "#ddd6fe", chip: "#a78bfa" },
@@ -230,7 +230,7 @@ function links() {
   return out;
 }
 
-// Threads: items joined by any link. The item with nothing above it is the top.
+// A thread is a set of items joined by any link. The item with nothing above it is the top.
 const THREADS = (() => {
   const up = {};
   VIEW.forEach(i => { up[i.id] = i.id; });
@@ -313,7 +313,7 @@ function layoutThread(t, rnd) {
   return N;
 }
 
-// Rows of thread boxes, with the row width that lets the whole map fill a stage of this width-to-height ratio.
+// Packs the thread boxes in rows and picks the row width that lets the whole map fill a stage of this width-to-height ratio.
 function forceLayout(aspect) {
   const rnd = mulberry32(7), PAD = 46, GAP = 24;
   const boxes = THREADS.map(t => {
@@ -640,7 +640,7 @@ function select(id) {
 
 function writeURL() {
   const url = location.pathname + (state.item ? "?" + new URLSearchParams({ item: state.item }) : "");
-  try { history.replaceState(null, "", url); } catch (e) { /* some browsers refuse this on file: pages */ }
+  try { history.replaceState(null, "", url); } catch (e) { /* some browsers refuse this when the page is opened from a file URL */ }
 }
 
 if (!DATA) {

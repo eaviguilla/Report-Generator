@@ -32,7 +32,7 @@
     chip.hidden = !total;
   };
   let loadRevision = 0;
-  // Drawn rather than lettered, so four actions per row stop shouting in red and blue.
+  // Drawn rather than lettered, so four actions per row don't fill the list with red and blue text.
   const ACTION_PATHS = {
     rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
     duplicate: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
@@ -101,7 +101,7 @@
         };
         currentName.replaceWith(input);
         button.dataset.editing = "true";
-        // The accessible name lives on aria-label now, so the icon alone would keep announcing "Rename".
+        // The accessible name lives on aria-label, so the icon alone would keep announcing "Rename".
         button.setAttribute("aria-label", "Save");
         button.title = "Save application name";
         button.innerHTML = actionIcon("save");

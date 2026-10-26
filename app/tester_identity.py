@@ -1,34 +1,33 @@
 """
-VulnReport -- tester identity bootstrap.
+VulnReport tester identity bootstrap.
 
-Resolves the tester's display name ONCE on first launch and stores it in
+Resolves the tester's display name once, on first launch, and stores it in
 data/prefs.json. It then prefills engagement.tester on every new report, so the
 tester never types their own name again.
 
-Based on secur32.GetUserNameExW with EXTENDED_NAME_FORMAT.NameDisplay (= 3),
+It calls secur32.GetUserNameExW with EXTENDED_NAME_FORMAT.NameDisplay (= 3),
 which returns the Active Directory display name, e.g. "Viguilla, Elias Angelo".
 
-WHY THIS IS LONGER THAN THE 15-LINE REFERENCE SCRIPT
-----------------------------------------------------
-The reference version works on a domain-joined Windows machine and fails
-silently everywhere else. Four things are handled here that it does not:
+A bare call to that function works on a domain-joined Windows machine and fails
+silently everywhere else. This module handles four cases the bare call does not:
 
-  1. NOT DOMAIN-JOINED.  NameDisplay fails with ERROR_NONE_MAPPED (1332) on a
-     local/workgroup account. The reference script ignores the return value and
-     prints an empty string. We check it and fall through.
+  1. Not domain-joined. NameDisplay fails with ERROR_NONE_MAPPED (1332) on a
+     local or workgroup account. A bare call ignores the return value and
+     yields an empty string. This module checks it and falls through.
 
-  2. NON-WINDOWS.  ctypes.windll does not exist off Windows -- AttributeError
-     at import time. Guarded by sys.platform.
+  2. Not Windows. ctypes.windll does not exist off Windows and raises
+     AttributeError at import time. sys.platform guards it.
 
-  3. RETURN VALUES.  GetUserNameExW returns 0 on failure. The size-probe call
-     is EXPECTED to fail with ERROR_MORE_DATA (234); any other error means the
-     format is unavailable and we must not allocate from a garbage size.
+  3. Return values. GetUserNameExW returns 0 on failure. The size-probe call
+     is expected to fail with ERROR_MORE_DATA (234). Any other error means the
+     format is unavailable, and the code must not allocate from a garbage size.
 
-  4. NAME ORDER.  AD may hold "Surname, Given" or "Given Surname". We store
-     both the raw value and a normalised one, and the tester can always edit it.
+  4. Name order. AD may hold "Surname, Given" or "Given Surname". The module
+     stores both the raw value and a normalised one, and the tester can always
+     edit it.
 
-Auto-detection is a convenience, never an authority. An AD display name is
-frequently not what belongs on a client deliverable.
+Auto-detection is a convenience, not an authority. An AD display name is
+often not what belongs on a client deliverable.
 """
 
 from __future__ import annotations
@@ -43,9 +42,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError, field_validator
 
-# EXTENDED_NAME_FORMAT -- winbase.h
-NAME_SAM_COMPATIBLE = 2      # "DOMAIN\\username"  -- works off-domain too
-NAME_DISPLAY = 3             # "Viguilla, Elias Angelo"  -- what we want
+# EXTENDED_NAME_FORMAT values, from winbase.h
+NAME_SAM_COMPATIBLE = 2      # "DOMAIN\\username", which works off-domain too
+NAME_DISPLAY = 3             # "Viguilla, Elias Angelo", the format we want
 
 ERROR_MORE_DATA = 234        # expected from the size-probe call
 
@@ -77,7 +76,7 @@ def _get_user_name_ex(fmt: int) -> str | None:
 
         size = wintypes.ULONG(0)
 
-        # Probe. Expected to FAIL with ERROR_MORE_DATA and set `size`.
+        # Probe call. It is expected to fail with ERROR_MORE_DATA and set `size`.
         if secur32.GetUserNameExW(fmt, None, ctypes.byref(size)):
             return None                                  # unexpected success
         err = ctypes.get_last_error()
@@ -98,8 +97,8 @@ def _get_user_name_ex(fmt: int) -> str | None:
 # =============================================================================
 
 def normalise(raw: str) -> str:
-    """'Viguilla, Elias Angelo' -> 'Elias Angelo Viguilla'.
-    Only flips on a single comma; anything else is returned untouched."""
+    """Turn 'Viguilla, Elias Angelo' into 'Elias Angelo Viguilla'.
+    Only a name with a single comma is flipped. Anything else comes back with just its whitespace stripped."""
     if raw.count(",") == 1:
         surname, given = (p.strip() for p in raw.split(","))
         if surname and given:

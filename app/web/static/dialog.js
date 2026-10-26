@@ -1,4 +1,4 @@
-// Promise-based replacement for window.confirm, so prompts can offer more than two answers
+// Promise-based replacement for window.confirm, so dialogs can offer more than two answers
 // and can be styled with the app's theme. Loaded by every page, so it also carries the two small
 // page helpers app.js and manager.js share (window.vrPage).
 (() => {
@@ -9,7 +9,7 @@
   const afterClose = [];
 
   const ask = ({title, message, list, copy, actions}) => new Promise(resolve => {
-    // A second prompt would trap focus behind the first, so settle the open one first.
+    // A second dialog would trap focus behind the first, so settle the open one first.
     if (openDialog) openDialog.settle("cancel");
 
     const returnFocusTo = document.activeElement;
@@ -125,7 +125,7 @@
       {key: "cancel", label: cancelLabel, cancel: true},
     ]}).then(key => key === "confirm");
 
-  // A notice that arrives on its own waits here, because ask() would answer an open prompt with Cancel.
+  // A notice that arrives on its own waits here, because ask() would answer an open dialog with Cancel.
   const whenClosed = async () => {
     while (openDialog) await new Promise(run => afterClose.push(run));
   };

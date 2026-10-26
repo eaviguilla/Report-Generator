@@ -20,17 +20,17 @@
 </script>
 <style>
   /* This page has no design of its own. The shell copies the Content page's two-pane workspace and
-     the cards copy the Setup page's sections; every number below was read off their computed
-     styles. Change one of those pages and this should follow, not drift. */
+     the cards copy the Setup page's sections. Every number below was read off their computed
+     styles. If you change one of those pages, change this one to match so they don't drift apart. */
   .library-page .engagement-name { display: inline-flex; align-items: center; gap: 8px; }
   .library-page #library-count { display: inline-flex; }
 
-  /* Content page shell: full bleed, fixed height, each pane scrolls on its own so the page never does. */
+  /* Content page shell. It is full bleed with a fixed height, and each pane scrolls on its own so the page never does. */
   #library-editor { width: 100%; max-width: none; padding: 0; }
   .library-workspace { display: grid; height: calc(100dvh - var(--header-height) - var(--footer-height)); min-height: 0; grid-template-columns: clamp(240px, 21vw, 316px) minmax(0, 1fr); }
 
-  /* align-self overrides app.css's `aside { align-self: start }`, which otherwise lets the rail
-     grow to all 51 entries so #list never clamps and never shows a scrollbar. */
+  /* align-self overrides app.css's `aside { align-self: start }`. Without it the rail grows to all
+     51 entries, so #list never clamps and never shows a scrollbar. */
   #library-nav { display: grid; min-width: 0; height: 100%; min-height: 0; align-self: stretch; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid var(--line); background: var(--surface-raised); }
   .library-nav-heading { display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px; }
   .library-nav-heading b { color: var(--ink); font-family: "Bahnschrift", "Aptos Display", sans-serif !important; font-size: 12px; font-weight: 700; }
@@ -39,9 +39,9 @@
   .library-nav-controls input, .library-nav-controls select { margin: 0; height: 30px; }
   #list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); }
 
-  /* Entry rows follow .finding-nav on the Content page: severity rail, then the severity spelled out
-     beside the ID so colour is not the only thing carrying it. Named `lib-row` rather than
-     `library-entry` because app.css already owns that class for the report editor's search dropdown. */
+  /* Entry rows follow .finding-nav on the Content page. Each has a severity rail, and the severity is
+     also spelled out beside the ID, so colour is not the only cue. They are named `lib-row` rather
+     than `library-entry` because app.css already uses that class for the report editor's search dropdown. */
   .lib-row { --rail: #fff; display: grid; width: 100%; gap: 2px; margin: 0; padding: 7px 9px 7px 10px; border: 0; border-left: 3px solid var(--rail); border-radius: 0; color: var(--ink); background: transparent; font-size: 11px; text-align: left; }
   .lib-row.severity-critical { --rail: var(--critical); }
   .lib-row.severity-high { --rail: var(--high); }
@@ -58,7 +58,7 @@
   .lib-row[aria-current="true"] .lib-row-meta { color: var(--accent); }
   .library-empty { margin: 0; padding: 20px 10px; color: var(--muted); font-size: 12px; text-align: center; }
 
-  /* Work surface: #finding-editor's scroll box, holding Setup-page section cards. */
+  /* Work surface. It is styled like #finding-editor's scroll box and holds cards styled like the Setup page's sections. */
   #editor { width: auto; max-width: none; height: 100%; min-height: 0; margin: 0; padding: 14px 16px; overflow-y: auto; overscroll-behavior: contain; background: var(--canvas); }
   #editor .section-title { display: flex; justify-content: flex-start; align-items: baseline; gap: 8px; margin: 0 0 14px; padding: 0 0 10px; border-bottom: 1px solid var(--line); }
   #editor .section-title h1 { min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
@@ -76,7 +76,7 @@
   .field-head { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
   .field-head .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  /* Reuses dialog.js's .vr-dialog shell so the one prompt this page owns matches every other one. */
+  /* Reuses dialog.js's .vr-dialog shell so the one dialog this page owns matches every other one. */
   .new-entry-fields { display: grid; gap: 14px; margin-top: 14px; }
   .vr-dialog .new-entry-error { color: var(--danger); }
 
@@ -170,7 +170,7 @@
 
   const savedVariants = entry => variants.filter(variant => (entry.proof_of_concept?.[variant] || []).length);
   const byTitle = (a, b) => (a.title || a.library_id).localeCompare(b.title || b.library_id);
-  // "" sits at index 0, so fall through to last: unset severity belongs after informational, not before critical.
+  // "" sits at index 0, so fall through to last. An unset severity belongs after informational, not before critical.
   const severityRank = entry => severities.indexOf(entry.default_severity || "") || severities.length;
 
   const sorters = {
@@ -296,7 +296,7 @@
     form.onsubmit = async event => {
       event.preventDefault();
       const library_id = form.library_id.value.trim();
-      // Validated here rather than with required/pattern, so the message lands in the dialog
+      // Validated here rather than with required/pattern, so the message appears in the dialog
       // instead of a browser bubble this page cannot style.
       if (!/^[A-Za-z0-9._-]+$/.test(library_id)) return fail("Use letters, digits, dot, dash or underscore.");
       if (entries.some(entry => entry.library_id === library_id)) return fail(`${library_id} already exists.`);

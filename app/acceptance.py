@@ -1,4 +1,4 @@
-"""Report acceptance: what a submitted report must pass, and what the server completes, before it is written."""
+"""Report acceptance is what a submitted report must pass, and what the server completes, before it is written."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,7 +9,7 @@ from .workspace import StaleReportError
 
 
 class Refusal(ValueError):
-    """Acceptance turned the report away. The subclass names the rule; the caller words it."""
+    """Acceptance turned the report away. The subclass names the rule, and the caller writes the message."""
 
 
 class InvalidScope(Refusal):
@@ -34,7 +34,7 @@ class InvalidFields(Refusal):
 
 
 def check(stored: Report, submitted: dict) -> Report:
-    """Refuse the submission or return it validated. Rewrites `submitted` in place: scope text becomes targets."""
+    """Refuse the submission or return it validated. It rewrites `submitted` in place. Scope text becomes targets."""
     try:
         revision = datetime.fromisoformat(submitted.get("saved_at", ""))
     except (TypeError, ValueError):
@@ -49,7 +49,7 @@ def check(stored: Report, submitted: dict) -> Report:
         raise ScopeTargetRemoved(stranded)
     # Validation also freezes retired scope modes, against the targets reconcile_targets just wrote.
     report = Report.model_validate(submitted)
-    # Without scope text the targets arrive as stored data, so a changed one never met the Setup checks.
+    # Without scope text the targets arrive as stored data, so a changed target has not been through the Setup checks.
     if stranded is None and (refusals := changed_target_refusals(report.scope_targets, stored.scope_targets)):
         context = {
             "engagement": report.engagement.model_dump(mode="json"),

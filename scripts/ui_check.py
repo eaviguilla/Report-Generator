@@ -7,7 +7,7 @@ It uses a temporary data folder and generated/ folder, so nothing under data/ is
 prints `URL <address>` (and `REPORT <id>` with --report) once the server answers, and serves until it is
 stopped (Ctrl-C or kill), which removes the folder. It picks the first port from 8900 to 8999 that it can
 bind and serves on that bound socket, so a parallel check cannot take the port in between. Run it in the
-background and drive the page with the playwright-cli skill (.claude/skills/playwright-cli).
+background and drive the page with Playwright, using the printed URL.
 """
 from __future__ import annotations
 

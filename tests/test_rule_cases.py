@@ -110,7 +110,8 @@ def too_long(field: str, limit: int, **context) -> dict:
     return refusal("too_long", field=field, **context, limit=limit)
 
 
-# A letter outside the Basic Multilingual Plane: one code point, two UTF-16 units, as maxlength counts it.
+# A letter outside the Basic Multilingual Plane is one code point and two UTF-16 units,
+# and maxlength counts the units.
 WIDE_LETTER = "\U0001d400"
 
 

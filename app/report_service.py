@@ -237,9 +237,9 @@ def format_rule_message(result: dict, report: dict | None = None, *, scope_conte
     raise ValueError(f"Unknown rule message: {code}")
 
 
-# Outside XML 1.0's Char production: python-docx refuses them, so generation would abort.
+# Characters outside XML 1.0's Char production. python-docx refuses them, so generation would abort.
 WORD_REFUSED_CHARACTERS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
-# In UTF-16 units.
+# Limits count UTF-16 units.
 SCOPE_LIMITS = {"line": 500, "component": 200, "description": 500}
 
 
@@ -253,7 +253,7 @@ class CharacterRule:
     numbers: bool = True
     spaces: bool = True
     line_breaks: bool = False
-    # In UTF-16 units, as the browser's maxlength counts; see text_length.
+    # Counted in UTF-16 units, as the browser's maxlength counts. See text_length.
     max_length: int | None = None
 
 
@@ -273,11 +273,12 @@ CHARACTER_RULES: dict[str, CharacterRule] = {
     "limitations": CharacterRule("Limitations", "/,.;:()&'\"-", line_breaks=True, max_length=2000),
     # A subset of Limitations, because the retest suggestion writes this name into that field.
     "non_production_label": CharacterRule("Non-Production name", "/-"),
-    # No symbol at all: the GRIMPEN- prefix belongs to the document, not to the stored value.
+    # No symbol at all. The GRIMPEN- prefix belongs to the document, not to the stored value.
     "severity_review_tickets": CharacterRule("Severity Review Tickets", "", letters=False, spaces=False, line_breaks=True),
     "cvss_score": CharacterRule("CVSS Score", ".", letters=False, spaces=False),
     "cvss_vector": CharacterRule("CVSS Vector", "./:", spaces=False),
-    # ASCII only, so a letter such as é is named rather than reported as a bad first or last character.
+    # ASCII only, so an accented letter is named as an invalid character rather than
+    # reported as a bad first or last character.
     "username": CharacterRule("Username", f"{ASCII_LETTERS_AND_DIGITS}._@\\-", letters=False, numbers=False, max_length=100),
 }
 
@@ -360,7 +361,7 @@ def setup_field_refusals(engagement: dict) -> list[dict]:
     # A disabled input is exempt from browser validation, so an unticked Non-Production goes unchecked.
     if "non_production" in environments:
         label = engagement.get("non_production_label")
-        # Stripped as the model's strip_label does.
+        # Strip the label as Engagement.strip_label does.
         check("non_production_label", label.strip() if isinstance(label, str) else label)
     return results
 
@@ -409,8 +410,8 @@ def _already_stored(result: dict, engagement: dict, prior: dict) -> bool:
 def setup_input_issues(engagement: Engagement, prior: Engagement | None = None) -> list[str]:
     """Return invalid Setup values without treating blank draft fields as errors.
 
-    With `prior`, only values that differ from it: a stored value that breaks a rule, such as one an
-    import brought in, stays savable and is reported by setup_issues instead."""
+    With `prior`, only values that differ from it count. A stored value that breaks a rule, such
+    as one an import brought in, stays savable, and setup_issues reports it instead."""
     current = engagement.model_dump(mode="json")
     results = setup_field_refusals(current)
     if prior is not None:
@@ -434,19 +435,20 @@ def finding_input_issues(report: Report) -> list[str]:
 
 
 EN_DASH = "\u2013"
-# A file name is cut at about the longest one the app already made (a 100-character application
-# name plus the other parts), because the file lands in generated/ under the project folder and
-# Windows stops a path at 260 characters.
+# File names are cut at about the longest one the app already made, which is a 100-character
+# application name plus the other parts. The limit exists because the file lands in generated/
+# under the project folder, and Windows stops a path at 260 characters.
 REPORT_NAME_FILENAME_LIMIT = 150
 
 
 def report_name_for(report: Report) -> str:
-    """The name a Word report gives itself: the tester's own for a segment in REPORT_NAME_SEGMENTS, and
-    for every other segment one built from its parts, joined with the en dashes the cover has always used."""
+    """The name a Word report gives itself. A segment in REPORT_NAME_SEGMENTS uses the tester's own name.
+    Every other segment gets one built from its parts, joined with the en dashes the cover has always used."""
     engagement = report.engagement
     if engagement.segment in REPORT_NAME_SEGMENTS:
         return engagement.report_name.strip()
-    # Four digits always, because the importer strips exactly four from the cover title; datetime and HTML dates run from year 1.
+    # Always four digits, because the importer strips exactly four from the cover title.
+    # Dates in datetime and HTML start at year 1, so a year can have fewer digits.
     year = f"{engagement.report_date.year:04d}" if engagement.report_date else "N/A"
     test_type = REPORT_TYPE_LABELS.get(engagement.report_type or "", "N/A")
     return f" {EN_DASH} ".join([engagement.segment or "N/A", engagement.app_name.strip() or "N/A", f"{test_type} {year}"])
@@ -465,8 +467,8 @@ def report_export_filename(report: Report, suffix: str = ".zip") -> str:
         # The report name is the whole file name, so it is cut once rather than part by part.
         named = _filename_text(report_name_for(report).replace(EN_DASH, "-"))[:REPORT_NAME_FILENAME_LIMIT].strip(" .")
         if named:
-            # Windows refuses a device name as a file name, with or without an extension. The cut comes first, and the
-            # underscore takes a place inside the limit, so the stem stays within it.
+            # Windows refuses a device name as a file name, with or without an extension. Prefix "_" to
+            # such a name. The name is cut one character shorter to leave room, so the stem stays within the limit.
             if WINDOWS_DEVICE_NAME.match(named):
                 named = f"_{named[:REPORT_NAME_FILENAME_LIMIT - 1]}".rstrip(" .")
             return f"{named}{suffix}"
@@ -482,8 +484,9 @@ def report_export_filename(report: Report, suffix: str = ".zip") -> str:
 
 
 def ensure_proof_steps(content: Content) -> None:
-    """Single owner of the rule: steps are the substance of a proof of concept, so one numbered list
-    survives a deletion, a status change, and a library replacement that carried none."""
+    """Single owner of the rule that a proof of concept always has a numbered list. Steps are the
+    substance of a proof of concept, so one list survives a deletion, a status change, and a library
+    replacement that carried none."""
     if not any(fragment.type == "numbered_list" for fragment in content.fragments):
         content.fragments.insert(0, ListFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="numbered_list", items=[ListItem(runs=[])]))
 
@@ -498,8 +501,8 @@ def content_types_for_status(status: str) -> list[str]:
 def content_has_work(content: Content) -> bool:
     """Whether a section holds anything a tester would be sorry to lose.
 
-    Boilerplate this app wrote itself does not count: it is regenerated on demand, so treating it as
-    work would mean every finding looks like it has something to lose."""
+    Boilerplate this app wrote itself does not count. The app regenerates it on demand, so treating it
+    as work would make every finding look like it has something to lose."""
     for fragment in content.fragments:
         if isinstance(fragment, ParagraphFragment) and (fragment.generated or is_default_status_conclusion(fragment)):
             continue
@@ -524,7 +527,7 @@ def provision(vulnerability: Vulnerability) -> None:
     existing = {content.type: content for content in vulnerability.contents}
     # A status change must not destroy work. A section this status does not print is kept when it
     # still holds something written, so changing status and back brings the tester's work with it.
-    # in_conclusion is the exception: it is a statement about the status, so carrying it would keep a
+    # in_conclusion is the exception. It is a statement about the status, so carrying it would keep a
     # sentence the status has just made false. It is dropped, and offered back fresh on the way in.
     carried = [content for content in vulnerability.contents if content.type not in types and content.type != "in_conclusion" and content_has_work(content)]
     vulnerability.contents = [existing.get(content_type, Content(type=content_type)) for content_type in types] + carried
@@ -566,15 +569,15 @@ def provision(vulnerability: Vulnerability) -> None:
         status = status_conclusion_word(vulnerability.status)
         paragraphs = [fragment for fragment in conclusion.fragments if isinstance(fragment, ParagraphFragment)]
         generated = next((fragment for fragment in paragraphs if fragment.generated == "status_conclusion"), None)
-        # Deliberately no "first paragraph with no text" arm: a paragraph the tester emptied is theirs.
+        # Deliberately no "first paragraph with no text" arm, because a paragraph the tester emptied is theirs.
         # Refilling it wrote boilerplate above a conclusion they had just written, and the client twin
         # runs on editor boot, so it came back on a page load. The Content page offers it back instead.
         spans = {id(fragment): default_conclusion_span("".join(run.text for run in fragment.runs)) for fragment in paragraphs}
-        # The regex alone decides: the marker outlives the text and overwrote written conclusions.
+        # The regex alone decides. The marker outlives the text, and trusting it overwrote written conclusions.
         default = next((fragment for fragment in paragraphs if spans[id(fragment)] is not None), None)
         if not paragraphs:
-            # Created empty, never filled. The app offers the sentence on the Content page instead:
-            # a conclusion the app wrote for you is not a conclusion, and the tester owes a real one.
+            # Created empty, never filled. The Content page offers the sentence instead. A conclusion the
+            # app wrote for the tester isn't a conclusion, so the tester has to write a real one.
             conclusion.fragments.insert(0, ParagraphFragment(frag_id=f"f_{uuid.uuid4().hex[:8]}", type="paragraph", runs=[]))
         elif default is not None:
             default.generated = None
@@ -593,9 +596,9 @@ def provision(vulnerability: Vulnerability) -> None:
 def location_lines(values) -> list[str]:
     """Single owner of which typed lines in an "additional affected locations" box name a real place.
 
-    Same cleaning the scope textarea gets in reconcile_targets: blanks are nothing, a "#" line is a
-    note to the tester, and a repeat is the same place said twice. The raw text stays in the draft
-    so the note survives an edit; it just never counts as a location or reaches the document."""
+    These lines get the same cleaning the scope textarea gets in reconcile_targets. Blanks are nothing,
+    a "#" line is a note to the tester, and a repeat is the same place said twice. The raw text stays
+    in the draft so the note survives an edit, but it never counts as a location or reaches the document."""
     cleaned: list[str] = []
     for value in values or []:
         text = str(value).strip()
@@ -628,7 +631,7 @@ def affected_environments(vulnerability: Vulnerability, report: Report) -> list[
 
 
 def affected_channels(vulnerability: Vulnerability, report: Report) -> list[Channel]:
-    """Resolve the app types a finding actually touches, mirroring affected_environments branch for branch."""
+    """Resolve the app types a finding touches. It mirrors affected_environments branch for branch."""
     ordered: list[Channel] = []
     target_by_id = {target.target_id: target for target in report.scope_targets}
 
@@ -650,16 +653,17 @@ def affected_channels(vulnerability: Vulnerability, report: Report) -> list[Chan
 
 
 def applicable_poc_variants(vulnerability: Vulnerability, report: Report, available) -> list[Channel]:
-    """The app types a finding touches that the library entry actually carries steps for."""
+    """The app types a finding touches that the library entry carries steps for."""
     channels = set(affected_channels(vulnerability, report))
     return [channel for channel in CHANNELS if channel in channels and channel in (available or {})]
 
 
 def fragment_applies(fragment, vulnerability: Vulnerability, report: Report, content_type: str) -> bool:
-    """Single owner of whether a fragment belongs in the report: what prints, and what generation
-    checks. An image prints when its environment is tested, so a supporting image does and an
-    untested-environment image does not. A supporting slot nobody has touched is left out rather
-    than demanded. Previous proof of concept always applies: it records an earlier engagement."""
+    """Single owner of whether a fragment belongs in the report, both for what prints and for what
+    generation checks. An image prints when its environment is tested, so a supporting image does
+    and an untested-environment image does not. A supporting slot nobody has touched is left out
+    rather than demanded. Previous proof of concept always applies, because it records an earlier
+    engagement."""
     if content_type == "previous_proof_of_concept":
         return True
     environment = getattr(fragment, "environment", None)
@@ -679,7 +683,7 @@ def _covered_environments(content: Content | None) -> set[Environment]:
 
 def production_images_first(proof: Content, tested_environments: list[Environment]) -> bool:
     """Twin of productionImagesFirst in app.js. In each instance, the earliest production image moves
-    to just before the first non-production one; steps stay put and nothing crosses an instance
+    to just before the first non-production one. Steps stay put and nothing crosses an instance
     title. Images of an untested environment neither move nor count. Returns whether one moved."""
     fragments = proof.fragments
     moved = False
@@ -700,12 +704,12 @@ def production_images_first(proof: Content, tested_environments: list[Environmen
 
 
 def sync_evidence_image_slots(vulnerability: Vulnerability, report: Report) -> None:
-    """Ensure each affected environment has an image slot while preserving extra images.
+    """Give each affected environment an image slot and keep any extra images.
 
-    Coverage is a property of the proof of concept alone: a carried previous-PoC image is history,
+    Coverage is a property of the proof of concept alone. A carried previous-PoC image is history,
     not this retest's evidence, so it neither suppresses a slot nor gets relabelled here."""
     environments = affected_environments(vulnerability, report)
-    # Only an untested environment's empty slot goes: a tested one may be a supporting image the
+    # Only an untested environment's empty slot goes. A tested one may be a supporting image the
     # tester has not uploaded yet. An uploaded screenshot is never removed or relabelled here.
     for content in vulnerability.contents:
         if content.type == "previous_proof_of_concept":
@@ -764,15 +768,15 @@ STATUS_CONCLUSION_PATTERN = re.compile(r'The finding ".*" is(?: still| now)? (?:
 
 
 def status_conclusion_word(status: str) -> str:
-    """Twin of statusConclusionWord in app.js. CLOSED is upper case deliberately; the patterns are
+    """Twin of statusConclusionWord in app.js. CLOSED is upper case on purpose. The patterns are
     case-sensitive, so tidying it to title case freezes every sentence already on disk."""
     return {"resolved": "Resolved", "closed": "CLOSED"}.get(status, "Open")
 
 
 def status_conclusion_runs(title: str, status_word: str) -> list[Run]:
-    """Single owner of the default conclusion sentence. Paired with STATUS_CONCLUSION_PATTERN, which
-    must keep matching whatever this builds: relax one and every default on disk freezes at the title
-    and status it was stored with, because nothing recognises it as the app's own sentence any more."""
+    """Single owner of the default conclusion sentence. STATUS_CONCLUSION_PATTERN is its pair and must
+    keep matching whatever this builds. If it stops matching, every default on disk freezes at the
+    title and status it was stored with, because nothing recognises it as the app's own sentence any more."""
     lead = {"Open": "is still ", "CLOSED": "is now "}.get(status_word, "is ")
     return [
         Run(text=f'The finding "{title}" {lead}'),
@@ -784,7 +788,7 @@ def status_conclusion_runs(title: str, status_word: str) -> list[Run]:
 def default_conclusion_span(text: str) -> tuple[int, int] | None:
     """Return the app-owned sentence's bounds when it remains in the paragraph.
 
-    Scanning right to left and testing a full match at each marker keeps one regex honest for
+    Scanning right to left and testing for a full match at each marker lets one regex handle
     titles that themselves contain a quotation mark."""
     stripped = text.rstrip()
     marker = 'The finding "'
@@ -876,9 +880,9 @@ def apply_poc_variant(vulnerability: Vulnerability, fragments: list, variants: l
 def _scope_reaches_a_location(scope: dict, targets: list[dict]) -> bool:
     """Answer scope_has_location for a raw payload scope against a raw target list.
 
-    Runs before the migration on the save path, so a payload still carrying a retired mode is read
-    as custom: with IDs present that answers identically, and with none it reports no location,
-    which lets the save through for the migration to resolve rather than refusing it."""
+    This runs before the migration on the save path, so a payload still carrying a retired mode is
+    read as custom. With IDs present that answers identically. With none it reports no location.
+    That lets the save through for the migration to resolve, rather than refusing it."""
     if set(scope.get("target_ids") or []) & {target["target_id"] for target in targets}:
         return True
     return any(location_lines(values) for by_channel in (scope.get("custom_locations") or {}).values() for values in (by_channel or {}).values())
@@ -923,7 +927,7 @@ def scope_value_refusals(environment: str, channel: str, line: int, value: str, 
 
 
 def scope_box_refusals(environment: str, channel: str, component_text: str, description_text: str) -> list[dict]:
-    """Every refusal one scope box earns, in the order reconcile_targets raises them. Twin: scopeBoxRefusals in rules.js."""
+    """Every refusal one scope box gets, in the order reconcile_targets raises them. Twin: scopeBoxRefusals in rules.js."""
     # Paired by raw index before cleaning, so a blank or # line cannot shift the descriptions below it.
     named = [
         (line, value.strip(), description.strip())
@@ -931,7 +935,7 @@ def scope_box_refusals(environment: str, channel: str, component_text: str, desc
         if value.strip() and not value.strip().startswith("#")
     ]
     results: list[dict] = []
-    # Web and API drop a repeated line; a repeated component would lose its description, so it is refused.
+    # Web and API drop a repeated line. A repeated component would lose its description, so it is refused.
     if channel in COMPONENT_CHANNELS:
         seen: set[str] = set()
         repeated: list[str] = []
@@ -984,7 +988,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     channels = resolve_tested_channels(payload)
     if not channels:
         raise ValueError(setup_refusal_message({"code": "no_app_type"}))
-    # Written back for the same reason scope_targets is: this function replaces the target list, so a
+    # Written back for the same reason scope_targets is. This function replaces the target list, so a
     # later derive-from-targets would otherwise read the new one and resolve differently.
     payload["engagement"] = {key: value for key, value in engagement.items() if key != "test_type"}
     payload["engagement"]["tested_channels"] = channels
@@ -997,8 +1001,9 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             raise ValueError("scope environment values must be objects")
         for channel in channels:
             raw_values = environment_values.get(channel, "")
-            # A component channel submits {component, description}; every channel still accepts the
-            # plain string, so a browser cached from before this shape existed degrades rather than 422s.
+            # A component channel submits {component, description}. Every channel still accepts the
+            # plain string, so a browser cached from before this shape existed keeps working, without
+            # descriptions, instead of getting a 422.
             if isinstance(raw_values, str):
                 component_text, description_text = raw_values, ""
             elif isinstance(raw_values, dict):
@@ -1044,8 +1049,9 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
         if not isinstance(scope, dict):
             raise ValueError("finding scope must be an object")
         reached_before = _scope_reaches_a_location(scope, prior_targets)
-        # A typed location outside the tested surface is no longer reachable, so it must not keep
-        # the finding looking complete or make it resolve to an app type the engagement dropped.
+        # A typed location outside the tested environments and app types is no longer reachable.
+        # It must not keep the finding looking complete or make it resolve to an app type the
+        # engagement dropped.
         custom = scope.get("custom_locations")
         if isinstance(custom, dict):
             scope["custom_locations"] = {
@@ -1056,7 +1062,7 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
             scope["custom_locations"] = {key: value for key, value in scope["custom_locations"].items() if value}
         title = vulnerability.get("title") or "Untitled finding"
         # A removed target is dropped, not refused. The browser purges the same IDs after its own
-        # prompt, so refusing here would block a save the tester was told was safe; and leaving them
+        # confirmation, so refusing here would block a save the tester was told was safe. Leaving them
         # would fail validate_references with a raw error blob instead of this named one.
         submitted_ids = scope.get("target_ids") or []
         kept_ids = [target_id for target_id in submitted_ids if target_id in target_ids]
@@ -1146,9 +1152,9 @@ def setup_results(report: dict) -> list[dict]:
     environments = engagement.get("tested_environments") or []
     if not environments:
         issue("no_tested_environment")
-    # The only home for the mutual-exclusion rule. Raising in validate_coverage or
-    # resolve_tested_channels would demote the draft on load, where nothing can repair it; an issue
-    # line bounces the tester to Setup, the one page holding both checkboxes.
+    # The only place the mutual-exclusion rule lives. Raising in validate_coverage or
+    # resolve_tested_channels would demote the draft on load, where nothing can repair it. An issue
+    # line sends the tester to Setup, the one page with both checkboxes.
     covered_components = [channel for channel in COMPONENT_CHANNELS if channel in (engagement.get("tested_channels") or [])]
     if len(covered_components) > 1:
         issue("mobile_and_thick_client", app_types=covered_components)
@@ -1158,14 +1164,14 @@ def setup_results(report: dict) -> list[dict]:
         test_window = windows.get(environment) or {}
         if not test_window.get("start_date") or not test_window.get("end_date"):
             issue("missing_test_dates", environment=environment)
-        # A window with no stored time takes the default when the page opens, so only a time that is
-        # there and blank, or only blanks, counts as missing. Twin: setupResults in rules.js.
+        # A window with no stored time takes the default when the page opens, so a time counts as
+        # missing only when it is stored but empty or whitespace. Twin: setupResults in rules.js.
         if "test_time" in test_window and not (test_window["test_time"] or "").strip():
             issue("missing_test_time", environment=environment)
         named = [target for target in targets if target["environment"] == environment]
         if not named:
             issue("missing_scope_target", environment=environment)
-        # Named per component rather than counted: among ten rows a tally cannot say which one.
+        # Named per component rather than counted. Among ten rows a tally cannot say which one.
         for target in named:
             if target["app_type"] in COMPONENT_CHANNELS and not target["description"]:
                 issue("missing_component_description", environment=environment, app_type=target["app_type"], component=target["component"])
@@ -1197,7 +1203,7 @@ def setup_issues(report: Report) -> list[str]:
 
 
 def setup_is_complete(report: Report) -> bool:
-    """Return whether a report meets the canonical Findings entry requirements."""
+    """Return whether a report meets the requirements for entering Findings."""
     return not setup_issues(report)
 
 
@@ -1210,9 +1216,9 @@ def scope_of_every_target(report: Report) -> Scope:
 def scope_has_location(vulnerability: Vulnerability, report: Report) -> bool:
     """Return whether a finding claims any location at all.
 
-    Selected targets are a presence check: whether the IDs still exist is left to
+    Selected targets are only a presence check. Whether the IDs still exist is left to
     Report.validate_references and to reconcile_targets' survivor filter. A typed line is held to
-    more than that, because nothing else ever revisits it -- it counts only while the engagement
+    more than that, because nothing else ever revisits it. It counts only while the engagement
     still covers the environment and app type it was typed under, so a finding cannot pass the
     Content gate on a location the report does not test."""
     scope = vulnerability.scope
@@ -1228,5 +1234,5 @@ def scope_has_location(vulnerability: Vulnerability, report: Report) -> bool:
 
 
 def finding_is_complete(vulnerability: Vulnerability, report: Report) -> bool:
-    """Return whether a finding can safely enter the content editor."""
+    """Return whether a finding can enter the content editor."""
     return bool(vulnerability.title.strip() and vulnerability.likelihood and vulnerability.impact and vulnerability.severity and vulnerability.status and scope_has_location(vulnerability, report))

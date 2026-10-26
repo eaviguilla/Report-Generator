@@ -25,7 +25,7 @@ def paragraph_texts(root) -> list[str]:
 
 
 def use_temp_workspace(test: TestCase, tester: str) -> Path:
-    """Give one test its own workspace and generated/ folder; both are put back when the test ends."""
+    """Give one test its own workspace and generated/ folder, and restore both when the test ends."""
     folder = tempfile.TemporaryDirectory()
     test.addCleanup(folder.cleanup)
     root = Path(folder.name)

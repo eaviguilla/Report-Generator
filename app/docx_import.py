@@ -2,7 +2,7 @@
 
 The generator builds every fragment from a component in ``resources/fragments``, so recognising a
 fragment means recognising the component that produced it. Paragraph *styles* cannot do that on
-their own: six of the nine components render as ``Normal`` and the two list components share
+their own. Six of the nine components render as ``Normal`` and the two list components share
 ``List Paragraph``. What separates them is the component's own paragraph properties, which survive
 into the finished document.
 """
@@ -27,8 +27,8 @@ from .docx_captions import paragraph_style_id
 from .models import CHANNELS, LEGACY_NON_PRODUCTION_LABELS, NON_PRODUCTION_LABEL_PRESETS, REPORT_NAME_SEGMENTS, REPORT_TYPE_LABELS, STATUS_LABELS, NetworkAccess, Segment
 from .report_service import RESOLVED_REMEDIATION, character_issue, content_types_for_status, default_conclusion_span
 
-# Taken from the components themselves rather than guessed: see tests/test_docx_import.py, which
-# renders one of every fragment type and fails if any of these stops identifying it.
+# Taken from the components themselves rather than guessed. tests/test_docx_import.py renders one
+# of every fragment type and fails if any of these stops identifying it.
 CAPTION_STYLE_ID = "FiguresandTables"
 CODE_SHADING_FILL = "F1F4F8"
 JUSTIFIED = "both"
@@ -36,8 +36,8 @@ JUSTIFIED = "both"
 FINDING_HEADING_STYLE = "ReportHeading2"
 GROUP_HEADING_STYLE = "ReportHeading1"
 
-# Matched on exact text because formatting does not separate them: "In Conclusion:" is bold while
-# the others are not. Previous proof of concept is listed first so the longer heading wins --
+# Matched on exact text because formatting does not separate them. "In Conclusion:" is bold while
+# the others are not. Previous proof of concept is listed first so the longer heading wins.
 # "Previous Proof of Concept:" contains "Proof of Concept:", and a substring match would find two
 # proof sections in every retest finding and take the earlier one.
 SECTION_HEADINGS = (
@@ -73,7 +73,7 @@ MAX_IMAGE_WIDTH_MM = 155
 NETWORK_COVER_LABEL = "Application Type"
 NETWORK_IMPORT_WARNING = "Network access was not read from the DOCX cover -- choose it in Setup before continuing."
 # The cover label beside {{app-name}}. A segment with a report name of its own prints that name as its
-# cover title, so the title no longer holds the application name and this cell is where it is read.
+# cover title. The title then no longer holds the application name, so this cell is where it is read.
 APPLICATION_COVER_LABEL = "Application"
 
 
@@ -101,7 +101,7 @@ def _clean(value: str) -> str:
 
 
 def _title_key(title: str) -> str:
-    """What two titles are compared by: capitals and extra spaces do not count."""
+    """The title as a comparison key. Capitals and extra spaces do not count."""
     return _collapsed(title).casefold()
 
 
@@ -111,7 +111,7 @@ def _visible_value(value: str) -> str:
     return "" if text == "N/A" else text
 
 
-# Whatever a previous report wrote: prefixed or bare, one per line or comma-separated on one.
+# Whatever a previous report wrote, prefixed or bare, one per line or comma-separated on one line.
 TICKET_SEPARATORS = re.compile(r"[\r\n,;]+")
 TICKET_PREFIX = re.compile(r"^[A-Za-z]+-")
 def _valid_cvss_score(value: str) -> bool:
@@ -127,9 +127,9 @@ def _valid_cvss_vector(value: str) -> bool:
 def _parsed_ticket_lines(text: str) -> tuple[str, list[str]]:
     """Normalise a printed ticket list back to the bare digits the draft stores.
 
-    A piece that is not wholly digits once its key is removed is dropped rather than mined for the
-    digits inside it: "GRIMPEN-3523 (closed 2024)" must not yield 2024 as a second ticket, because a
-    fabricated reference reads as plausibly as a real one and nothing downstream would catch it.
+    The parser drops any piece that is not wholly digits once its key is removed, and does not
+    search it for digits. "GRIMPEN-3523 (closed 2024)" must not yield 2024 as a second ticket. A
+    fabricated reference looks as plausible as a real one, and nothing downstream would catch it.
     """
     tickets, invalid = [], []
     for piece in TICKET_SEPARATORS.split(text):
@@ -137,8 +137,8 @@ def _parsed_ticket_lines(text: str) -> tuple[str, list[str]]:
         if not source:
             continue
         candidate = TICKET_PREFIX.sub("", source)
-        # isdecimal, not isdigit: the twin of the save rule's allow_numbers, so no value survives
-        # here that would 422 on the next save.
+        # Use isdecimal, not isdigit. The save rule's allow_numbers tests with isdecimal, so no
+        # value survives here that would 422 on the next save.
         if candidate.isdecimal():
             tickets.append(candidate)
         else:
@@ -150,7 +150,7 @@ def numbering_formats(document) -> dict[str, str]:
     """Map each ``numId`` to its list format.
 
     The ids are not stable. Merging the components into the report renumbers them, so a document
-    whose bulleted list is ``numId 30`` can come back as ``29`` — reading the id alone silently
+    whose bulleted list is ``numId 30`` can come back as ``29``. Reading the id alone silently
     swaps bulleted and numbered lists. Only the resolved format is trustworthy.
     """
     try:
@@ -216,7 +216,7 @@ def classify_paragraph(paragraph, formats: dict[str, str]) -> str:
 def runs_of(paragraph) -> list[dict]:
     """Rebuild a fragment's runs, keeping the emphasis the tester applied.
 
-    A ``w:br`` is a real newline: the generator writes one for every line of a code block, and
+    A ``w:br`` is a real newline. The generator writes one for every line of a code block, and
     ``paragraph.text`` drops them silently.
     """
     runs = []
@@ -346,7 +346,7 @@ def _table_fragment(table, caption: str) -> dict:
 
 
 def _detect_non_production_label(document) -> str:
-    """The evidence heading is the label's only appearance: the scope table rows read
+    """The evidence heading is the label's only appearance. The scope table rows read
     "Non-Production Environment" from the template, not from what the tester chose."""
     known = {f"{label}:": label for label in (*NON_PRODUCTION_LABEL_PRESETS, *LEGACY_NON_PRODUCTION_LABELS)}
     for paragraph in document.paragraphs:
@@ -358,9 +358,9 @@ def _detect_non_production_label(document) -> str:
 def _build_fragments(document, elements, formats, non_production_label, evidence, mode):
     """Turn one section's body elements back into fragments.
 
-    Captions sit on either side of what they describe: the generator writes a table's and a code
-    block's caption *before* them and an image's *after*, so they are attached by position rather
-    than assumed.
+    Captions sit on either side of what they describe. The generator writes a table's and a code
+    block's caption *before* them and an image's *after*, so the importer attaches each caption by
+    position instead of assuming a side.
     """
     fragments: list[dict] = []
     pending_caption = ""
@@ -762,7 +762,7 @@ def _excerpt(text: str, limit: int = 120) -> str:
 
 
 def _described(fragments: list[dict]) -> str:
-    """What a section holds: each paragraph's text in quotes and any other part by name."""
+    """What a section holds, with each paragraph's text in quotes and any other part by name."""
     parts = [
         '"' + _excerpt("".join(run["text"] for run in fragment["runs"])) + '"' if fragment["type"] == "paragraph" else _part_word(fragment["type"])
         for fragment in fragments
@@ -816,7 +816,7 @@ def _no_partner(kind: str, titles: list[str], partner: str) -> str:
 def _unpaired_problem(
     row_titles: list[str], heading_titles: list[str], pairs: _Pairing, skipped_rows: int, other_headings: dict[str, list[str]],
 ) -> str:
-    """Why a finding row or a finding heading was left without a partner."""
+    """The reason a finding row or a finding heading was left without a partner."""
     sentences = []
     if pairs.left_rows:
         sentences.append(_no_partner("finding row", [row_titles[row] for row in pairs.left_rows], "finding heading"))
@@ -943,11 +943,11 @@ def _detail_locations(table, targets, warnings, title) -> dict:
 
 
 def _empty_proof(scope: dict, targets: list[dict]) -> list[dict]:
-    """Build the retest's own proof of concept: somewhere to write and somewhere to paste.
+    """Build the retest's own proof of concept, with somewhere to write and somewhere to paste.
 
     Stated outright rather than left to `sync_evidence_image_slots`, which measures coverage across
-    the whole finding: a carried previous-PoC image would convince it nothing was missing and the
-    tester would get no slot at all.
+    the whole finding. A carried previous-PoC image would count as coverage, so nothing would look
+    missing and the tester would get no slot at all.
     """
     by_id = {target["target_id"]: target for target in targets}
     environments = []
@@ -987,7 +987,7 @@ def _table_disagreement(title: str, differences: list[tuple[str, str, str]]) -> 
 def _findings(document, formats, targets, non_production_label, evidence, mode, warnings):
     """Walk each finding's body, from its heading to the next one."""
     summary_rows, skipped_rows = _summary_rows(document)
-    # Named rather than refused: the tester can see which findings were assumed and correct them.
+    # Named rather than refused, so the tester can see which findings were assumed and correct them.
     for row in summary_rows:
         if _title_key(row["status_label"]) not in STATUS_BY_FOLDED_LABEL:
             warnings.append(
@@ -1011,7 +1011,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
         elif title and style_id.lower().startswith("heading"):
             other_headings.setdefault(style_id, []).append(title)
 
-    # Absent from three of the four templates, so a missing table is normal and never an error.
+    # Absent from two of the four templates, so a missing table is normal and never an error.
     cvss_table = _find_table(document, "Section")
     short_row = next((row for row in cvss_table.rows[1:] if len(row.cells) < 5), None) if cvss_table is not None else None
     if short_row is not None:
@@ -1103,7 +1103,7 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
                     awaiting_tickets = True
                     continue
                 if awaiting_tickets:
-                    # runs_of, not paragraph.text: the value's lines are w:br, which text drops.
+                    # paragraph.text drops the w:br between the value's lines, so use runs_of.
                     value = "".join(run["text"] for run in runs_of(paragraph))
                     if not value.strip():
                         continue
@@ -1182,8 +1182,9 @@ def _findings(document, formats, targets, non_production_label, evidence, mode, 
 
         if mode == "editable":
             # Provisioning will rebuild this finding to the shape its status implies, and the
-            # projection check refuses the import if what we hand over differs -- in order, not just
-            # in membership. Only a fallback finding can be short here.
+            # projection check refuses the import if what we hand over differs. It compares the
+            # order of the sections as well as which ones are present. Only a fallback finding can
+            # be short here.
             by_type = {content["type"]: content for content in source_contents}
             source_contents = [
                 by_type.get(content_type, {"type": content_type, "fragments": []})
@@ -1458,7 +1459,7 @@ def parse_report_docx(
 
     # The title is the one place the segment and the application name appear as themselves rather
     # than substituted into a sentence: "JH - Northstar Banking - Annual Pentest 2026". A segment with a
-    # report name of its own prints that name instead, so for it the title is the Report Name and the
+    # report name of its own prints that name instead. For it, the title is the Report Name and the
     # application name is read from the cover's Application cell.
     warnings: list[str] = []
     app_name, segment, report_type, report_name = "", None, None, ""
@@ -1549,8 +1550,9 @@ def parse_report_docx(
         raise ReportImportError("Imported evidence ownership is inconsistent.")
     summary = {
         "retained": len(findings),
-        # Holds Closed findings too. Kept under this name because a half-landed rename fails
-        # silently: the manager reads `summary.dropped_resolved || []` and the notice just vanishes.
+        # Holds Closed findings too. Kept under this name because a rename done on only one side
+        # fails silently. The manager reads `summary.dropped_resolved || []`, so the notice would
+        # just vanish.
         "dropped_resolved": dropped,
         "statuses_rewritten": rewritten,
     }

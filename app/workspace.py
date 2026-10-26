@@ -38,7 +38,7 @@ def app_id_for(engagement: Engagement) -> str:
 
 
 # A folder segment is provisional until the value that names it exists, so a draft started before
-# its name or report type was chosen still reaches its real home on the save that supplies one.
+# its name or report type was chosen still ends up in its real folder on the save that supplies one.
 UNNAMED_APP_FOLDER = "unnamed"
 PROVISIONAL_REPORT_LABEL = "Report"
 
@@ -46,7 +46,7 @@ PROVISIONAL_REPORT_LABEL = "Report"
 def app_folder_name(report: Report) -> str:
     """Name the application folder after the application, not its CI number.
 
-    Nothing looks a report up by folder name, so this is read by people: `find_path` and
+    Nothing looks a report up by folder name, so only people read this name. `find_path` and
     `list_reports` both scan every `draft.json` on disk.
     """
     return safe_name(report.engagement.app_name, UNNAMED_APP_FOLDER)
@@ -288,9 +288,9 @@ class Workspace:
                     if fragment.get("type") in {"numbered_list", "bulleted_list"} and not fragment.get("items"):
                         fragment["items"] = [{"runs": []}]
                         repaired = True
-                # Boilerplate written before the marker existed. While resolved it can only be ours,
-                # since the editor locks that section; on a reopened finding it is damage from the
-                # era when nothing removed it, and it would ship claiming a fix that never happened.
+                # Boilerplate written before the marker existed. While the finding is resolved it can only
+                # be the app's own, since the editor locks that section. On a reopened finding it is left
+                # over from when nothing removed it, and it would ship claiming a fix that never happened.
                 if content.get("type") == "recommended_remediation":
                     fragments = content.get("fragments", [])
                     stale = (

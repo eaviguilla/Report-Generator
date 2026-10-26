@@ -14,7 +14,7 @@ REPORT_PAGES = (("setup", "Setup"), ("findings", "Findings"), ("edit", "Content"
 
 
 def client_vocabulary() -> dict:
-    """Every list in the model's own order, JSON-ready. A labelled list is [value, label] pairs."""
+    """Every list in the order models.py declares it, JSON-ready. A labelled list is [value, label] pairs."""
     return {
         "statuses": [[status, STATUS_LABELS[status]] for status in get_args(Status)],
         "severities": list(get_args(Severity)),

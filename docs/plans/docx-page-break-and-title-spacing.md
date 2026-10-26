@@ -1,6 +1,6 @@
 # DOCX page break, title placement, and table spacing
 
-> **Status:** done · 2026-09-16 · `e7b843a`
+> **Status:** done · 2026-09-16 · `6d63aa3`
 
 ## Request
 

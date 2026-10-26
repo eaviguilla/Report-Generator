@@ -1,6 +1,6 @@
 # No-findings report: generate a report that has no findings
 
-> **Status:** done · 2026-10-03 · `f6c215d`. Built and tested on macOS, and the Word output checked on
+> **Status:** done · 2026-10-03 · `7e42186`. Built and tested on macOS, and the Word output checked on
 > Windows, where Word repaginates and numbers the TESTING RESULT heading correctly.
 >
 > **What deviated.**

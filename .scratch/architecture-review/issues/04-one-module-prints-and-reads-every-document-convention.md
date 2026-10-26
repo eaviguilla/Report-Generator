@@ -28,7 +28,7 @@ One module owns each printed convention as a print and read pair, and the genera
 
 ## What shipped and what moved
 
-- Shipped in `37593ea` with review item 01: status labels have one table, `STATUS_LABELS` in `models.py`, which the importer inverts into `STATUS_BY_LABEL`, and the importer's title parser reads segments through `get_args(Segment)`.
+- Shipped in `5de97af` with review item 01: status labels have one table, `STATUS_LABELS` in `models.py`, which the importer inverts into `STATUS_BY_LABEL`, and the importer's title parser reads segments through `get_args(Segment)`.
 - Moved to review item 07: the master-template choice and the Asia checks, which the first review counted as conventions.
 - Left: the date, the environment heading, the ticket line, the empty value, the no-findings row, and the three constants the writer imports from the reader.
 

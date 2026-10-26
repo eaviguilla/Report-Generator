@@ -1,6 +1,6 @@
 # Move the launcher into app/ and the Burp file to the root
 
-> **Status:** done · 2026-09-30 · `f53eef5` (248 Python tests pass, 4 skipped: three need Java, one
+> **Status:** done · 2026-09-30 · `d2671d8` (248 Python tests pass, 4 skipped: three need Java, one
 > needs Word).
 >
 > **What deviated.**
@@ -26,7 +26,7 @@
 
 Size: **medium**: a rename and two moves across about ten files. No report field changes and nothing reaches the `.docx`, so there is no scribe. Round 1 only, unless the tactician's risk table has a `RISK` row.
 
-Where things are today (commit `33e8b7e`):
+Where things are today (commit `47be1db`):
 
 - `run.py` at the repository root is the launcher: bootstrap `.venv` → relaunch itself with the venv python → serve `app.main:app`. It also holds the Burp half: the `server.lock` per data folder, `--data-status`, `--bring-over`, stop at end of input. It computes `ROOT = Path(__file__).resolve().parent` and from it `.venv`, `requirements.txt`, `data/`, `DATA-MOVED.txt`, `generated/`.
 - `burp/report_generator_burp.py` (Jython 2.7) takes the app folder as the parent of its own file, checks `File(app_folder, "run.py")` to enable Start, and runs `<python> <app>/run.py`, `run.py --data-status` and `run.py --bring-over <old>`. The release build copies it to the release root beside `run.py`.
@@ -36,7 +36,7 @@ Target: `app/init.py` replaces `run.py`, and `report_generator_burp.py` sits at 
 
 ## Round 1 - Loremaster: how it works today
 
-Everything below was read from source at commit `33e8b7e` (working tree clean apart from this file). The two
+Everything below was read from source at commit `47be1db` (working tree clean apart from this file). The two
 behaviours in section 2 were also run once in a scratch copy (`app/init.py` = a copy of `run.py`), then deleted.
 
 ### 1. Everything that depends on `run.py`'s name or location
@@ -92,7 +92,7 @@ which is what covers `tests.test_launcher`. `tests/test_relevant_tests.py` does 
 - `:583-598` `ReleaseTests`: asserts `Report-Generator-test/run.py` in names and that the shipped burp file is the repo's bytes (`BURP_FILE.read_bytes()`); its "must not ship" top-level set includes `burp` (harmless after the move, since the directory disappears; can stay or go).
 - `:545` uses `run.REQUIREMENTS`; `:604` passes `str(BURP_FILE)` to the jar.
 
-**Docs naming `run.py`** (all must change; `grep -rln`): `.github/copilot-instructions.md:8,20,21,147` (the `:147` row is `run.py`, `burp/`); `README.md:4,7,23,57` and Burp text at `:23-59`; `docs/ARCHITECTURE.md:186,187,216,218,222,225,228,232`; `docs/DATA_MAP.md:5,25,40,42,46,87,100,527,528` (map contract applies: refresh the "Last verified" line; §40/§42/§46 describe the lock, `--bring-over` and the release contents). `docs/plans/burp-extension-launcher.md` names both throughout as history and carries a **manual checklist that copilot-instructions.md:20-24 points to**; its status is `in progress` (Step 8, running the extension under Jython, was never done: commit message of `33e8b7e`, plan line 8). So the file being moved has still never run under a real Jython/Burp.
+**Docs naming `run.py`** (all must change; `grep -rln`): `.github/copilot-instructions.md:8,20,21,147` (the `:147` row is `run.py`, `burp/`); `README.md:4,7,23,57` and Burp text at `:23-59`; `docs/ARCHITECTURE.md:186,187,216,218,222,225,228,232`; `docs/DATA_MAP.md:5,25,40,42,46,87,100,527,528` (map contract applies: refresh the "Last verified" line; §40/§42/§46 describe the lock, `--bring-over` and the release contents). `docs/plans/burp-extension-launcher.md` names both throughout as history and carries a **manual checklist that copilot-instructions.md:20-24 points to**; its status is `in progress` (Step 8, running the extension under Jython, was never done: commit message of `47be1db`, plan line 8). So the file being moved has still never run under a real Jython/Burp.
 Not present: `.claude/`, `.vscode/`, `.gitignore`, `requirements*.txt`, `resources/`, `app/*.py`.
 
 ### 2. Running as `python app/init.py`
@@ -118,11 +118,11 @@ If `ROOT` is left as `Path(__file__).resolve().parent`, `ROOT` becomes `<release
 Correct value: `ROOT = Path(__file__).resolve().parent.parent` (the same expression `app/main.py:34` already uses). Everything else
 in section 1's table then keeps its current meaning. The tests that patch `run.ROOT` (`:280-300`, `:225-238`) patch the attribute, so they are unaffected in mechanism.
 
-**What recognises a previous release.** Only `(old / "run.py").is_file()` (`run.py:302`), then `DATA-MOVED.txt` in the old root (`:304`), reports under `old/data` (`:307`), and the old lock (`:311`). Every release already in the field has `run.py` at its root and **no `app/init.py`**. So the recognition rule must accept the old layout (`old/run.py`) and the new (`old/app/init.py`); accepting only the new rule would refuse to move data out of every existing release, which is the exact upgrade the feature exists for. The pre-move `.venv` copy (`:353`), `data/`, `generated/` and `DATA-MOVED.txt` are all root-relative in both layouts, so nothing else in `bring_over` is layout-specific. `_is_inside(old, ROOT)` (`:300`) is fine once `ROOT` is the release root. The test fixtures at `test_launcher.py:283,363` only need a marker file; a fixture for each layout is what would prove both are accepted. Not established in the source: whether any release in the field predates the lock (only `33e8b7e` introduced it, `git log -- run.py`), so old releases may hold no `server.lock` at all.
+**What recognises a previous release.** Only `(old / "run.py").is_file()` (`run.py:302`), then `DATA-MOVED.txt` in the old root (`:304`), reports under `old/data` (`:307`), and the old lock (`:311`). Every release already in the field has `run.py` at its root and **no `app/init.py`**. So the recognition rule must accept the old layout (`old/run.py`) and the new (`old/app/init.py`); accepting only the new rule would refuse to move data out of every existing release, which is the exact upgrade the feature exists for. The pre-move `.venv` copy (`:353`), `data/`, `generated/` and `DATA-MOVED.txt` are all root-relative in both layouts, so nothing else in `bring_over` is layout-specific. `_is_inside(old, ROOT)` (`:300`) is fine once `ROOT` is the release root. The test fixtures at `test_launcher.py:283,363` only need a marker file; a fixture for each layout is what would prove both are accepted. Not established in the source: whether any release in the field predates the lock (only `47be1db` introduced it, `git log -- run.py`), so old releases may hold no `server.lock` at all.
 
 **`server.lock` needs:** the file at `<data>/server.lock` (`run.py:29,169`), first-byte record lock (`_try_lock`, `:144-158`), and the same `LOCK_NAME`/byte/lock kind on both old and new code so they conflict. None of that moves; only `data_dir()`'s default (above) must stay `<release>/data`. **`DATA-MOVED.txt` refusal needs:** `ROOT / MOVED_NOTE` read at the release root (`:205`), the same place `bring_over` writes it in the old release (`:347`), and where the old code looks for it.
 
-**Stale `run.py` after an overlay unzip.** Nothing in the code deletes a file, and unzipping a new release over an old folder leaves the old `run.py` next to the new `app/init.py`. That stale file still works: its `ROOT` is the folder, `sys.path[0]` is the folder, so `import app.main` succeeds and it serves the *new* `app/`. Does the lock still stop a second server? Yes if the stale `run.py` is the version with the lock (`33e8b7e` or later): both take the same first-byte lock on `<folder>/data/server.lock`, so a stale start against a running new server is refused, and vice versa. A stale `run.py` from a release before `33e8b7e` has no lock and no `--data-status`, so it would happily start a second server on the same data with no lock refusal (the new server would already hold the lock but the old code never asks). The real reports are protected only by the per-report file locks in `app/workspace.py`, which is the pre-existing safety net (DATA_MAP §4). The release zip and README are where this needs a sentence ("unzip into a new folder; do not overlay"); README currently says a new release starts empty and to bring data over (`README.md:57-59`), i.e. it already implies a fresh folder.
+**Stale `run.py` after an overlay unzip.** Nothing in the code deletes a file, and unzipping a new release over an old folder leaves the old `run.py` next to the new `app/init.py`. That stale file still works: its `ROOT` is the folder, `sys.path[0]` is the folder, so `import app.main` succeeds and it serves the *new* `app/`. Does the lock still stop a second server? Yes if the stale `run.py` is the version with the lock (`47be1db` or later): both take the same first-byte lock on `<folder>/data/server.lock`, so a stale start against a running new server is refused, and vice versa. A stale `run.py` from a release before `47be1db` has no lock and no `--data-status`, so it would happily start a second server on the same data with no lock refusal (the new server would already hold the lock but the old code never asks). The real reports are protected only by the per-report file locks in `app/workspace.py`, which is the pre-existing safety net (DATA_MAP §4). The release zip and README are where this needs a sentence ("unzip into a new folder; do not overlay"); README currently says a new release starts empty and to bring data over (`README.md:57-59`), i.e. it already implies a fresh folder.
 
 ### 4. `.gitignore` and the release
 
@@ -145,7 +145,7 @@ Pinned today by `tests/test_launcher.py:565-580`: `ADDRESS_LINE` and `BURP_FLAG`
 
 - Framing correct: file list, `ROOT`-derived paths, release copies burp file beside `run.py`, nothing under `.claude/` or `.vscode/`. `app/` needs no change beyond the new file.
 - Framing understates: (a) `import app.main` fails when run as `python app/init.py` and no test would notice (section 2); (b) `relevant_tests.py` needs rows before `app/` (section 1); (c) `bring_over` recognition must accept both layouts (section 3); (d) the naive `ROOT` moves data into `app/data`, silently (section 3).
-- Open, not decidable from the source: is the field's oldest release older than `33e8b7e` (no lock, so a stale `run.py` gets no refusal)? Should the new launcher ever delete or warn about a stale `run.py` beside `app/init.py`? Should the README start command be `python app/init.py` on every platform (`py -3 app\init.py` on Windows), given the current text at `README.md:4,7`?
+- Open, not decidable from the source: is the field's oldest release older than `47be1db` (no lock, so a stale `run.py` gets no refusal)? Should the new launcher ever delete or warn about a stale `run.py` beside `app/init.py`? Should the README start command be `python app/init.py` on every platform (`py -3 app\init.py` on Windows), given the current text at `README.md:4,7`?
 
 ## Round 1 - Tactician: proposal and open questions
 
@@ -184,7 +184,7 @@ Three decisions are waiting for the user. Each is written so it can be answered 
 
 1. **Warn about a leftover `run.py` in the release folder?** Background: nothing in the code deletes files, so a tester
    who unzips the new release over an old folder ends with the old `run.py` sitting beside `app/init.py`. That stale file
-   still starts the app (it serves the new `app/`), and if it is from commit `33e8b7e` or later it takes the same
+   still starts the app (it serves the new `app/`), and if it is from commit `47be1db` or later it takes the same
    `server.lock`, so it cannot run a second server. If it is from an earlier release it has no lock, so it could start a
    second server on the same data; per-report file locks are then the only protection. Options: (a) say nothing in code,
    add one README sentence ("unzip into a new folder; do not unzip over an old one"); (b) also make `app/init.py` print one
@@ -192,7 +192,7 @@ Three decisions are waiting for the user. Each is written so it can be answered 
    automatically. (c) is rejected (the project rule is never to delete without a prompt, and this would delete a file the
    user might have edited). (b) costs about four lines and one test. Recommendation: (a), because the README already
    implies a fresh folder (it tells testers to use `--bring-over` for a new release) and the pre-lock case needs a release
-   old enough to predate `33e8b7e`. Choose (b) if any such old release is in testers' hands. Which is it?
+   old enough to predate `47be1db`. Choose (b) if any such old release is in testers' hands. Which is it?
 2. **Should every start command become `py -3 app/init.py`?** Background: the README says `py -3 run.py` (with
    `python run.py` as the fallback) and `.github/copilot-instructions.md` and `docs/ARCHITECTURE.md` say the same. After the
    move the file is inside `app/`, so the command changes. `py -3 app/init.py` works in PowerShell and cmd (forward
@@ -224,7 +224,7 @@ Launcher risks (the real ones for this change).
 |---|---|---|
 | Data lands in `app/data` (or lock, venv, `DATA-MOVED.txt`, `generated/` under `app/`) | clear once Step 2 and Step 3 land; **RISK if only the move is done** | `ROOT` must be `parent.parent`. Step 3 pins the default `data_dir()` to `app.main.DATA`, and a `--bring-over` test asserts the data ends in `<release>/data`. |
 | Old releases no longer recognised by `--bring-over` | clear with Step 6 | rule becomes "`old/run.py` or `old/app/init.py`"; a fixture per layout plus a "neither" refusal row |
-| Stale `run.py` after unzipping over an old release | **RISK (accepted, mitigation pending question 1)** | not a data-shape risk. A `run.py` from `33e8b7e` or later shares the lock; one from before it has no lock, so a second server on the same data is possible, protected only by per-report file locks (pre-existing). Mitigation is documentation (or question 1(b)), not code that deletes. |
+| Stale `run.py` after unzipping over an old release | **RISK (accepted, mitigation pending question 1)** | not a data-shape risk. A `run.py` from `47be1db` or later shares the lock; one from before it has no lock, so a second server on the same data is possible, protected only by per-report file locks (pre-existing). Mitigation is documentation (or question 1(b)), not code that deletes. |
 | Testers' existing Burp extension entry | clear for testers, changes for developers | the release already put the Burp file at the release root (`RELEASE_ROOT_FILES`), so a tester's entry path does not move and the new file overwrites the old one in place. Developers who loaded `burp/report_generator_burp.py` from a checkout must re-add it from the root; say so in the Burp plan note. |
 | `init.py` beside `app/__init__.py` | clear | nothing special-cases `init.py`; importing `app.init` runs only the one-line `app/__init__.py`; uvicorn's string is `app.main:app`, untouched |
 | `python app/init.py` vs `python -m app.init` | clear once Step 2 lands | script path puts `app/` first, not the root, so `app.main` fails to import at serve time (after the venv is built). `-m` and `-c` hide this. Step 2 inserts the root; Step 4 adds a test that runs the real script path. Both invocation forms then work. |
@@ -365,7 +365,7 @@ or a start can fail, because the move and the `ROOT` fix are one step.
 
 ## Round 2 - skipped
 
-The tactician's one `RISK` row (a leftover `run.py` from a release older than `33e8b7e`, which takes no lock) is a
+The tactician's one `RISK` row (a leftover `run.py` from a release older than `47be1db`, which takes no lock) is a
 decision for the user, not a factual dispute, so it goes to question 1 instead. The only disagreement with the
 loremaster was which test pins the launcher's default data folder. The tactician checked it at
 `tests/test_launcher.py:170-180`: that test sets `VULNREPORT_DATA_DIR` on both sides, so nothing pins the default.
@@ -450,7 +450,7 @@ The two traps this plan exists to avoid:
   `git grep "burp/"` find only plan history. Then one announced `relevant_tests.py --affected --run`.
 - [ ] **Step 11 — Close this plan.** Tick the steps, status `shipped` with date and commit, and what deviated.
 
-**Accepted risk.** A tester who unzips a release over an old folder keeps the old `run.py`; one from before `33e8b7e`
+**Accepted risk.** A tester who unzips a release over an old folder keeps the old `run.py`; one from before `47be1db`
 takes no lock and could run a second server on the same reports. Out of scope by answer 1: releases go into a fresh
 folder.
 

@@ -23,7 +23,7 @@ Decided 2026-10-05, after the prototype.
 
 ## Prototype
 
-Branch `prototype/setup-inline-field-errors`, commit `0fe2f22`, file `.scratch/setup-inline-field-errors/prototype.html`. It is a static copy of the Setup page that loads the real stylesheets and runs simplified copies of the rules. Open it as a file; `?variant=today|A|B|C` switches the placement. To look at it again, run `git show prototype/setup-inline-field-errors:.scratch/setup-inline-field-errors/prototype.html > .scratch/setup-inline-field-errors/prototype.html`, and delete the file afterwards, because it does not belong on main.
+Branch `prototype/setup-inline-field-errors`, commit `1075a5b`, file `.scratch/setup-inline-field-errors/prototype.html`. It is a static copy of the Setup page that loads the real stylesheets and runs simplified copies of the rules. Open it as a file; `?variant=today|A|B|C` switches the placement. To look at it again, run `git show prototype/setup-inline-field-errors:.scratch/setup-inline-field-errors/prototype.html > .scratch/setup-inline-field-errors/prototype.html`, and delete the file afterwards, because it does not belong on main.
 
 ## Tickets
 

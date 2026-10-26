@@ -1,6 +1,6 @@
 # Import takes a finding's identity from its finding row
 
-> **Status:** done · 2026-10-14 · `c564b41`
+> **Status:** done · 2026-10-14 · `2770369`
 >
 > **From:** [Import refusals name the cause](import-refusals-name-the-cause.md)
 

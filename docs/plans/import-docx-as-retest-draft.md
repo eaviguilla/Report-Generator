@@ -1,6 +1,6 @@
 # Import a generated DOCX as a retest draft
 
-> **Status:** done · 2026-09-15 · `95b6769`
+> **Status:** done · 2026-09-15 · `dc71920`
 >
 > **Superseded in part, 2026-10-13.** Round 7 ("Accept the double border"), row 8 of the risk table and the remarks that borders compound per generation no longer hold. The generator now recognises a border already in the picture's pixels and embeds the picture as it is ([Skip the border on an image that already has one](skip-border-on-bordered-images.md)). Still true: no schema change, no "already bordered" flag, no cropping.
 

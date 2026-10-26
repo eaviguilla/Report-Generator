@@ -1,6 +1,6 @@
 # Per-content library merge prompt
 
-> **Status:** done · 2026-09-15 · `acd047a`
+> **Status:** done · 2026-09-15 · `4b86e34`
 
 ## Request
 For data consistency fixes:

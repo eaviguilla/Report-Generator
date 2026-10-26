@@ -99,11 +99,11 @@ order, and `test_no_shipped_document_spells_report_name_without_braces` checks t
 `resources/report-name.docx`, which both release scripts ship and nothing renders, still holds the old footer line.
 
 **`{{network}}` is braced-only, and sits in the cover's `Application Type` cell.** All four shipped
-templates carry it since `f6c215d`, in **8 cells, not 4**: the cover block occurs twice in every template
+templates carry it since `7e42186`, in **8 cells, not 4**: the cover block occurs twice in every template
 (a text box and its fallback), and both must hold the token or import refuses the document for
 conflicting values. Generation refuses an unset value, so `N/A` never reaches a generated cover. DOCX
 import reads the cell back through `_network_access`; anything but `Internal` or `External` leaves
-`network` unset with `NETWORK_IMPORT_WARNING`. Reports generated before `f6c215d` print a hardcoded
+`network` unset with `NETWORK_IMPORT_WARNING`. Reports generated before `7e42186` print a hardcoded
 `Internal` there, which imports as `Internal` whatever the engagement was.
 
 It is deliberately **not** in `PLAIN_METADATA_TOKENS`. That set matches bare, unbraced text, and the

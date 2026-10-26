@@ -1,6 +1,6 @@
 # Keyboard save and undo
 
-> **Status:** ready-for-agent · 2026-10-05 · Reopened. It read `done · 2026-09-15 · f49d503`, but none of its code was built. That commit added this file, and its `app.js` changes were about statuses and evidence. `git log -S` finds no `requestManualSave`, `nativeUndoOwner` or `event.repeat` in `app.js`. Build it on `app/web/static/save.js` once review item 06 moves the save code there. The line numbers below predate that move.
+> **Status:** ready-for-agent · 2026-10-05 · Reopened. It read `done · 2026-09-15 · 948482c`, but none of its code was built. That commit added this file, and its `app.js` changes were about statuses and evidence. `git log -S` finds no `requestManualSave`, `nativeUndoOwner` or `event.repeat` in `app.js`. Build it on `app/web/static/save.js` once review item 06 moves the save code there. The line numbers below predate that move.
 >
 > **Blocked by:** [Give the save machine its own module and a seam](../../.scratch/architecture-review/issues/06-give-the-save-machine-its-own-module-and-a-seam.md)
 

@@ -1,6 +1,6 @@
 # Split the release into a Burp build and a default build
 
-> **Status:** done · 2026-10-02 · `c48b716`
+> **Status:** done · 2026-10-02 · `64cdf87`
 
 ## Request
 "I want to have 2 package release scripts so that I can release a burp extension or the default

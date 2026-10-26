@@ -1,6 +1,6 @@
 # Import refusals name the cause
 
-> **Status:** done · 2026-10-14 · `ab1a7ab`
+> **Status:** done · 2026-10-14 · `65ac9a9`
 >
 > **Superseded in part, 2026-10-14.** The refusals for a heading and a finding row with different titles, for a title listed more often than it has headings, and for a finding table that disagrees with the finding row no longer hold, and neither does the answer that titles pair by a collapsed copy. A finding now takes its title, severity, ID and status from its finding row. A heading pairs with a row by equal title, then by title ignoring capitals and spaces, then by position ([Import takes a finding's identity from its finding row](import-uses-the-finding-row-as-the-reference.md)). Still true: a leftover refuses and is named, a list shows at most eight titles, and a finding keeps its title as printed, now the row's.
 
@@ -27,15 +27,15 @@ From a grilling session.
 
 ## Agreed plan
 
-- [x] 1. A title with extra spaces: test seen failing, then `_summary_rows` collapses the row title (0253d51).
-- [x] 2. A conclusion that continues after the app's sentence: test seen failing, then `_with_merged_runs` in the guard, with a companion test that a real disagreement is still refused (b1ec1c1).
+- [x] 1. A title with extra spaces: test seen failing, then `_summary_rows` collapses the row title (59c58dd).
+- [x] 2. A conclusion that continues after the app's sentence: test seen failing, then `_with_merged_runs` in the guard, with a companion test that a real disagreement is still refused (484fe2d).
 - [x] 3. The Findings Summary rows and the finding headings are paired before any finding is read. Every title with no partner is named, with the headings found and the style a restyled heading has.
 - [x] 4. A missing Findings Summary table, a missing or repeated section (expected and found lists), a value that differs between the row and the finding table, a missing or repeated finding table, and CVSS rows that no heading claims.
 - [x] 5. The invalid ID, CVSS score and vector, ticket, location heading, Location row, Section row, Resolved remediation, cover value and report type refusals carry the finding and the value found. A fragment that cannot be read names its section.
 - [x] 6. The editable import's checks name the finding, the section and what would change (`first_change`), and the stranded scope check names the findings.
 - [x] 7. Code review, then fixes with their tests: the finding keeps its title as printed; a title listed more often than it has headings is counted; a lost bold or italic names the words; the component refusal counts the markers it found; the CVSS Section row names its finding; the Location row check runs inside the finding's own check; every branch of `first_change` and the cap of eight titles have a test.
 - [x] 8. Docs: GLOSSARY.md (Refusal, Findings Summary table, Finding heading, Finding table, Section), `docs/DOCX_TEMPLATE.md`, `docs/ROUTES.md`, `docs/DATA_MAP.md`, and the Word pipeline instruction regenerated into `.claude/rules/`.
-- [x] 9. Commits: `0253d51` (title spacing), `b1ec1c1` (conclusion guard) and `ab1a7ab` (the wording, the title kept as printed, docs).
+- [x] 9. Commits: `59c58dd` (title spacing), `484fe2d` (conclusion guard) and `65ac9a9` (the wording, the title kept as printed, docs).
 
 Tests: `RefusalMessageTests` and a route test in `tests/test_docx_import.py`, plus the existing tests that pinned the old phrases, now pinning the new ones.
 

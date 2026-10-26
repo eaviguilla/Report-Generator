@@ -63,7 +63,7 @@ The pattern alone tells the three kinds apart, so the page still works for colou
 ### Name, commits and library
 
 - **Name.** The page is the Star Map. It was first named the observatory, chosen over star chart, lodestar and keeping "work graph", and the user renamed it Star Map on 2026-10-05. The tool's folder is `tools/star_map/`. The effort folder `.scratch/work-graph/` keeps its name, because every ticket links to it.
-- **Commits.** The panel lists no commits. The page tracks the work items still needed to finish, and commit subjects mislead: commit `f6c215d`, about no-findings reports, added this whole map.
+- **Commits.** The panel lists no commits. The page tracks the work items still needed to finish, and commit subjects mislead: commit `7e42186`, about no-findings reports, added this whole map.
 - **Library.** None. The prototype is SVG and CSS animation written by hand, loads nothing from the internet, and opens from disk. vis-network, the graphify page's library, is one 702,611-byte file under Apache-2.0 or MIT and could be copied in, but nothing needs it. This settles the map's open question about a graph library.
 
 ### Opened from disk

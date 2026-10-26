@@ -101,7 +101,7 @@ deviated from the plan — a step dropped, a requirement discovered during execu
 solution than the one agreed. The deviations are the part worth reading later:
 
 ```markdown
-> **Status:** done · 2026-09-15 · `acd047a`
+> **Status:** done · 2026-09-15 · `4b86e34`
 >
 > Steps 0-8 done, except step 0's parity tests, which became three behavioural browser tests.
 > One requirement was added during execution and is not described below: unchecking an app type

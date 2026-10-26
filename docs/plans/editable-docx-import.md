@@ -1,6 +1,6 @@
 # Editable DOCX import
 
-> **Status:** done · 2026-09-21 · `4c5fd78`
+> **Status:** done · 2026-09-21 · `3138067`
 >
 > **Superseded in part, 2026-10-13.** The baked-border rerender problem and the summary warning that images "may be resampled or receive another border when regenerated" no longer hold. The generator now recognises a border already in the picture's pixels and embeds the picture as it is, and the warning reads "Imported images are rendered Word copies, not the original files." ([Skip the border on an image that already has one](skip-border-on-bordered-images.md)). Still true: nothing is cropped and no "already bordered" flag is stored.
 

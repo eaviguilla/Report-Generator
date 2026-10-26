@@ -2009,7 +2009,7 @@ path in any draft.
 - A relative `library_path` is joined to the *new* release folder at import
   ([app/main.py#L42-L44](app/main.py#L42-L44)), so the new release's library is read. This checkout's
   value is `resources/vuln_library.json`.
-- `vuln_library.json` was the default until git `059fe05` (2026-09-14), and it is mapped to
+- `vuln_library.json` was the default until git `339b4f0` (2026-09-14), and it is mapped to
   `resources/vuln_library.json` ([app/tester_identity.py#L167-L173](app/tester_identity.py#L167-L173)).
 - `library/vuln_library.json` is no longer handled. The first commit still redirected it through a
   special case (git `3ff8e45`, `app/main.py` lines 38–39).
@@ -2045,8 +2045,8 @@ old one's origin and offers the unsaved edits the old one left in the browser.
 
 **The stamp is often missing.**
 
-- It was introduced on 2026-09-11 (git `3cc3357`). Before that, `run.py` imported uvicorn directly
-  and never created `.venv` (git `3cc3357^:run.py`).
+- It was introduced on 2026-09-11 (git `749ea9c`). Before that, `run.py` imported uvicorn directly
+  and never created `.venv` (git `749ea9c^:run.py`).
 - A `.venv` from an older release, or one built by hand, has no stamp. This checkout's own `.venv`
   has none (checked).
 - Then `needs_install` is true, and the first Start runs the copy's interpreter with

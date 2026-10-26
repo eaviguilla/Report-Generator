@@ -29,4 +29,4 @@ One module takes the stored report and an incoming draft and returns the report 
 
 ## Outcome
 
-The rename fix came first, in `a2b2eac`. The module was built through the plan [Report acceptance](../../../docs/plans/report-acceptance.md) as `app/acceptance.py`, in `af37291`. Four entry paths still skip acceptance: bundle import, retest DOCX import, library insert and rename. They are filed in `.scratch/report-acceptance/issues/`.
+The rename fix came first, in `2ae451d`. The module was built through the plan [Report acceptance](../../../docs/plans/report-acceptance.md) as `app/acceptance.py`, in `3c27a8b`. Four entry paths still skip acceptance: bundle import, retest DOCX import, library insert and rename. They are filed in `.scratch/report-acceptance/issues/`.

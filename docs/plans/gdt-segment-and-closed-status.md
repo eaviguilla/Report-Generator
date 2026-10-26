@@ -1,6 +1,6 @@
 # GDT segment and Closed status
 
-> **Status:** done · 2026-09-22 · `e998ab5`
+> **Status:** done · 2026-09-22 · `2f3257c`
 
 ## Request
 

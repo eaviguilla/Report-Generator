@@ -1,9 +1,9 @@
 # Setup network access field
 
-> **Status:** done · 2026-09-21 · `c599dc6`; step 6 done 2026-10-05
+> **Status:** done · 2026-09-21 · `b463f33`; step 6 done 2026-10-05
 >
 > Steps 1-5 are done. **Step 6 was done in an earlier commit than this record says:** the eight cover
-> cells already held `{{network}}` in `f6c215d` ("support reports with no findings", 2026-10-03), whose
+> cells already held `{{network}}` in `7e42186` ("support reports with no findings", 2026-10-03), whose
 > message does not mention it; the Remediation Timelines header was left alone. The render test it
 > asked for, and DOCX import reading the cover back (the recovery step 4 deferred), were added on
 > 2026-10-05 from `.scratch/network-access-on-word-cover/spec.md`.

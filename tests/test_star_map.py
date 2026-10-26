@@ -30,7 +30,7 @@ class StarMapTests(unittest.TestCase):
 
     def test_status_words_become_the_official_statuses(self) -> None:
         cases = [
-            ("shipped · 2026-10-02 · `af37291`", None, False, "done"),
+            ("shipped · 2026-10-02 · `3c27a8b`", None, False, "done"),
             ("in progress · 2026-10-02 · built and tested on macOS", None, False, "in-progress"),
             ("planning", None, False, "needs-info"),
             ("agreed", None, False, "ready-for-agent"),

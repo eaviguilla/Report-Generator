@@ -1,6 +1,6 @@
 # Report acceptance: one module for what a save must pass
 
-> **Status:** done · 2026-10-02 · `af37291`
+> **Status:** done · 2026-10-02 · `3c27a8b`
 >
 > **From:** [One module accepts every draft on the write path](../../.scratch/architecture-review/issues/02-one-module-accepts-every-draft-on-the-write-path.md)
 >

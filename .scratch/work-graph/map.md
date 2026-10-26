@@ -46,7 +46,7 @@ The Star Map was built on 2026-10-03 in `tools/star_map/`, ahead of the spec, be
 - One graph. Unrelated threads show as separate groups, and items connect only where a real link exists.
 - The markdown files are the record (`.scratch/`, `docs/plans/`, `docs/adr/`); the page is generated from them.
 - "Function" in the user's request means a feature or an idea, not a code function.
-- The starting set is every item created since mattpocock/skills was installed (commit `663d12d`, 2026-10-02 00:32), linked or not, as [What a work item is, and how a link is recorded](issues/03-what-a-work-item-is-and-how-a-link-is-recorded.md) settled. `docs/plans/split-release-into-burp-and-default.md` is in it.
+- The starting set is every item created since mattpocock/skills was installed (commit `ddb63d4`, 2026-10-02 00:32), linked or not, as [What a work item is, and how a link is recorded](issues/03-what-a-work-item-is-and-how-a-link-is-recorded.md) settled. `docs/plans/split-release-into-burp-and-default.md` is in it.
 - The tool lives in `tools/star_map/`, tracked in git. One Python script, standard library only, reads the records and the git log, writes one HTML page and opens it. Every run rebuilds the page; the built file is gitignored. Neither release script ships it: both package only `app/`, `resources/` and a few root files.
 
 **Skills.** Grilling tickets: `/grilling` and `/domain-modeling`. Prototype tickets: `/prototype`, UI branch. Research tickets: `/research`. `/writing-for-agents` belongs to the build, after this map closes.
@@ -65,7 +65,7 @@ The Star Map was built on 2026-10-03 in `tools/star_map/`, ahead of the spec, be
 
 - [Which next steps a work item suggests, and what the copy button copies](issues/01-next-steps-and-the-copied-command.md): an open item lists one or more next steps in its file, main one first, each with a reason; the copy is `/<skill> <item> context: <items one step up>`; one official set of seven statuses for every work item; a guide to choosing a skill goes in `docs/agents/next-steps.md`.
 - [How the architecture review files its items](issues/07-how-the-architecture-review-files-its-items.md): edit step 2 of Matt's `/improve-codebase-architecture` in place so it publishes to `.scratch/architecture-review/`, one review item per recommendation plus one `report.html` that each review adds a section to; git covers the update risk, so [What a mattpocock/skills update does to a skill edited here](issues/02-what-a-skills-update-does-to-a-local-edit.md) closed unneeded.
-- [What a work item is, and how a link is recorded](issues/03-what-a-work-item-is-and-how-a-link-is-recorded.md): the path gives a node its type, and the top item of a thread stands for the feature; commits are neither nodes nor links; every item since `663d12d` shows, linked or not; three links, each one header line, are came from (the folder or `From:`), `Blocked by:` and `Merged into:`, and `context:` lists all three; rules in `docs/agents/issue-tracker.md`, the plan rules and `ADR-FORMAT.md` tell sessions to write them.
+- [What a work item is, and how a link is recorded](issues/03-what-a-work-item-is-and-how-a-link-is-recorded.md): the path gives a node its type, and the top item of a thread stands for the feature; commits are neither nodes nor links; every item since `ddb63d4` shows, linked or not; three links, each one header line, are came from (the folder or `From:`), `Blocked by:` and `Merged into:`, and `context:` lists all three; rules in `docs/agents/issue-tracker.md`, the plan rules and `ADR-FORMAT.md` tell sessions to write them.
 
 - [Does a spec or map take its status from its tickets?](issues/04-does-a-spec-or-map-take-its-status-from-its-tickets.md): statuses stay explicit; the graph may separately show when all direct children are finished, without propagating status, including from a spec to its originating review item.
 - [Which layout shows the work items best](issues/06-which-layout-shows-the-work-items-best.md): a force-directed star map on a dark sky, one kind of star per status and a cloud per thread; links told apart by colour and dashes; the page is the Star Map, in `tools/star_map/`; no commit list and no library.
@@ -77,7 +77,7 @@ The Star Map was built on 2026-10-03 in `tools/star_map/`, ahead of the spec, be
 
 - Any change to the app: `app/`, `resources/`, the app's tests.
 - Code-level nodes such as functions or classes. The graphify graph already covers code.
-- Items created before the install commit `663d12d`.
+- Items created before the install commit `ddb63d4`.
 - Changing the review skill inside this map. The Star Map was the one exception, built at the user's request.
 
 ## Next steps

@@ -27,4 +27,4 @@ One Python module owns the lists, every page embeds them as JSON, and the JavaSc
 
 ## Outcome
 
-Done in `37593ea`, "refactor: serve every closed list to the browser from one vocabulary". `client_vocabulary()` in `app/vocabulary.py` builds the JSON object that `_vocabulary.html` writes into every page. DATA_MAP §12, under "Closed lists are not twins", describes it.
+Done in `5de97af`, "refactor: serve every closed list to the browser from one vocabulary". `client_vocabulary()` in `app/vocabulary.py` builds the JSON object that `_vocabulary.html` writes into every page. DATA_MAP §12, under "Closed lists are not twins", describes it.

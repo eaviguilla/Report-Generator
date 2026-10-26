@@ -1,6 +1,6 @@
 # Test suite: speed, honesty, and running only the tests a change needs
 
-> **Status:** done · 2026-09-29 · `5bb2c65`
+> **Status:** done · 2026-09-29 · `2476067`
 >
 > **What deviated.** Merging `overrides.css` was the previous change; this one found that tests wrote
 > into the real `data/` (every test error was appended to the user's error log), which became step 1.
@@ -40,7 +40,7 @@
 
 ## Agreed plan
 
-- [x] **Step 0 — Commit the finished cleanup on its own** (`e6a0f06`, local).
+- [x] **Step 0 — Commit the finished cleanup on its own** (`6853f15`, local).
 - [x] **Step 1 — Hermetic tests.** `VULNREPORT_DATA_DIR` in `app/main.py`, `tests/__init__.py`,
   `use_temp_workspace` in `tests/support.py` (also redirects `generated/`), `ERROR_LOG_LABEL` so an
   outside data folder cannot crash error responses. Verified: `data/` and `generated/` unchanged.

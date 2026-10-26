@@ -30,7 +30,7 @@ TEMPLATE = HERE / "page.html"
 OUTPUT = HERE / "star_map.html"
 DATA_MARK = "/*STAR_MAP_DATA*/null"
 # Work items whose files already existed at this commit get no star.
-CUTOFF = "663d12d"
+CUTOFF = "ddb63d4"
 
 STATUSES = ("needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "in-progress", "done", "wontfix")
 FINISHED = ("done", "wontfix")

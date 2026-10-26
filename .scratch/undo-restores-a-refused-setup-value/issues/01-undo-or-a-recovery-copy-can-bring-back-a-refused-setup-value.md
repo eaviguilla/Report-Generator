@@ -20,7 +20,7 @@ Undo, Redo and Restore take the tester to the page where the change was made and
 
 - DATA_MAP §12 records the cause. Only Setup runs its check before a save, and Undo (`restoreHistory`) and recovery call `save()` directly on every page.
 - No test covers it. The Undo tests on Findings and Content undo changes made on those pages.
-- Review item 06 moves the save code into `app/web/static/save.js`. Building this after that move avoids editing code that is about to move. As of commit `2ee0acc`, the pages run the save code in `app.js`, and `save.js` holds a copy that no page starts.
+- Review item 06 moves the save code into `app/web/static/save.js`. Building this after that move avoids editing code that is about to move. As of commit `761988d`, the pages run the save code in `app.js`, and `save.js` holds a copy that no page starts.
 
 ## Answers
 

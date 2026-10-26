@@ -1,6 +1,6 @@
 # Asia segment: Additional Information content
 
-> **Status:** done · 2026-09-19 · `e91edb7`
+> **Status:** done · 2026-09-19 · `4c935fe`
 >
 > All ten agreed steps landed, but inside a commit titled "Fragment type conversion, instance title
 > weight, list spacing" rather than a commit of their own, and the status line was never moved past

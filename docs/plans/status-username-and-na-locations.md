@@ -1,6 +1,6 @@
 # Open (Resolved on Non-Prod), username spaces, and N/A as a bulleted list
 
-> **Status:** done · 2026-09-21 · `e998ab5`
+> **Status:** done · 2026-09-21 · `2f3257c`
 >
 > **Superseded in part, 2026-10-14.** Step D3 and the planner decision to keep refusing a document whose Status differs between its finding row and its finding table no longer hold. The finding row is the reference now, and a finding table that disagrees adds a warning ([Import takes a finding's identity from its finding row](import-uses-the-finding-row-as-the-reference.md)).
 >

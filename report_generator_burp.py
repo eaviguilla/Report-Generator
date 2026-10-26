@@ -2,9 +2,10 @@
 """Report Generator launcher for Burp Suite: one Jython 2.7 file on Burp's legacy Extender API.
 
 It starts the Report Generator web app as a separate Python 3 process (`app/init.py`, in the folder this
-file sits in), shows its output, shows the app in the app window (Edge or Chrome with no address bar,
-docs/adr/0003), and stops them together. The app, its page and its data are unchanged, and
-nothing is hidden: the folder, the exact commands and the address are printed in the tab.
+file sits in), shows the app in the app window (Edge or Chrome with no address bar, docs/adr/0003), and
+stops them together. The app, its page and its data are unchanged. The tab says when the app is running and
+when it stopped, with the folder in its status line, and shows an error when there is one. It never shows
+the address, and shows nothing else the app prints, because a healthy app prints nothing but its address.
 
 Three sections:
   1. ServerProcess, AppWindow, LineBuffer and helpers: no `burp` import, so any Jython can run them.
@@ -48,7 +49,11 @@ NOTE = u"[launcher] "
 # --- 1. process handling ------------------------------------------------------------------------------
 
 class LineBuffer(object):
-    """The last MAX_LINES lines of output, written by the reader thread and read by the tab's timer."""
+    """The last MAX_LINES lines the tab shows, written by the reader thread and read by the tab's timer.
+
+    That is the tab's own notes and every line the app prints except its address line. A healthy app prints
+    nothing else, so each of those lines is a problem.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -58,10 +63,11 @@ class LineBuffer(object):
 
     def add(self, line):
         with self._lock:
-            self._lines.append(line)
-            self._count += 1
             if self.address is None and line.startswith(ADDRESS_LINE):
                 self.address = line[len(ADDRESS_LINE):]  # exactly as printed: never rewritten
+                return  # kept for opening the window: the tab never shows it
+            self._lines.append(line)
+            self._count += 1
 
     def note(self, text):
         self.add(NOTE + text)
@@ -133,7 +139,7 @@ class ServerProcess(object):
         try:
             self.process = builder.start()
         except (Exception, Throwable) as error:
-            self.buffer.note(u"Could not start: %s" % error)
+            self.buffer.note(u"Could not start %s: %s" % (u" ".join(self.command()), error))
             return False
         reader = JThread(_Reader(self.process, self.buffer))
         reader.setDaemon(True)
@@ -189,7 +195,7 @@ class ServerProcess(object):
         return killed
 
 
-def run_command(words, folder=None, on_line=None):
+def run_command(words, folder=None):
     """Run a command to its end and return (exit code, output). Blocks: worker threads only."""
     builder = ProcessBuilder(_arguments(words))
     if folder is not None:
@@ -203,8 +209,6 @@ def run_command(words, folder=None, on_line=None):
         if line is None:
             break
         lines.append(line)
-        if on_line is not None:
-            on_line(line)
     return process.waitFor(), u"\n".join(lines)
 
 
@@ -320,15 +324,16 @@ class AppWindow(object):
         self._browser_generation = 0
 
     def open(self, url):
-        """Show the app at `url`, and return a line for the tab: None once the extension has unloaded."""
+        """Show the app at `url`. Returns a line for the tab when no window could open, else None, which is also
+        what it returns once the extension has unloaded. The line never contains `url`."""
         if self._ended:
             return None
         if not self.on_windows:
-            return u"The app window opens only on Windows. The app is running at %s" % url
+            return u"The app window opens only on Windows."
         found = [place for place in self.places if File(place).isFile()]
         if not found:
-            return u"No app window, because neither Microsoft Edge nor Google Chrome was found. Looked for:\n  %s\nThe app is running at %s" % (
-                u"\n  ".join(self.places), url)
+            return u"No app window, because neither Microsoft Edge nor Google Chrome was found. Looked for:\n  %s" % (
+                u"\n  ".join(self.places))
         with self._folder_lock:
             note, dropped = self._open(found[0], url)
         if dropped is not None:  # the extension unloaded while this browser started
@@ -336,7 +341,8 @@ class AppWindow(object):
         return note
 
     def _open(self, place, url):
-        """Under the folder lock: the tab's line, and (generation, browser) to delete after if it was dropped."""
+        """Under the folder lock: the tab's line if no window opened, and (generation, browser) to delete after
+        if it was dropped."""
         with self._lock:
             current = self.browser
         joining = current is not None and current.isAlive()
@@ -363,7 +369,7 @@ class AppWindow(object):
         if ended:
             browser.destroy()
             return None, (None if joining else (self._generation, browser))
-        return u"App window: %s" % u" ".join(words), None
+        return None, None
 
     def poll(self):
         """What became of the window since the last call: None, u"closed", or u"handed over"."""
@@ -597,12 +603,15 @@ class LauncherPanel(object):
         if self.state == u"setting_up":
             return where + u"Setting up (a first run installs packages)..."
         if self.state == u"running":
-            return where + u"Running at %s" % self.buffer.address
+            return where + u"Running."
         if self.state == u"stopping":
             return where + u"Stopping: waiting for running work (a report being generated, or setup) to finish. Force stop ends it now."
+        return where + self._stopped_text()
+
+    def _stopped_text(self):
         if self.last_exit_code not in (None, 0):
-            return where + u"Stopped (exit code %s)." % self.last_exit_code
-        return where + u"Stopped."
+            return u"Stopped (exit code %s)." % self.last_exit_code
+        return u"Stopped."
 
     def show_problem(self, text):
         self.buffer.note(u"Problem in the launcher:\n" + text)
@@ -650,8 +659,6 @@ class LauncherPanel(object):
                 return
             server = ServerProcess(self.buffer, self.app_folder, words)
             self.buffer.forget_address()
-            self.buffer.note(u"Folder: %s" % self.app_folder)
-            self.buffer.note(u"Command: %s" % u" ".join(server.command()))
             if server.start():
                 on_swing(self._begin, server)
             else:
@@ -672,9 +679,10 @@ class LauncherPanel(object):
         if action == u"fresh":
             self.settings.put(fresh_key, u"1")
             return True
-        self.buffer.note(u"Bringing reports over from %s" % old_folder)
-        code, _ = run_command(words + [launcher_file(self.app_folder).getPath(), u"--bring-over", old_folder], self.app_folder, self.buffer.add)
+        code, text = run_command(words + [launcher_file(self.app_folder).getPath(), u"--bring-over", old_folder], self.app_folder)
         if code != 0:
+            for line in text.splitlines():
+                self.buffer.add(line)
             self.buffer.note(u"Nothing was moved. Fix the problem above, or choose Start fresh.")
             return False
         return True
@@ -701,6 +709,7 @@ class LauncherPanel(object):
         if server.is_alive():
             if self.state == u"setting_up" and self.buffer.address:
                 self._go(u"running")
+                self.buffer.note(u"Running.")
                 if not self._opened:
                     self._opened = True
                     in_background(self._open_job, self.buffer.address)
@@ -717,6 +726,7 @@ class LauncherPanel(object):
             self.last_exit_code = server.exit_code()
             self.server = None
             self._go(u"stopped")
+            self.buffer.note(self._stopped_text())
 
     def shutdown(self):
         """The extension is unloading (any thread): close the server's input and let it finish, and close the app
@@ -820,7 +830,8 @@ def _wait_until(condition, seconds):
 
 
 def self_check(app_folder, python_exe):
-    """Start the app, flood its output, stop it, start it again and force-stop it. 0 when all of it held."""
+    """Start the app and check it prints nothing but its address, stop it, start it again and force-stop it, and
+    check the reader drains a flood of output. 0 when all of it held."""
     words = [python_exe]
     status = data_status(app_folder, words)
     if status is None:
@@ -847,9 +858,9 @@ def self_check(app_folder, python_exe):
             check(http_status(address, 30000) == 200, u"the address answers")
             answered = 0
             for _ in range(50):
-                http_status(address + u"/" + u"a" * 4096, 30000)  # a 404 with a long access-log line
+                http_status(address + u"/" + u"a" * 4096, 30000)  # a 404, which a console start logs at length
                 answered += 1
-            check(answered == 50, u"50 long requests were all answered while nothing read the output buffer")
+            check(answered == 50, u"50 long requests were all answered")
         except (Exception, Throwable) as error:
             check(False, u"requests to the app failed: %s" % error)
     server.stop()
@@ -857,6 +868,7 @@ def self_check(app_folder, python_exe):
     check(not server.is_alive() and server.exit_code() == 0, u"Stop exits with code 0")
     if address:
         check(not port_answers(address), u"the port is closed after Stop")
+    check(buffer.snapshot()[1] == [], u"a healthy app printed nothing but its address line: %s" % buffer.snapshot()[1])
 
     second = LineBuffer()
     again = ServerProcess(second, app_folder, words)
@@ -866,6 +878,20 @@ def self_check(app_folder, python_exe):
     check(_wait_until(lambda: not any(handle.isAlive() for handle in killed), 15), u"Force stop ends every process it saw")
     if second.address:
         check(not port_answers(second.address), u"the port is closed after Force stop")
+
+    # A healthy app prints nothing, so the reader is shown a flood from a program that does.
+    noisy = LineBuffer()
+    flooder = ProcessBuilder(_arguments([python_exe, u"-c", u"for _ in range(20000): print('x' * 200)"]))
+    flooder.redirectErrorStream(True)
+    flooding = flooder.start()
+    drain = JThread(_Reader(flooding, noisy))
+    drain.setDaemon(True)
+    drain.start()
+    check(flooding.waitFor(60, TimeUnit.SECONDS), u"a program printing 4 MB is not stalled by a full pipe: the reader drains it")
+    drain.join(10000)
+    taken, kept = noisy.snapshot()
+    check(taken == 20000 and len(kept) == MAX_LINES,
+          u"the reader took all 20000 lines and the buffer kept the last %d: %d taken, %d kept" % (MAX_LINES, taken, len(kept)))
 
     missing = LineBuffer()
     check(not ServerProcess(missing, app_folder, [u"/no/such/python"]).start(), u"a missing Python is refused without an exception")
@@ -898,13 +924,22 @@ class _FakeDialogs(object):
 
 def self_check_panel(app_folder, python_exe):
     """Drive the tab headless with fakes: Start, the window opens, Stop closes it; Start, the window is
-    closed, the app stops. 0 when it behaved."""
+    closed, the app stops. The log says only that the app ran and stopped. 0 when it behaved."""
     settings, dialogs, problems = _FakeSettings(), _FakeDialogs(), []
     root = tempfile.mkdtemp()
     edge = File(root, u"msedge.exe").getPath()
     _make_file(edge)
     launcher, clock = _FakeLauncher(), [0]
     window = AppWindow(root, [edge], launcher, True, lambda: clock[0])
+    returned, open_window = [0], window.open
+
+    def counting_open(address):
+        try:
+            return open_window(address)
+        finally:
+            returned[0] += 1
+
+    window.open = counting_open
     holder = []
     SwingUtilities.invokeAndWait(_Call(lambda: holder.append(LauncherPanel(app_folder, settings, window, dialogs, problems.append))))
     if not holder:
@@ -922,12 +957,16 @@ def self_check_panel(app_folder, python_exe):
         return any(text in line for line in panel.buffer.snapshot()[1])
 
     def opened(count):
-        """The window opens on a worker thread, and the tab notes it once the browser is watched."""
-        return _wait_until(lambda: sum(1 for line in panel.buffer.snapshot()[1] if u"App window: " in line) == count, 10)
+        """The window opens on a worker thread: wait until `count` opens have finished, so its browser is watched."""
+        return _wait_until(lambda: returned[0] == count, 10)
 
     SwingUtilities.invokeAndWait(_Call(lambda: panel.python_field.setText(python_exe)))
     SwingUtilities.invokeAndWait(_Call(panel.start_button.doClick))
     check(_wait_until(lambda: panel.state == u"running", 240), u"round 1: the panel reaches Running")
+    first = panel.buffer.address
+    status = wait_on_swing(panel.status.getText) or u""
+    check(status.endswith(u"Running.") and (first or u"?") not in status,
+          u"round 1: the status line says Running and never the address: %s" % status)
     check(opened(1) and len(launcher.started) == 1 and launcher.started[0].words[1] == u"--app=" + (panel.buffer.address or u"?"),
           u"round 1: the app window opened once, at the printed address")
     SwingUtilities.invokeAndWait(_Call(panel.open_button.doClick))
@@ -949,6 +988,11 @@ def self_check_panel(app_folder, python_exe):
     check(_wait_until(lambda: panel.state == u"stopped", 30), u"round 2: closing the window stops the app")
     check(panel.last_exit_code == 0, u"round 2: the app exited with code 0")
     check(said(u"The app window was closed"), u"round 2: the tab says why the app stopped")
+    expected = [NOTE + u"Running.", NOTE + u"Stopped.",
+                NOTE + u"Running.", NOTE + u"The app window was closed, so the app is stopping.", NOTE + u"Stopped."]
+    check(_wait_until(lambda: panel.buffer.snapshot()[1] == expected, 5),
+          u"the log says only that the app ran and stopped, and why the window closed, and never the address: %s"
+          % panel.buffer.snapshot()[1])
 
     check(dialogs.asked == 1, u"the first-run question was asked once, and Start fresh was remembered")
     check(settings.get(u"fresh:" + app_folder) == u"1", u"Start fresh is saved for this folder")
@@ -1029,7 +1073,7 @@ def self_check_window(_app_folder, python_exe):
             u"--disable-sync", u"--disable-features=msEdgeSyncService,msEdgeAccountSSO"],
             u"with only Chrome installed, Chrome opens the address with no address bar, a browser folder of its own and sync off: %s"
             % [browser.words for browser in launcher.started])
-        check(note is not None and chrome_pf in note, u"the tab is told which browser opened: %s" % note)
+        check(note is None, u"nothing is said when the window opens: %s" % note)
 
         launcher = _FakeLauncher()
         _make_file(edge_pf)
@@ -1043,12 +1087,14 @@ def self_check_window(_app_folder, python_exe):
         nowhere = root + sep + u"nowhere" + sep + u"msedge.exe"
         note = AppWindow(release, [nowhere], launcher, True).open(url)
         check(not launcher.started, u"with neither Edge nor Chrome installed, no browser starts")
-        check(note is not None and nowhere in note and url in note, u"and the tab names where it looked, and the address: %s" % note)
+        check(note is not None and nowhere in note and u"127.0.0.1" not in note,
+              u"and the tab names where it looked, and never the address: %s" % note)
 
         launcher = _FakeLauncher()
         note = AppWindow(release, places, launcher, False).open(url)
         check(not launcher.started, u"off Windows no browser starts, even with Edge installed")
-        check(note is not None and u"only on Windows" in note and url in note, u"and the tab says so, with the address: %s" % note)
+        check(note is not None and u"only on Windows" in note and u"127.0.0.1" not in note,
+              u"and the tab says so, without the address: %s" % note)
 
         lock = File(File(release, u"app-window"), u"lockfile")
         _make_file(lock.getPath())

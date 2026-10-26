@@ -218,10 +218,13 @@ written, are set out in `.github/copilot-instructions.md` (*Running tests in thi
 ## Starting from Burp
 
 `report_generator_burp.py`, at the top of a release folder (beside `app/`), is a single Jython 2.7
-extension for Burp's legacy Extender API. It is only a launcher: a tab with Start, Stop / Force stop,
-Open and the app's output. Start runs the tester's Python 3 on `app/init.py` exactly as a console start does,
-so the server, the page and `data/` are unchanged. It prints the folder, the commands and the address, and
-hides nothing.
+extension for Burp's legacy Extender API. It is only a launcher: a tab with Start, Stop / Force stop and
+Open. Start runs the tester's Python 3 on `app/init.py` exactly as a console start does, so the server, the
+page and `data/` are unchanged. The tab's status line shows the folder and whether the app is running. Its log
+says that the app is running or stopped, and shows an error when there is one. It shows no address. It shows
+nothing else the app prints either, because a healthy app started from Burp prints nothing but its address,
+which the tab keeps to itself. In that case `app/init.py` logs only warnings and errors, runs pip quietly and
+prints no setup text. The tab shows every other line it reads as a problem.
 
 - **Stop** closes the server's input. `app/init.py` sees the end of input and asks uvicorn to shut down, so
   running requests, including a report being generated, finish. **Force stop** kills the process tree and
@@ -239,9 +242,11 @@ hides nothing.
   browser still holding the folder from an earlier session is reported, and no second one starts.
 - **One server per data folder.** `app/init.py` takes a lock in the data folder; a second Start says where the
   first is running.
-- **New release.** On the first Start in a folder with no reports the tab offers *Bring reports over*,
-  which runs `app/init.py --bring-over <previous folder>`: the previous `data/` is renamed into this folder, and
-  the previous `.venv` is copied and checked. Or *Start fresh*.
+- **New release.** The README tells testers to paste a new release's contents over the folder in use, which
+  works because a release holds no `data/`, `generated/` or `.venv/` (`docs/DATA_MAP.md` §1). The tab also
+  supports a release in a new folder: on the first Start in a folder with no reports it offers *Bring reports
+  over*, which runs `app/init.py --bring-over <previous folder>`: the previous `data/` is renamed into this
+  folder, and the previous `.venv` is copied and checked. Or *Start fresh*.
 - **The port** is still the first free one from 8765. Unsaved browser work is tied to the port, so it comes
   back only when the app runs on the same one (`docs/DATA_MAP.md` §13).
 - **Checks.** `tests/test_launcher.py` covers `app/init.py`, and runs the extension's Jython self-checks when

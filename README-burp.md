@@ -1,84 +1,46 @@
-Run the app from this folder:
+# Running Report Generator from Burp Suite
 
-```powershell
-py -3 app/init.py
-```
+`report_generator_burp.py`, at the top of this folder, adds a Report Generator tab to Burp
+with Start, Stop and Open buttons. Start runs Report Generator in its own window.
 
-Use `python app/init.py` if `py` is not available on your machine (`python3 app/init.py` on macOS).
-
-The first run creates `.venv`, installs dependencies, and opens the app in your
-browser. Every run after that opens the browser straight away. When
-`requirements.txt` changes, the next run reinstalls on its own. Nothing else to
-set up.
-
-Close the console window to stop the app.
-
-## Generating reports
-
-Report generation requires Windows with Microsoft Word installed. Everything
-else - drafting, saving, import, and export - runs anywhere.
-
-## Running it from Burp Suite
-
-`report_generator_burp.py`, at the top of this folder, adds a **Report Generator** tab to Burp
-with Start, Stop and Open buttons and the app's output. It starts and stops the same app
-described above and shows it in its own window. The tab prints the folder, the exact
-commands and the address.
-
-1. In Burp: Extensions, Add, extension type **Python**, and choose
+1. In Burp, go to Extensions, press Add, set the extension type to *Python* and choose
    `report_generator_burp.py` from this folder. Burp's Python environment must already
-   point at a Jython standalone JAR.
-2. Open the Report Generator tab and press **Start**. It runs your Python 3 (`py -3`,
-   then `python`, on Windows; `python3` elsewhere). Type a path into the *Python* field
-   to use another interpreter.
-3. When the status line says *Running at http://127.0.0.1:...*, the app opens in its own
-   window, in Microsoft Edge or, when Edge is missing, Google Chrome. The window has no
-   address bar and no tabs. The app listens only on this computer, and its traffic stays
-   out of Burp's Proxy history. **Open** adds another window.
+   point at a Jython standalone JAR. If you later move the folder, add the extension again.
+2. Open the Report Generator tab and press **Start**. It runs your Python 3, trying `py -3`
+   and then `python`. To use another interpreter, type its path into the *Python* field.
+   The first Start installs what Report Generator needs. This takes about a minute, and
+   the status line says *Setting up* until it finishes. No other setup is needed. If Start
+   fails, the area under the buttons shows why.
+3. When the status line says *Running*, Report Generator opens in its own window. The
+   Open button adds another window.
+4. To stop Report Generator, close its window or press **Stop**. Report Generator first
+   finishes any report it is generating, so this can take a while. While it waits, the Stop
+   button becomes Force stop, which ends Report Generator at once. Press **Force stop** only
+   if the wait does not end.
 
-Things worth knowing:
+## Additional info
 
-- **The window and the app stop together.** Stop, Force stop or unloading the extension
-  closes the window, and closing the window stops the app. A report being generated
-  finishes first, as with Stop.
-- The window opens only on Windows, and needs Microsoft Edge or Google Chrome. Without
-  either, the tab prints the address and opens nothing.
-- If Burp ends without unloading the extension, for example when it is closed by force, the
-  window stays open on its own. The next Start asks you to close it, then press **Open**.
-- **Stop** asks the app to finish what it is doing and exit, including a report that is
-  being generated, and can take a while. **Force stop** ends it at once. After a Force
-  stop a page may show *Save conflict* for a change the app had already saved but could
-  not confirm; if that report was open in only one tab, choose *Save my version*. A Force
-  stop in the middle of an import or a duplicate can leave the new report pointing at
-  screenshots that were not written: delete it and import again.
-- Keep `report_generator_burp.py` in the folder Burp loaded it from. If you move the
-  folder, add the extension again.
-- One copy runs per folder. A second Start says where the first is running.
-- The window starts empty every time and keeps nothing once it closes: no account, no
-  history, no cookies. Its browser files live in `app-window` in this folder while it is
-  open and are deleted when it closes. Reports are saved in the `data` folder, not in the
-  window, so closing it loses only an edit typed in the seconds before, if that edit had
-  not reached the app yet. The light or dark choice resets each time.
+- To use a new release, copy everything inside its folder and paste it into the folder you
+  already use. Replace the files when Windows asks. Press **Stop** before you paste, and
+  reload the extension in Burp afterwards, because Burp keeps running the old
+  `report_generator_burp.py` until you do. If the new release needs more packages, the next
+  Start installs them.
+- Report Generator saves your reports in the `data` folder and your finished Word documents
+  in the `generated` folder. A release contains neither, so pasting a release leaves them
+  alone.
+- After a Force stop, Report Generator may show *Save conflict* for a change it had
+  already saved but could not confirm. If that report was open in only one window, choose
+  *Save my version*. A Force stop in the middle of an import or a duplicate can leave the
+  new report pointing at screenshots that Report Generator had not written yet. Delete it
+  and import again.
+- The area under the buttons says when Report Generator is running or stopped, and shows
+  any warning or error it reports. Report Generator also writes an unexpected error to
+  `data/vulnreport-errors.log`.
+- The window starts empty each time and keeps nothing when it closes. Closing it loses at
+  most a few seconds of typing that Report Generator had not saved yet. The light or dark
+  theme resets each time.
+- One copy runs per folder. A second Start says that Report Generator is already running.
+- If Burp closes without unloading the extension, for example when you force it to quit,
+  the window stays open. The next Start asks you to close it. Then press **Open**.
 - If setup was interrupted and Start keeps failing, delete the `.venv` folder and press
-  Start again.
-
-## Moving to a new release
-
-Reports live in the `data` folder at the top of this folder, so a new release starts empty.
-Unzip each release into a new folder, not over an old one.
-
-1. Unzip the new release, and load its `report_generator_burp.py` in Burp (remove the
-   previous release's extension first).
-2. Press **Start**. On a folder with no reports the tab asks once: **Bring reports over**
-   or **Start fresh**.
-3. For *Bring reports over*, stop the previous release first (Stop in Burp, or close its
-   console window), then choose its folder. The previous `data` folder (and `generated`)
-   is **moved**, not copied, so there is one store; the previous `.venv` is copied so
-   packages are not downloaded again, and removed again if the copy does not work. The
-   previous folder then refuses to start and says where its reports went.
-
-To do it by hand, for example when the two folders are on different drives: stop the
-previous release, move its `data` folder (and `generated`) into the new folder, then
-Start. If the new folder already has a `data` folder without reports, rename that one
-first. If it has reports, move the previous `data/apps` folders into its `data/apps`
-one by one instead.
+  **Start** again.

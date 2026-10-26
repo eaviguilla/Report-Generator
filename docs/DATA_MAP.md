@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-26**, after the Application Owner and each tested environment's Time became required Setup details and the Test Coverage fields lost the stars of their own.
+> Last verified against source: **2026-10-26**, after the Application Owner and each tested environment's Time became required Setup details, the Test Coverage fields lost the stars of their own, and section 1 gained how a new release is pasted over the folder in use.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -47,10 +47,14 @@ The lock guards servers started by `app/init.py`; a server started some other wa
 **Moving into a new release.** `app/init.py --data-status` prints one JSON line (data folder, report count, whether its lock is held, whether `.venv` exists) and creates nothing.
 `app/init.py --bring-over <old folder>` moves the previous release's `data/` (and `generated/`) into this one.
 Every check runs first and changes nothing: the old folder has `run.py` (a release from before the launcher moved, or a current default build) or `app/init.py` (a current Burp build), and reports, and no `DATA-MOVED.txt`, neither folder's lock is held, this folder has no reports, and `VULNREPORT_DATA_DIR` is unset.
-It then renames rather than copies, so there is one store; an empty `data/` a Start already made here is renamed to `data.before-move-<timestamp>`, never deleted; a rename across drives, or one Windows refuses because a file is open, stops with the manual steps.
+It then renames rather than copies, so there is one store; an empty `data/` a Start already made here is renamed to `data.before-move-<timestamp>`, never deleted; a rename across drives, or one Windows refuses because a file is open, stops and moves nothing.
 It leaves `<old>/DATA-MOVED.txt`, which makes the old folder's `app/init.py` refuse to start (unless `VULNREPORT_DATA_DIR` is set), and copies the old `.venv` when this folder has none, keeping it only if the copy imports the modules `app.main` loads (`VENV_PROBE_MODULES`, compiled parts included).
 A `.venv` from before the requirements stamp existed has none, so the first Start runs `pip install` over it.
 A release older than this change has no `server.lock`, and on macOS and Linux a rename does not stop a server still running there, so the caller must confirm the old app is stopped before moving its data.
+
+**Pasting a release over the folder in use.** A release holds no `data/`, `generated/` or `.venv/`: `scripts/burp_release.py` and `scripts/default_release.py` copy only `requirements.txt`, the README, the launcher, `app/` and `resources/`, and `ReleaseTests` pins that `data/` and `generated/` never ship.
+So both READMEs tell testers to paste a new release's contents over the folder they use, which replaces the program and leaves reports, preferences, finished documents and the virtual environment where they are. A changed `requirements.txt` is installed by the next start.
+A file that a newer release no longer has stays behind, and Burp keeps running the old `report_generator_burp.py` until the extension is reloaded.
 
 **Folder names are derived, not authoritative.** A report is located by scanning every `apps/*/*/draft.json` and matching the `report_id` field (`Workspace.find_path`). Renaming a folder by hand does not break lookup; editing `report_id` inside the file does.
 

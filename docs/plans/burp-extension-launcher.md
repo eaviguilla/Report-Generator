@@ -33,6 +33,23 @@
 > - `scripts/relevant_tests.py` gained rules for `burp/` and `.gitignore` (no tests, all Python modules
 >   still run), so neither is listed as "no rule".
 > - Answer 5 stands: nothing under `app/` changed.
+> - **The tab no longer prints what runs** (2026-10-26, on request). The agreed plan had the tab print the
+>   folder, the exact command and the app's output, so that nothing hid what runs (answer 1). It now says
+>   only that the app is running or stopped, and shows an error when there is one. Only the folder stays in
+>   the status line. The address is shown nowhere, not even in the messages for a window that cannot open, so
+>   that nothing in the tab hints that a web app is running. The command appears only in the message when the
+>   app could not start, and the README says what runs. For this, `app/init.py` logs only warnings and errors
+>   when started from Burp, runs pip quietly and prints no setup text, so every line the app prints is an
+>   error. A bring-over now prints nothing unless it fails. The 50-request flood in the process check no
+>   longer floods, since requests are not logged, so a separate check feeds the output reader 4 MB from
+>   another program. None of this has been run yet: the Jython checks and Step 8 are still open.
+> - **The README no longer has "Moving to a new release"** (2026-10-26, on request). It described the tab's
+>   *Bring reports over* question and a by-hand move, and said to unzip each release into a new folder. The
+>   Burp README now says only how to run Report Generator from Burp, for Windows, with no terminal start. Its
+>   additional info tells testers to paste a new release's contents over the folder in use, which keeps
+>   `data/`, `generated/` and `.venv/` because a release ships none of them (`docs/DATA_MAP.md` §1). The
+>   default README got the same change. The tab still asks *Bring reports over* on a first Start with no
+>   reports, and the three by-hand refusals in `app/init.py` no longer point at the README.
 
 ## Request
 

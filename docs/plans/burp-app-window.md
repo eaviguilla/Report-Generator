@@ -1,6 +1,6 @@
 # The Burp build opens the app window
 
-> **Status:** in-progress · 2026-10-23 · Built, and its checks passed on macOS before the 2026-10-23 sign-in flags (see What deviated), which have not been run on macOS or Windows. The Windows checks in step 5 are open.
+> **Status:** in-progress · 2026-10-26 · Built, and its checks passed on macOS before the 2026-10-23 sign-in flags and the 2026-10-26 quiet tab (see What deviated), which have not been run on macOS or Windows. The Windows checks in step 5 are open.
 
 ## Request
 
@@ -23,7 +23,7 @@ Windows, fails its sandbox and comes up blank.
 
 1. **Browser.** The window opens in Edge, then Chrome, with its own profile. Burp's browser is never used.
 2. **Neither installed.** Nothing opens. The tab names where it looked and prints the address. The default
-   browser is never used.
+   browser is never used. Changed 2026-10-26: the tab no longer prints the address (see What deviated).
 3. **Scope.** Only the Burp tab changes. A console start and the default release still open the default
    browser.
 4. **Profile.** The window keeps its browser data in a folder of its own in the release folder. Changed
@@ -40,7 +40,7 @@ Windows, fails its sandbox and comes up blank.
 9. **A window left from an earlier session.** Before opening a window, the extension checks the profile's
    lock file, and asks the tester to close a leftover window and press Open.
 10. **Company rule.** It is unaffected, because the tab still prints the folder, the commands and the
-    address.
+    address. Changed 2026-10-26: the tab no longer prints the commands (see What deviated).
 
 Taken from repgen-web: a 1440 by 900 window, first-run screens skipped, and Open adding a window.
 
@@ -122,6 +122,14 @@ Taken from repgen-web: a 1440 by 900 window, first-run screens skipped, and Open
   `--app` mode on a throwaway folder. Nothing was run after this change, so check 5j now covers the
   notice. A policy that forces sign-in or sync on a managed machine may still override the flags. The
   Burp launcher in repgen-web opens Edge the same way and was not changed.
+- **The tab no longer prints the window's command or the address** (2026-10-26). Answer 10 said the company
+  rule was unaffected because the tab still prints the folder, the commands and the address. The tab now
+  says only that the app is running or stopped and shows errors (`docs/plans/burp-extension-launcher.md`,
+  What deviated), and shows no address in any state, so that nothing in it hints that a web app is running.
+  The `App window: <command>` line is gone. A problem opening the window is still reported, without the
+  address, and only the folder stays in the status line. With no window to open, the tab no longer tells the
+  tester where the app is. `AppWindow.open` returns nothing on success, and the panel check counts finished
+  opens instead of looking for that line.
 
 ## Running the Jython checks on macOS
 

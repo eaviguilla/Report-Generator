@@ -19,6 +19,7 @@ import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from app import init as run
@@ -488,6 +489,37 @@ class StreamTests(unittest.TestCase):
                             self.assertEqual(streams, {"stdin": None, "stdout": None, "stderr": None})
 
 
+class BootstrapOutputTests(unittest.TestCase):
+    """Started from Burp, the tab shows every line setup prints as a problem, so setup must print none."""
+
+    def setup_commands(self, *, burp: bool):
+        """The commands `bootstrap` ran, and the mock that stood in for print, for a start with no .venv yet."""
+        with tempfile.TemporaryDirectory() as directory:
+            venv = Path(directory) / ".venv"
+            venv.mkdir()
+            with patch.dict(os.environ), patch.object(run, "VENV_DIR", venv), patch.object(run, "STAMP", venv / ".stamp"), patch.object(
+                run, "needs_install", return_value=True
+            ), patch.object(run.subprocess, "run", return_value=MagicMock(returncode=0)) as spawn, patch("builtins.print") as printed:
+                os.environ.pop(run.BURP_FLAG, None)
+                if burp:
+                    os.environ[run.BURP_FLAG] = "1"
+                run.bootstrap()
+        return [call.args[0] for call in spawn.call_args_list], printed
+
+    def test_setup_from_burp_prints_nothing_and_pip_only_warns(self) -> None:
+        commands, printed = self.setup_commands(burp=True)
+        pip = next(command for command in commands if "pip" in command)
+        self.assertIn("-q", pip)
+        self.assertIn("--disable-pip-version-check", pip)
+        printed.assert_not_called()
+
+    def test_setup_from_a_console_still_says_what_it_is_doing(self) -> None:
+        commands, printed = self.setup_commands(burp=False)
+        pip = next(command for command in commands if "pip" in command)
+        self.assertNotIn("-q", pip)
+        self.assertGreaterEqual(printed.call_count, 2, "a console start names the environment and the install")
+
+
 class ScriptPathTests(unittest.TestCase):
     """`python app/init.py` puts app/ first on the module path, not the release root, and only a script path shows it.
 
@@ -543,6 +575,26 @@ class ServeTests(unittest.TestCase):
         url = self.address(lines)
         with urlopen(url, timeout=5) as response:  # one request, no retry: the line must mean "ready"
             self.assertEqual(response.status, 200)
+
+    def test_a_burp_start_prints_nothing_but_its_address_line(self) -> None:
+        """The tab shows every other line as a problem, so a healthy app started from Burp must print none."""
+        process, lines = self.start(burp=True, stdin=subprocess.PIPE)
+        url = self.address(lines)
+        with urlopen(url, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+        with self.assertRaises(HTTPError) as refused:  # a 404, which a console start logs
+            urlopen(f"{url}/no-such-page", timeout=5)
+        refused.exception.close()
+        process.stdin.close()
+        self.assertEqual(finish(process, 15), 0, "\n".join(lines.seen))
+        self.assertEqual(lines.output(), run.ADDRESS_LINE + url)
+
+    def test_a_console_start_still_logs_each_request(self) -> None:
+        process, lines = self.start(burp=False, stdin=subprocess.DEVNULL)
+        url = self.address(lines)
+        with urlopen(url, timeout=5):
+            pass
+        self.assertIsNotNone(lines.wait_for("INFO:", 10), "no request was logged:\n" + "\n".join(lines.seen))
 
     def test_end_of_input_stops_only_a_server_started_by_burp(self) -> None:
         with self.subTest(case="started by Burp, input closed after the line"):

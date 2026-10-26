@@ -23,7 +23,8 @@ STAMP = VENV_DIR / ".requirements-sha256"
 RELAUNCH_FLAG = "VULNREPORT_BOOTSTRAPPED"
 
 # The three names below are shared with the Burp extension (report_generator_burp.py, at the release root), which starts
-# this script and reads its output. A test pins them on both sides.
+# this script and reads its output. A test pins them on both sides. Started from Burp, this script prints the address
+# line once the app is ready and nothing else unless something is wrong: the tab shows every other line as a problem.
 BURP_FLAG = "VULNREPORT_STARTED_BY_BURP"
 ADDRESS_LINE = "Report Generator is running at "
 # The data folder rule is app/main.py's: the variable when set and not empty, else data/ in the app folder.
@@ -71,6 +72,12 @@ def started_by_burp() -> bool:
     return os.environ.get(BURP_FLAG) == "1"
 
 
+def say(message: str) -> None:
+    """Progress for someone at a console. Started from Burp it prints nothing, because the tab shows what is happening."""
+    if not started_by_burp():
+        print(message, flush=True)
+
+
 def child_streams() -> dict:
     """Under Burp, hand the launcher's own pipes to every child.
 
@@ -87,12 +94,15 @@ def bootstrap() -> None:
     digest = hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
     if not needs_install(digest):
         return
+    pip = [str(venv_python()), "-m", "pip", "install", "-r", str(REQUIREMENTS)]
+    if started_by_burp():
+        pip += ["-q", "--disable-pip-version-check"]  # pip then prints only its warnings and errors
     try:
         if not venv_python().is_file():
-            print(f"Creating virtual environment in {VENV_DIR}", flush=True)
+            say(f"Creating virtual environment in {VENV_DIR}")
             subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True, **child_streams())
-        print("Installing dependencies. The first run takes about a minute.", flush=True)
-        subprocess.run([str(venv_python()), "-m", "pip", "install", "-r", str(REQUIREMENTS)], check=True, **child_streams())
+        say("Installing dependencies. The first run takes about a minute.")
+        subprocess.run(pip, check=True, **child_streams())
     except subprocess.CalledProcessError as error:
         raise SystemExit(
             f"Setup failed ({error.returncode}). Check your network or proxy and run the command again."
@@ -250,7 +260,9 @@ def serve() -> None:
     # uvicorn.Config adds no directory of its own, so "app.main" would not import. Here rather than at the top
     # of the file so importing this module (tests, --data-status) has no side effect.
     sys.path.insert(0, str(ROOT))
-    server = AnnouncingServer(uvicorn.Config("app.main:app", host="127.0.0.1", port=port))
+    # From Burp only warnings and errors are logged: the tab shows every line the app prints as a problem.
+    quiet = {"log_level": "warning", "access_log": False} if from_burp else {}
+    server = AnnouncingServer(uvicorn.Config("app.main:app", host="127.0.0.1", port=port, **quiet))
     if from_burp:
         threading.Thread(target=_stop_at_end_of_input, args=(server,), daemon=True).start()
     try:
@@ -301,7 +313,7 @@ def bring_over(old_argument: str) -> int:
     if not old_argument:
         return _refuse("Give the previous release folder: app/init.py --bring-over <folder>.")
     if os.environ.get(DATA_ENV):
-        return _refuse(f"{DATA_ENV} is set, so the data folder is not inside this release. Move it by hand (see README.md).")
+        return _refuse(f"{DATA_ENV} is set, so the data folder is not inside this release. Move it by hand.")
     old = Path(old_argument).resolve()
     if _is_inside(old, ROOT) or _is_inside(ROOT, old):
         return _refuse("That is this folder, or contains it or sits inside it. Choose the previous release folder.")
@@ -314,7 +326,7 @@ def bring_over(old_argument: str) -> int:
     if count_reports(old_data) == 0:
         return _refuse(f"{old_data} holds no reports.")
     if count_reports(new_data) != 0:
-        return _refuse(f"{new_data} already holds reports. Bringing more in would need merging by hand (see README.md).")
+        return _refuse(f"{new_data} already holds reports. Bringing more in would need merging by hand.")
     if lock_is_held(old_data):
         return _refuse("The previous release is still running. Stop it first.")
     if lock_is_held(new_data):
@@ -332,7 +344,7 @@ def bring_over(old_argument: str) -> int:
         if aside is not None and not new_data.exists():
             os.rename(aside, new_data)
         if error.errno == errno.EXDEV:
-            return _refuse("The previous folder is on another drive, which a rename cannot cross. Move data by hand (see README.md).")
+            return _refuse("The previous folder is on another drive, which a rename cannot cross. Move data by hand.")
         return _refuse(f"{error}. If the previous release is still running, stop it first.")
     print(f"Moved {old_data} to {new_data}.", flush=True)
 

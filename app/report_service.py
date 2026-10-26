@@ -109,6 +109,7 @@ def format_rule_message(result: dict, report: dict | None = None, *, scope_conte
         "missing_report_name": "Enter the report name.",
         "missing_report_type": "Choose a report type.",
         "missing_network": "Choose the network access.",
+        "missing_app_owner": "Enter the application owner.",
         "missing_tester": "Enter the tester's name.",
         "missing_report_date": "Enter the report date.",
         "no_tested_environment": "Choose at least one environment to test.",
@@ -128,6 +129,8 @@ def format_rule_message(result: dict, report: dict | None = None, *, scope_conte
         missing = [name for name in ("start", "end") if not window.get(f"{name}_date")]
         dates = "start and end dates" if len(missing) == 2 else f"{missing[0]} date"
         return f"Enter the {environment} {dates}."
+    if code == "missing_test_time":
+        return f"Enter the {_environment_label(result['environment'])} time."
     if code == "missing_scope_target":
         return f"Add a scope target for {_environment_label(result['environment'])}."
     if code == "missing_component_description":
@@ -1134,6 +1137,8 @@ def setup_results(report: dict) -> list[dict]:
         issue("missing_report_type")
     if not engagement.get("network"):
         issue("missing_network")
+    if not (engagement.get("app_owner") or "").strip():
+        issue("missing_app_owner")
     if not (engagement.get("tester") or "").strip():
         issue("missing_tester")
     if not engagement.get("report_date"):
@@ -1153,6 +1158,10 @@ def setup_results(report: dict) -> list[dict]:
         test_window = windows.get(environment) or {}
         if not test_window.get("start_date") or not test_window.get("end_date"):
             issue("missing_test_dates", environment=environment)
+        # A window with no stored time takes the default when the page opens, so only a time that is
+        # there and blank, or only blanks, counts as missing. Twin: setupResults in rules.js.
+        if "test_time" in test_window and not (test_window["test_time"] or "").strip():
+            issue("missing_test_time", environment=environment)
         named = [target for target in targets if target["environment"] == environment]
         if not named:
             issue("missing_scope_target", environment=environment)

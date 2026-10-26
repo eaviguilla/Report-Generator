@@ -341,6 +341,7 @@ class DocxReportTests(unittest.TestCase):
             engagement=Engagement(
                 app_name="Northstar Banking",
                 ci_number="CI-DOCX",
+                app_owner="Avery Morgan",
                 segment="JH",
                 report_type="annual_pentest",
                 report_date=date(2026, 9, 9),
@@ -494,6 +495,7 @@ class DocxReportTests(unittest.TestCase):
             engagement=Engagement(
                 app_name="Northstar Banking",
                 ci_number="CI-DOCX",
+                app_owner="Avery Morgan",
                 segment="JH",
                 report_type="retest",
                 report_date=date(2026, 9, 9),
@@ -601,7 +603,7 @@ class DocxReportTests(unittest.TestCase):
             report = Report(
                 report_id="r_wrap", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
-                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    app_name="Northstar Banking", ci_number="CI-DOCX", app_owner="Avery Morgan", segment="JH", report_type="annual_pentest",
                     report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web", "api"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
@@ -652,7 +654,7 @@ class DocxReportTests(unittest.TestCase):
             report = Report(
                 report_id="r_na", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
-                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    app_name="Northstar Banking", ci_number="CI-DOCX", app_owner="Avery Morgan", segment="JH", report_type="annual_pentest",
                     report_date=date(2026, 9, 9), tester="QA Tester", network="Internal",
                     tested_environments=["production", "non_production"], tested_channels=["web"],
                     test_windows={
@@ -734,7 +736,7 @@ class DocxReportTests(unittest.TestCase):
             report = Report(
                 report_id="r_blank", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
-                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    app_name="Northstar Banking", ci_number="CI-DOCX", app_owner="Avery Morgan", segment="JH", report_type="annual_pentest",
                     report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
@@ -772,7 +774,7 @@ class DocxReportTests(unittest.TestCase):
             report = Report(
                 report_id="r_pages", app_id="CI-DOCX", saved_at=now,
                 engagement=Engagement(
-                    app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                    app_name="Northstar Banking", ci_number="CI-DOCX", app_owner="Avery Morgan", segment="JH", report_type="annual_pentest",
                     report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web"],
                     test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
                 ),
@@ -1012,7 +1014,7 @@ class DocxReportTests(unittest.TestCase):
         report = Report(
             report_id="r_layout", app_id="CI-DOCX", saved_at=now,
             engagement=Engagement(
-                app_name="Northstar Banking", ci_number="CI-DOCX", segment="JH", report_type="annual_pentest",
+                app_name="Northstar Banking", ci_number="CI-DOCX", app_owner="Avery Morgan", segment="JH", report_type="annual_pentest",
                 report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web"],
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
             ),
@@ -1305,6 +1307,7 @@ class DocxReportTests(unittest.TestCase):
             engagement=Engagement(
                 app_name="Northstar Banking",
                 ci_number="CI-DOCX",
+                app_owner="Avery Morgan",
                 segment=segment,
                 report_type="annual_pentest",
                 report_date=date(2026, 9, 9),

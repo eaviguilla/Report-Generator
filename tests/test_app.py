@@ -125,6 +125,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"]["app_name"] = "Regression Report"
         report["engagement"]["ci_number"] = "CI-TEST-01"
+        report["engagement"]["app_owner"] = "Avery Morgan"
         report["engagement"]["segment"] = "JH"
         report["engagement"]["report_type"] = "annual_pentest"
         report["engagement"]["report_date"] = "2026-09-08"
@@ -618,6 +619,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.create_report()
         report.engagement.app_name = "Vocabulary QA"
         report.engagement.ci_number = "CI-VOCAB"
+        report.engagement.app_owner = "Avery Morgan"
         report.engagement.segment = "JH"
         report.engagement.report_type = "annual_pentest"
         report.engagement.network = "Internal"
@@ -677,7 +679,7 @@ class ReportApiTests(unittest.TestCase):
             "production": {"start_date": "2026-01-01", "end_date": "2026-01-02", "test_time": "Anytime"},
             "non_production": {"start_date": "2026-01-01", "end_date": "2026-01-02", "test_time": "7:00 EST"},
         }
-        report["engagement"].update({"segment": "JH", "report_type": "annual_pentest", "network": "Internal", "report_date": "2026-01-03"})
+        report["engagement"].update({"segment": "JH", "report_type": "annual_pentest", "network": "Internal", "app_owner": "Avery Morgan", "report_date": "2026-01-03"})
         report["scope_text"] = {
             "production": {"web": "https://prod.example.test"},
             "non_production": {"web": "https://test.example.test"},
@@ -1696,7 +1698,7 @@ class ReportApiTests(unittest.TestCase):
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
-            "app_name": "Carry", "ci_number": "CI-CARRY", "segment": "JH", "report_type": "annual_pentest",
+            "app_name": "Carry", "ci_number": "CI-CARRY", "app_owner": "Avery Morgan", "segment": "JH", "report_type": "annual_pentest",
             "tester": "QA Tester", "network": "Internal", "report_date": "2026-01-06", "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"}},
         })
@@ -1837,7 +1839,7 @@ class ReportApiTests(unittest.TestCase):
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
-            "app_name": name, "ci_number": "CI-LOC", "segment": "JH", "report_type": "annual_pentest",
+            "app_name": name, "ci_number": "CI-LOC", "app_owner": "Avery Morgan", "segment": "JH", "report_type": "annual_pentest",
             "tester": "QA Tester", "network": "Internal", "report_date": "2026-01-06", "tested_channels": ["web"], "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-01-01", "end_date": "2026-01-05", "test_time": "Anytime"}},
         })
@@ -1955,7 +1957,7 @@ class ReportApiTests(unittest.TestCase):
         report_id = self.new_report()
         report = main.workspace.load(report_id).model_dump(mode="json", by_alias=True)
         report["engagement"].update({
-            "app_name": "No Identifier", "ci_number": "", "bsn_number": "",
+            "app_name": "No Identifier", "ci_number": "", "bsn_number": "", "app_owner": "Avery Morgan",
             "segment": "JH", "report_type": "annual_pentest", "tester": "QA Tester", "network": "Internal", "report_date": "2026-08-03",
             "tested_environments": ["production"],
             "test_windows": {"production": {"start_date": "2026-08-01", "end_date": "2026-08-02", "test_time": "Anytime"}},
@@ -2110,6 +2112,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.load(report_id)
         report.engagement.segment = "JH"
         report.engagement.app_name = "Library"
+        report.engagement.app_owner = "Avery Morgan"
         report.engagement.report_type = "annual_pentest"
         report.engagement.tester = "QA Tester"
         report.engagement.network = "Internal"
@@ -2196,6 +2199,7 @@ class ReportApiTests(unittest.TestCase):
         report = main.workspace.load(report_id)
         report.engagement.segment = "JH"
         report.engagement.app_name = "Binary"
+        report.engagement.app_owner = "Avery Morgan"
         report.engagement.report_type = "annual_pentest"
         report.engagement.tester = "QA Tester"
         report.engagement.network = "Internal"
@@ -2326,6 +2330,7 @@ class ReportApiTests(unittest.TestCase):
             "report_type": "annual_pentest",
             "app_name": "Generated Report",
             "ci_number": "CI-GENERATE",
+            "app_owner": "Avery Morgan",
             "network": "Internal",
             "report_date": "2026-09-09",
             "tested_environments": ["production"],

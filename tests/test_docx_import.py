@@ -184,7 +184,7 @@ class FragmentRecognitionTests(unittest.TestCase):
         report = Report(
             report_id="r_import", app_id="CI-IMPORT", saved_at=now,
             engagement=Engagement(
-                app_name="Northstar Banking", ci_number="CI-IMPORT", segment="JH",
+                app_name="Northstar Banking", ci_number="CI-IMPORT", app_owner="Avery Morgan", segment="JH",
                 report_type="annual_pentest", report_date=date(2026, 9, 9), tester="QA Tester", network="Internal",
                 tested_environments=["production"], tested_channels=["web"],
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},

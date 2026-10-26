@@ -103,6 +103,7 @@
     missing_app_name:"engagement.app_name",
     missing_report_type:"engagement.report_type",
     missing_network:"engagement.network",
+    missing_app_owner:"engagement.app_owner",
     missing_tester:"engagement.tester",
     missing_report_date:"engagement.report_date",
   };
@@ -115,8 +116,9 @@
   // A required field's label gets the `is-required` class and CSS draws the star, so the label's
   // text stays exactly the field's name. A star typed into the label would turn "Application Name"
   // into "Application Name*": tests and the undo history find fields by that text. Headings are
-  // not looked up that way, so they take a real star after their text. The coverage dates are drawn
-  // per environment and carry the class themselves.
+  // not looked up that way, so they take a real star after their text. The coverage fields (Start,
+  // End and Time) are drawn per environment and take no star of their own: the Test Coverage
+  // heading's star covers all three, and each carries aria-required.
   const requiredStar = () => {
     const star = document.createElement("span");
     star.className = "required-star";
@@ -1209,6 +1211,11 @@
         const issue = results.find(result => result.code === "missing_test_dates" && result.environment === environment);
         controller.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
       });
+      root.querySelectorAll("#test-windows .environment-window").forEach(panel => {
+        const environment = panel.querySelector('input[type="checkbox"]')?.value;
+        const issue = results.find(result => result.code === "missing_test_time" && result.environment === environment);
+        setupMessageControllers.get(panel.querySelector('.date-pair input[type="text"]'))?.set("issue", issue ? window.vrRules.formatRuleMessage(issue, report, vocabulary) : "");
+      });
       accountMessageControllers.forEach((controller, index) => {
         const messages = results
           .filter(result => result.kind === "issue" && result.account === index + 1
@@ -1793,7 +1800,7 @@
           ? `<select class="coverage-name" aria-label="Non-Production name" title="Labels the Proof of Concept evidence in the generated report" ${isSelected ? "" : "disabled"}>${options}</select>`
             + (showCustom ? `<input type="text" class="coverage-name-custom" aria-label="Non-Production name, typed" maxlength="40" value="${escape(stored)}" placeholder="Name it" ${isSelected ? "" : "disabled"}>` : "")
           : label;
-        panel.innerHTML = `<label class="coverage-option"><input type="checkbox" value="${environment}" aria-label="${label}" ${isSelected ? "checked" : ""}>${name}</label>${isSelected ? `<div class="date-pair"><label class="is-required">Start<input type="date" aria-required="true" aria-label="${label} start date"></label><label class="is-required">End<input type="date" aria-required="true" aria-label="${label} end date"></label><label>Time<input type="text" aria-label="${label} time"></label></div>` : ""}`;
+        panel.innerHTML = `<label class="coverage-option"><input type="checkbox" value="${environment}" aria-label="${label}" ${isSelected ? "checked" : ""}>${name}</label>${isSelected ? `<div class="date-pair"><label>Start<input type="date" aria-required="true" aria-label="${label} start date"></label><label>End<input type="date" aria-required="true" aria-label="${label} end date"></label><label>Time<input type="text" aria-required="true" aria-label="${label} time"></label></div>` : ""}`;
         const coverageName = panel.querySelector(".coverage-name");
         if (coverageName) {
           coverageName.onchange = event => {
@@ -1857,7 +1864,7 @@
         attachSimpleSetupMessage(timeInput);
         startDate.oninput = () => { testWindow.start_date = startDate.value || null; if (startDate.value) startDate.classList.remove("validation-error"); scheduleSave(); };
         endDate.oninput = () => { testWindow.end_date = endDate.value || null; if (endDate.value) endDate.classList.remove("validation-error"); scheduleSave(); };
-        timeInput.oninput = () => { testWindow.test_time = timeInput.value; scheduleSave(); };
+        timeInput.oninput = () => { testWindow.test_time = timeInput.value; if (timeInput.value.trim()) timeInput.classList.remove("validation-error"); scheduleSave(); };
         wireSetupRule(timeInput, setupRules.time(environment), `${label} time`);
         attachSetupCharacterLimit(timeInput, vocabulary.character_rules.test_time.max_length, `${label} time`);
         [startDate, endDate].forEach(input => { input.dataset.setupValidated = "true"; });
@@ -2702,14 +2709,20 @@
       const inputsValid = validateSetupInputs(reveal);
       const flagged = code => results.some(result => result.code === code);
       // In page order, so focus lands on the first highlighted field.
-      const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_name", "report_name"], ["missing_report_type", "report_type"], ["missing_network", "network"], ["missing_tester", "tester"], ["missing_report_date", "report_date"]]
+      const requiredMetadata = [["missing_segment", "segment"], ["missing_app_name", "app_name"], ["missing_report_name", "report_name"], ["missing_report_type", "report_type"], ["missing_network", "network"], ["missing_app_owner", "app_owner"], ["missing_tester", "tester"], ["missing_report_date", "report_date"]]
         .filter(([code]) => flagged(code))
         .map(([, field]) => root.querySelector(`[data-path="engagement.${field}"]`));
       const undated = results.filter(result => result.code === "missing_test_dates").map(result => result.environment);
-      const requiredDates = [...root.querySelectorAll("#test-windows .environment-window")]
-        .filter(panel => undated.includes(panel.querySelector('input[type="checkbox"]')?.value))
-        .flatMap(panel => [...panel.querySelectorAll('input[type="date"]')]);
-      const incompleteSetup = [...requiredMetadata, ...requiredDates].filter(input => input && !input.value.trim());
+      const untimed = results.filter(result => result.code === "missing_test_time").map(result => result.environment);
+      // Per environment, in page order: its dates, then its time.
+      const requiredCoverage = [...root.querySelectorAll("#test-windows .environment-window")].flatMap(panel => {
+        const environment = panel.querySelector('input[type="checkbox"]')?.value;
+        return [
+          ...(undated.includes(environment) ? panel.querySelectorAll('input[type="date"]') : []),
+          ...(untimed.includes(environment) ? panel.querySelectorAll('.date-pair input[type="text"]') : []),
+        ];
+      });
+      const incompleteSetup = [...requiredMetadata, ...requiredCoverage].filter(input => input && !input.value.trim());
       // The half a row lacks, or both halves of a row that repeats an earlier one.
       const accountInputs = results.flatMap(result => {
         if (result.code === "incomplete_test_account") return [root.querySelector(`#test-accounts input[aria-label="${result.missing === "username" ? "Username" : "User role"} ${result.account}"]`)];
@@ -2744,7 +2757,7 @@
             firstIncomplete?.scrollIntoView({behavior:"smooth", block:"center"});
             firstIncomplete?.focus({preventScroll:true});
           }
-          setSaveState(SAVE_STATES.UNSAVED, refused || !inputsValid ? "Correct invalid Setup fields" : missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and testing dates" : accountInputs.length ? "Complete or remove the highlighted test accounts" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
+          setSaveState(SAVE_STATES.UNSAVED, refused || !inputsValid ? "Correct invalid Setup fields" : missingEnvironment ? "Select at least one test environment" : incompleteSetup.length ? "Complete the highlighted application details and test coverage" : accountInputs.length ? "Complete or remove the highlighted test accounts" : exclusion ? "Select only one of Mobile and Thick Client" : blankDescriptions.length && !missingScopePanels.length ? "Describe each component in the scope" : "Define at least one scope target for each selected environment");
         }
         return false;
       }

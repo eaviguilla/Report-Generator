@@ -144,8 +144,9 @@ class BrowserWorkflowTests(unittest.TestCase):
             return 0
 
     def choose_required_engagement_details(self) -> None:
-        """Network access and the report date start blank and are required before Findings."""
+        """Network access, the application owner and the report date start blank and are required before Findings."""
         self.page.get_by_label("Network Access").select_option("Internal")
+        self.page.get_by_label("Application Owner", exact=True).fill("Browser Owner")
         self.page.get_by_label("Report Date").fill("2026-01-03")
 
     def ready_report(self, include_finding: bool = False) -> str:
@@ -156,6 +157,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         report.engagement.segment = "JH"
         report.engagement.report_type = "annual_pentest"
         report.engagement.network = "Internal"
+        report.engagement.app_owner = "Browser Owner"
         report.engagement.report_date = date(2026, 1, 3)
         report.engagement.tested_environments = ["production"]
         report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}
@@ -308,15 +310,17 @@ class BrowserWorkflowTests(unittest.TestCase):
         starred = set(page.eval_on_selector_all("[data-path][aria-required='true']", "controls => controls.map(c => c.dataset.path)"))
         self.assertEqual(
             starred,
-            {"engagement.segment", "engagement.app_name", "engagement.report_type", "engagement.network", "engagement.tester", "engagement.report_date"},
+            {"engagement.segment", "engagement.app_name", "engagement.report_type", "engagement.network", "engagement.app_owner", "engagement.tester", "engagement.report_date"},
         )
         for path in starred:
             with self.subTest(path=path):
                 self.assertEqual(page.locator(f'label.is-required:has([data-path="{path}"])').count(), 1)
-        for optional in ("ci_number", "bsn_number", "app_owner"):
+        for optional in ("ci_number", "bsn_number"):
             with self.subTest(optional=optional):
                 self.assertEqual(page.locator(f'label.is-required:has([data-path="engagement.{optional}"])').count(), 0)
-        self.assertEqual(page.locator(".date-pair label.is-required").count(), 4)
+        # Test Coverage carries the star for its Start, End and Time in both environments, so none of the six has one of its own.
+        self.assertEqual(page.locator(".date-pair label.is-required").count(), 0)
+        self.assertEqual(page.locator(".date-pair input[aria-required='true']").count(), 6)
         # The star is generated content: visible, but not in the label's text.
         self.assertIn("*", page.eval_on_selector("label.is-required", "el => getComputedStyle(el, '::after').content"))
         self.assertEqual(page.eval_on_selector("label.is-required", "el => el.firstChild.nodeValue"), "Segment")
@@ -331,6 +335,45 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector("#setup-validation-note:not([hidden])")
         flagged = set(page.eval_on_selector_all("[data-path].validation-error", "controls => controls.map(c => c.dataset.path)"))
         self.assertEqual(flagged, starred)
+
+    def test_a_report_cannot_leave_setup_without_an_application_owner(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{self.ready_report()}/setup")
+        owner = page.get_by_label("Application Owner", exact=True)
+        owner.fill("")
+
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_selector("#setup-validation-note:not([hidden])")
+
+        self.assertIn("validation-error", owner.get_attribute("class"))
+        message = page.locator('.setup-field-wrap:has([data-path="engagement.app_owner"]) .setup-field-message')
+        expect(message).to_have_text(format_rule_message({"code": "missing_app_owner"}))
+        self.assertTrue(page.url.endswith("/setup"))
+
+        owner.fill("Avery Morgan")
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_url("**/findings")
+
+    def test_a_report_cannot_leave_setup_without_a_test_time(self) -> None:
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{self.ready_report()}/setup")
+        production_time = page.get_by_label("Production time", exact=True)
+        expect(production_time).to_have_value("Anytime")
+        production_time.fill("")
+
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_selector("#setup-validation-note:not([hidden])")
+
+        self.assertIn("validation-error", production_time.get_attribute("class"))
+        message = page.locator('.setup-field-wrap:has(input[aria-label="Production time"]) .setup-field-message')
+        expect(message).to_have_text(format_rule_message({"code": "missing_test_time", "environment": "production"}))
+        self.assertTrue(page.url.endswith("/setup"))
+
+        production_time.fill("Weekdays")
+        expect(message).to_be_hidden()
+        self.assertNotIn("validation-error", production_time.get_attribute("class") or "")
+        page.get_by_role("button", name="Next: Findings").click()
+        page.wait_for_url("**/findings")
 
     def test_the_report_name_field_shows_for_gwam_only_and_is_starred_while_it_shows(self) -> None:
         page = self.page
@@ -4281,8 +4324,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         # Undo sends the change to the server before reloading, so wait for the reloaded value.
         owner_value = '() => document.querySelector(\'[data-path="engagement.app_owner"]\')?.value'
         page.get_by_role("button", name="Undo last change").click()
-        page.wait_for_function(f"{owner_value} === ''", timeout=10_000)
-        self.assertEqual(page.get_by_label("Application Owner").input_value(), "")
+        page.wait_for_function(f"{owner_value} === 'Browser Owner'", timeout=10_000)
+        self.assertEqual(page.get_by_label("Application Owner").input_value(), "Browser Owner")
         page.get_by_role("button", name="Redo last change").click()
         page.wait_for_function(f"{owner_value} === 'Undo this value'", timeout=10_000)
         self.assertEqual(page.get_by_label("Application Owner").input_value(), "Undo this value")

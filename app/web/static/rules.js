@@ -170,6 +170,7 @@
     if (hasOwnReportName(engagement, vocabulary) && !strip(asString(engagement.report_name))) issue("missing_report_name");
     if (!engagement.report_type) issue("missing_report_type");
     if (!engagement.network) issue("missing_network");
+    if (!strip(asString(engagement.app_owner))) issue("missing_app_owner");
     if (!strip(asString(engagement.tester))) issue("missing_tester");
     if (!engagement.report_date) issue("missing_report_date");
     const environments = engagement.tested_environments || [];
@@ -181,6 +182,9 @@
     environments.forEach(environment => {
       const testWindow = engagement.test_windows?.[environment] || {};
       if (!testWindow.start_date || !testWindow.end_date) issue("missing_test_dates", {environment});
+      // A window with no stored time takes the default when the page opens, so only a time that is
+      // there and blank, or only blanks, counts as missing. Twin: setup_results in report_service.
+      if (Object.hasOwn(testWindow, "test_time") && !strip(asString(testWindow.test_time))) issue("missing_test_time", {environment});
       const named = targets.filter(target => target.environment === environment);
       if (!named.length) issue("missing_scope_target", {environment});
       named.filter(target => vocabulary.component_channels.includes(target.app_type) && !target.description)
@@ -209,6 +213,7 @@
       missing_report_name:"Enter the report name.",
       missing_report_type:"Choose a report type.",
       missing_network:"Choose the network access.",
+      missing_app_owner:"Enter the application owner.",
       missing_tester:"Enter the tester's name.",
       missing_report_date:"Enter the report date.",
       no_tested_environment:"Choose at least one environment to test.",
@@ -231,6 +236,9 @@
       const missing = ["start", "end"].filter(name => !window[`${name}_date`]);
       const dates = missing.length === 2 ? "start and end dates" : `${missing[0]} date`;
       return `Enter the ${environment} ${dates}.`;
+    }
+    if (result.code === "missing_test_time") {
+      return `Enter the ${result.environment === "production" ? "Production" : "Non-Production"} time.`;
     }
     if (result.code === "missing_scope_target") {
       return `Add a scope target for ${result.environment === "production" ? "Production" : "Non-Production"}.`;

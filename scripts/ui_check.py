@@ -63,6 +63,7 @@ def seed_report(workspace, stage: str) -> str | None:
         report.engagement.segment = "JH"
         report.engagement.report_type = "annual_pentest"
         report.engagement.network = "Internal"
+        report.engagement.app_owner = "UI Check Owner"
         report.engagement.report_date = date(2026, 1, 3)
         report.engagement.tested_environments = ["production"]
         report.engagement.test_windows = {"production": TestWindow(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))}

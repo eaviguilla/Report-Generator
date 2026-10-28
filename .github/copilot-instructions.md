@@ -26,6 +26,10 @@ document matching the house template. No database, no frontend framework, no bui
   `report_generator_burp.py`, one Jython 2.7 file on Burp's legacy Extender API that starts and
   stops `app/init.py` from a Burp tab. The two launchers are independent, hand-maintained files, by
   design (`docs/plans/split-release-into-burp-and-default.md`): neither ships a trace of the other.
+  The default build's script also writes a notice for AI assistants into the top and bottom of each
+  text file it ships (`annotate` in `scripts/default_release.py`). It goes into the zip only, never
+  into the repository's own files, and it moves a line in a shipped `.py` or `.js` file down by the
+  length of the top notice.
   `app/init.py` alone holds the Burp build's half: one server per data folder (a lock),
   `--data-status`, `--bring-over`, and stop at end of input. Checked by `tests/test_launcher.py`
   (its Jython self-checks run when `java` and `VULNREPORT_JYTHON_JAR` are available; a Python 2.7

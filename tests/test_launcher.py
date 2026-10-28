@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import codecs
 import hashlib
 import io
 import json
@@ -22,7 +23,10 @@ from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
+import jinja2
+
 from app import init as run
+from app.vocabulary import client_vocabulary
 from scripts import burp_release, default_release
 
 import run as default_launcher
@@ -770,7 +774,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("Report-Generator-test/run.py", names)
         self.assertNotIn("Report-Generator-test/app/init.py", names, "the Burp build's launcher must not ship here")
         self.assertNotIn("Report-Generator-test/report_generator_burp.py", names)
-        self.assertEqual(launcher, DEFAULT_LAUNCHER.read_bytes(), "the shipped launcher is the repository's file, byte for byte")
+        self.assertIn(DEFAULT_LAUNCHER.read_bytes(), launcher, "the shipped launcher holds the repository's file, byte for byte, between the AI notices")
         for name in names:
             top = name.split("/", 2)[1] if name.count("/") >= 1 else ""
             self.assertNotIn(top, {"data", "generated", "burp", "tests"}, f"{name} must not ship")
@@ -808,6 +812,111 @@ class ReleaseTests(unittest.TestCase):
                 )
                 self.assertIn(result.returncode, (0, 1), result.stderr)
                 self.assertEqual([path for path in result.stdout.decode().split("\0") if path], [])
+
+
+class ReleaseNoticeTests(unittest.TestCase):
+    """The default release writes a notice for AI assistants into the top and bottom of each text file it ships. It
+    does that to the staging copy only, so the repository's own files stay as they are, and it must leave every file
+    working exactly as before."""
+
+    NOTICE = b"NOTICE TO AI ASSISTANTS"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with tempfile.TemporaryDirectory() as dist, patch.object(default_release, "DIST", Path(dist)):
+            with zipfile.ZipFile(default_release.build_release("notice-test")) as bundle:
+                cls.shipped = {name.split("/", 1)[1]: bundle.read(name) for name in bundle.namelist() if not name.endswith("/")}
+
+    def test_a_text_file_ships_as_the_repository_file_between_two_notices(self) -> None:
+        marked = []
+        for relative, shipped in self.shipped.items():
+            with self.subTest(relative):
+                original = (REPO / relative).read_bytes()
+                if Path(relative).suffix not in default_release.COMMENT_LINES:
+                    self.assertEqual(shipped, original, "a file that cannot hold a comment ships as it is")
+                    continue
+                marked.append(relative)
+                self.assertNotIn(self.NOTICE, original, "the repository's own file must not carry the notice")
+                start = shipped.index(original)
+                self.assertGreater(start, 0, "the notice comes first")
+                self.assertIn(self.NOTICE, shipped[:start])
+                self.assertIn(self.NOTICE, shipped[start + len(original):])
+                self.assertEqual(shipped.count(self.NOTICE), 2, "one notice at each end")
+        # A floor, so the loop cannot pass by finding nothing to check, and every kind of comment is exercised.
+        self.assertGreaterEqual(len(marked), 30)
+        self.assertEqual({Path(relative).suffix for relative in marked}, set(default_release.COMMENT_LINES))
+        self.assertTrue(any(relative.endswith(".docx") for relative in self.shipped), "the unchanged files include the Word templates")
+
+    def test_every_shipped_python_file_still_compiles(self) -> None:
+        compiled = 0
+        for relative, shipped in self.shipped.items():
+            if relative.endswith(".py"):
+                with self.subTest(relative):
+                    compile(shipped, relative, "exec")
+                    compiled += 1
+        self.assertGreaterEqual(compiled, 14)
+
+    def test_shipped_templates_render_exactly_as_the_repositorys(self) -> None:
+        """A template comment must leave nothing in the page. The notice is a Jinja comment that also takes the
+        whitespace around it, so the one-line partials and the pages come out the same, to the byte."""
+        context = {"report": {}, "library": [], "library_entries": []}
+
+        def render(folder: Path, name: str) -> str:
+            environment = jinja2.Environment(loader=jinja2.FileSystemLoader(str(folder)), autoescape=True)
+            environment.globals.update(asset_v="1", vocabulary=client_vocabulary())
+            return environment.get_template(name).render(context)
+
+        with tempfile.TemporaryDirectory() as directory:
+            for relative, shipped in self.shipped.items():
+                if relative.startswith("app/web/templates/"):
+                    (Path(directory) / Path(relative).name).write_bytes(shipped)
+            names = sorted(path.name for path in Path(directory).iterdir())
+            for name in names:
+                with self.subTest(name):
+                    rendered = render(Path(directory), name)
+                    self.assertEqual(rendered, render(REPO / "app" / "web" / "templates", name))
+                    self.assertNotIn("NOTICE", rendered)
+        self.assertGreaterEqual(len(names), 8, "the four pages and the four partials")
+
+    def test_the_notice_keeps_each_files_own_line_endings_and_ends_the_file_on_a_line_of_its_own(self) -> None:
+        for newline in (b"\n", b"\r\n"):
+            for suffix in default_release.COMMENT_LINES:
+                with self.subTest(newline=newline, suffix=suffix):
+                    original = b"first" + newline + b"second"
+                    marked = default_release.annotate(original, suffix)
+                    rest = marked.replace(newline, b"")
+                    self.assertNotIn(b"\n", rest, "no other line ending comes in")
+                    self.assertNotIn(b"\r", rest, "no other line ending comes in")
+                    after = marked[marked.index(original) + len(original):]
+                    self.assertTrue(after.startswith(newline), "the closing notice starts on a new line")
+                    self.assertTrue(marked.endswith(newline))
+
+    def test_a_python_shebang_and_a_byte_order_mark_stay_first(self) -> None:
+        marked = default_release.annotate(b"#!/usr/bin/env python3\nprint(1)\n", ".py")
+        self.assertTrue(marked.startswith(b"#!/usr/bin/env python3\n"))
+        self.assertLess(marked.index(self.NOTICE), marked.index(b"print(1)"))
+        with_bom = default_release.annotate(codecs.BOM_UTF8 + b"var a = 1;\n", ".js")
+        self.assertTrue(with_bom.startswith(codecs.BOM_UTF8))
+        self.assertEqual(with_bom.count(codecs.BOM_UTF8), 1)
+
+    def test_a_file_that_cannot_hold_a_comment_is_returned_as_it_is(self) -> None:
+        for suffix in (".docx", ".json", ".png", ""):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(default_release.annotate(b"\x00\x01data", suffix), b"\x00\x01data")
+
+    def test_a_file_in_another_encoding_is_refused_not_corrupted(self) -> None:
+        with self.assertRaisesRegex(UnicodeDecodeError, "utf-8"):
+            default_release.annotate("caf\u00e9".encode("latin-1"), ".py")
+
+    def test_the_notice_is_plain_ascii_that_no_comment_can_end_early_and_names_no_other_build(self) -> None:
+        self.assertIn(self.NOTICE.decode(), default_release.AI_NOTICE[0])
+        for line in default_release.AI_NOTICE:
+            with self.subTest(line):
+                self.assertTrue(line.isascii())
+                for closer in ("*/", "-->", "--", "#}"):
+                    self.assertNotIn(closer, line)
+                for word in BURP_WORDS:
+                    self.assertNotIn(word, line.lower())
 
 
 class JythonSelfCheckTests(unittest.TestCase):

@@ -2882,6 +2882,9 @@
     }
     return null;
   };
+  // Excel and similar sources put a picture of what they copied on the clipboard beside its text. With the cursor in a
+  // text box that is a text paste. A picture with no text goes to the evidence image wherever the cursor is.
+  const pastesAsText = clipboard => Boolean(activeTextEntry()) && /\S/.test(clipboard?.getData?.("text/plain") || "");
   // One screenshot in an evidence set. Order is the fragment order, so the position control writes
   // straight into content.fragments and the report comes out in the order the tiles are shown.
   function renderEvidenceTile(fragment, content, rerender, finding, position) {
@@ -2942,7 +2945,7 @@
     };
     tile.onpaste = event => {
       const pasted = clipboardImageFile(event.clipboardData);
-      if (!pasted) return;
+      if (!pasted || pastesAsText(event.clipboardData)) return;
       event.preventDefault();
       uploadImage(pasted);
     };
@@ -3254,6 +3257,8 @@
     }
     return offset;
   };
+  // How many cells wide a table is drawn: as wide as its widest row, and never less than one.
+  const tableColumnCount = fragment => Math.max(fragment.header.length, ...fragment.rows.map(row => row.length), 1);
   // Renders one content fragment with its type-specific editing controls.
   function renderFragment(fragment, content, rerender, finding) {
     const card = document.createElement("article"); card.className="fragment"; card.dataset.fragmentId = fragment.frag_id; card.tabIndex = -1; card.innerHTML=`<div class="fragment-head"><button class="fragment-drag-handle" type="button" draggable="true" aria-label="Drag to reorder fragment" title="Drag to reorder">::</button><span class="tag">${fragment.type.replaceAll("_"," ")}</span><button class="fragment-move-up" type="button" aria-label="Move fragment up" title="Move up">&#8593;</button><button class="fragment-move-down" type="button" aria-label="Move fragment down" title="Move down">&#8595;</button><button class="danger fragment-delete" type="button" aria-label="Delete fragment" title="Delete">&#215;</button></div>`;
@@ -3439,10 +3444,19 @@
       requestAnimationFrame(resize);
     }
     else if (fragment.type === "table") {
-      const columnCount = Math.max(fragment.header.length, ...fragment.rows.map(row => row.length), 1);
-      while (fragment.header.length < columnCount) fragment.header.push({runs:[]});
-      fragment.rows.forEach(row => { while (row.length < columnCount) row.push({runs:[]}); });
-      const value = cell => cell.runs.map(run => run.text).join("");
+      // The grid is drawn as wide as the widest row and always has a header row. A cell the model lacks is drawn
+      // empty and joins the model when it is typed in or the table changes shape, never when the table is drawn.
+      // A draw that padded the model would change the saved report, and what readiness says about it, with no change mark.
+      const columnCount = tableColumnCount(fragment);
+      const value = cell => (cell?.runs || []).map(run => run.text).join("");
+      const plainRuns = text => text ? [{text}] : [];
+      const cellsOf = row => row === "header" ? fragment.header : fragment.rows[row];
+      const cellAt = (row, column) => cellsOf(row)?.[column];
+      const ensureCellAt = (row, column) => {
+        const cells = cellsOf(row);
+        while (cells.length <= column) cells.push({runs:[]});
+        return cells[column];
+      };
       const resizeTableRow = row => {
         const inputs = [...row.querySelectorAll(".table-cell-input")];
         inputs.forEach(input => { input.style.height = "auto"; });
@@ -3452,31 +3466,51 @@
       // Look the cell up when the text is typed, and never capture it when the table is drawn. A save merges the
       // server's copy into the model and replaces these cell objects. An edit to a captured one marks the page
       // changed while the model, and so the next save, keeps the old text.
-      const cellInput = (cellAt, placeholder) => {
+      const cellInput = (row, column, placeholder) => {
         const input = document.createElement("textarea");
         input.className = "table-cell-input";
-        input.value = value(cellAt());
+        input.dataset.row = row;
+        input.dataset.column = column;
+        input.value = value(cellAt(row, column));
         input.placeholder = placeholder;
         input.rows = 1;
         const fitToText = () => { input.style.height = "auto"; input.style.height = `${input.scrollHeight}px`; };
         fitToText();
         document.fonts?.ready.then(fitToText);
-        input.oninput = () => { cellAt().runs = input.value ? [{text:input.value}] : []; resizeTableRow(input.closest("tr")); changed(); };
+        input.oninput = () => { ensureCellAt(row, column).runs = plainRuns(input.value); resizeTableRow(input.closest("tr")); changed(); };
         return input;
       };
       const table = document.createElement("table");
       table.className = "table-fragment";
-      // A structural edit redraws from the model, so anything on screen that has not reached it yet
-      // would be dropped. Rendering order puts the header first, then each row left to right.
+      // A structural edit redraws from the model, so text on screen that has not reached it yet would be dropped.
+      // Only a box that differs from its cell is written, so a cell keeps its bold, italic and underline until
+      // somebody types in it.
       const commitCells = () => {
-        const cells = [...fragment.header, ...fragment.rows.flat()];
-        [...table.querySelectorAll(".table-cell-input")].forEach((input, index) => {
-          if (cells[index]) cells[index].runs = input.value ? [{text:input.value}] : [];
+        table.querySelectorAll(".table-cell-input").forEach(input => {
+          const row = input.dataset.row === "header" ? "header" : Number(input.dataset.row);
+          const column = Number(input.dataset.column);
+          if (value(cellAt(row, column)) !== input.value) ensureCellAt(row, column).runs = plainRuns(input.value);
         });
       };
+      // Gives every row its full width in the model, so the change a structural edit makes and the shape it
+      // leaves are one Undo step.
+      const squareUp = () => {
+        while (fragment.header.length < columnCount) fragment.header.push({runs:[]});
+        fragment.rows.forEach(row => { while (row.length < columnCount) row.push({runs:[]}); });
+      };
+      // The control that was clicked goes with the redraw, which would leave the cursor on the page body.
+      const focusCell = (row, column) => requestAnimationFrame(() => {
+        const box = document.querySelector(`[data-fragment-id="${fragment.frag_id}"] .table-cell-input[data-row="${row}"][data-column="${column}"]`);
+        box?.focus({preventScroll:true});
+        box?.scrollIntoView({block:"nearest"});
+      });
       const header = document.createElement("thead");
       const headerRow = document.createElement("tr");
-      fragment.header.forEach((_, index) => { const headerCell = document.createElement("th"); headerCell.append(cellInput(() => fragment.header[index], `Header ${index + 1}`)); headerRow.append(headerCell); });
+      for (let column = 0; column < columnCount; column += 1) {
+        const headerCell = document.createElement("th");
+        headerCell.append(cellInput("header", column, `Header ${column + 1}`));
+        headerRow.append(headerCell);
+      }
       const actionHeader = document.createElement("th");
       actionHeader.className = "table-row-action";
       actionHeader.setAttribute("aria-label", "Row actions");
@@ -3484,9 +3518,13 @@
       header.append(headerRow);
       table.append(header);
       const body = document.createElement("tbody");
-      fragment.rows.forEach((row, rowIndex) => {
+      fragment.rows.forEach((_, rowIndex) => {
         const bodyRow = document.createElement("tr");
-        row.forEach((_, columnIndex) => { const bodyCell = document.createElement("td"); bodyCell.append(cellInput(() => fragment.rows[rowIndex][columnIndex], `Row ${rowIndex + 1}, column ${columnIndex + 1}`)); bodyRow.append(bodyCell); });
+        for (let column = 0; column < columnCount; column += 1) {
+          const bodyCell = document.createElement("td");
+          bodyCell.append(cellInput(rowIndex, column, `Row ${rowIndex + 1}, column ${column + 1}`));
+          bodyRow.append(bodyCell);
+        }
         const actionCell = document.createElement("td");
         actionCell.className = "table-row-action";
         const removeButton = document.createElement("button");
@@ -3496,7 +3534,14 @@
         removeButton.title = "Remove row";
         removeButton.setAttribute("aria-label", `Remove row ${rowIndex + 1}`);
         removeButton.disabled = fragment.rows.length === 1;
-        removeButton.onclick = () => { commitCells(); fragment.rows.splice(rowIndex, 1); rerender(); changed(); };
+        removeButton.onclick = () => {
+          commitCells();
+          squareUp();
+          fragment.rows.splice(rowIndex, 1);
+          rerender();
+          changed();
+          focusCell(Math.min(rowIndex, fragment.rows.length - 1), 0);
+        };
         actionCell.append(removeButton);
         bodyRow.append(actionCell);
         body.append(bodyRow);
@@ -3507,24 +3552,41 @@
       const addRow = document.createElement("button");
       addRow.type = "button";
       addRow.textContent = "Add row";
-      addRow.onclick = () => { commitCells(); fragment.rows.push(Array.from({length:columnCount}, () => ({runs:[]}))); rerender(); changed(); };
+      addRow.onclick = () => {
+        commitCells();
+        squareUp();
+        fragment.rows.push(Array.from({length:columnCount}, () => ({runs:[]})));
+        rerender();
+        changed();
+        focusCell(fragment.rows.length - 1, 0);
+      };
       const addColumn = document.createElement("button");
       addColumn.type = "button";
       addColumn.textContent = "Add column";
-      addColumn.onclick = () => { commitCells(); fragment.header.push({runs:[]}); fragment.rows.forEach(row => row.push({runs:[]})); rerender(); changed(); };
+      addColumn.onclick = () => {
+        commitCells();
+        squareUp();
+        fragment.header.push({runs:[]});
+        fragment.rows.forEach(row => row.push({runs:[]}));
+        rerender();
+        changed();
+        focusCell("header", columnCount);
+      };
       const removeColumn = document.createElement("select");
       removeColumn.className = "table-remove-select";
       removeColumn.setAttribute("aria-label", "Remove table column");
       removeColumn.disabled = columnCount === 1;
-      removeColumn.innerHTML = `<option value="">Remove column...</option>${fragment.header.map((cell, index) => `<option value="${index}">Column ${index + 1}</option>`).join("")}`;
+      removeColumn.innerHTML = `<option value="">Remove column...</option>${Array.from({length:columnCount}, (_, index) => `<option value="${index}">Column ${index + 1}</option>`).join("")}`;
       removeColumn.onchange = () => {
         if (removeColumn.value === "") return;
         const columnIndex = Number(removeColumn.value);
         commitCells();
+        squareUp();
         fragment.header.splice(columnIndex, 1);
         fragment.rows.forEach(row => row.splice(columnIndex, 1));
         rerender();
         changed();
+        focusCell("header", Math.min(columnIndex, columnCount - 2));
       };
       controls.append(addRow, addColumn, removeColumn);
       card.append(table, controls);
@@ -3558,9 +3620,10 @@
     const pane = document.querySelector("#finding-editor");
     // Images are routed by the armed evidence image, text by focus. Neither can use the other's
     // destination, so an image is taken even from inside a caption. Honouring focus there would
-    // drop the screenshot into a box that cannot hold it.
+    // drop the screenshot into a box that cannot hold it. A clipboard that holds text as well
+    // is the exception, because the text has somewhere to go.
     document.addEventListener("paste", event => {
-      if (!clipboardImageFile(event.clipboardData)) return;
+      if (!clipboardImageFile(event.clipboardData) || pastesAsText(event.clipboardData)) return;
       const target = pasteTargetId && pane?.querySelector(`.evidence-tile[data-fragment-id="${pasteTargetId}"]`);
       if (!target) { showEvidenceNotice("Click an evidence image first, then paste."); return; }
       target.onpaste?.(event);
@@ -3603,7 +3666,15 @@
       const panel = document.querySelector("#editor-notifications");
       const count = document.querySelector("#issue-count");
       if (!panel || !count) return [];
-      const hasText = runs => Array.isArray(runs) && runs.some(run => run.text?.trim());
+      // What leaves text looking empty. Twin of _BLANK_TEXT in docx_report.py: everything trim() removes, everything
+      // Python's strip() removes, and the control characters XML cannot hold, which generation drops.
+      const blankText = /^[\u0000-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff\ufffe\uffff\ud800-\udfff]*$/u;
+      const hasText = runs => Array.isArray(runs) && runs.some(run => !blankText.test(run.text ?? ""));
+      // A header row and a full grid with text in every cell. Twin of _table_is_complete in docx_report.py.
+      const tableIsComplete = fragment => {
+        const columns = tableColumnCount(fragment);
+        return [fragment.header, ...fragment.rows].every(row => row.length === columns && row.every(cell => hasText(cell.runs)));
+      };
       const placeholderPattern = new RegExp(vocabulary.placeholder_pattern.source, vocabulary.placeholder_pattern.flags);
       const fragmentText = fragment => {
         if (fragment.runs) return fragment.runs.map(run => run.text).join("");
@@ -3642,9 +3713,8 @@
           if (steps) { if (fragment.items.some(item => !hasText(item.runs))) issues.push({contentLabel, fragmentLabel:"Steps to reproduce", message:"requires text", fragmentId:fragment.frag_id}); }
           else issues.push(...fragment.items.flatMap((item, itemIndex) => hasText(item.runs) ? [] : [{contentLabel, fragmentLabel:`item ${itemIndex + 1}`, message:"text is required", fragmentId:fragment.frag_id}]));
         }
-        if (fragment.type === "table") {
-          const cells = [...fragment.header, ...fragment.rows.flat()];
-          if (cells.some(cell => !hasText(cell.runs))) issues.push({contentLabel, fragmentLabel:"table", message:"every cell is required", fragmentId:fragment.frag_id});
+        if (fragment.type === "table" && !tableIsComplete(fragment)) {
+          issues.push({contentLabel, fragmentLabel:"table", message:"every cell is required", fragmentId:fragment.frag_id});
         }
         if (fragment.type === "image") {
           const environment = fragment.environment === "production" ? "Production" : fragment.environment === "non_production" ? "Non-Production" : "Unassigned";

@@ -171,6 +171,19 @@
       recoveryStorageError ||= error;
       try { sessionStorage.removeItem(historyKey); } catch (removeError) { recoveryStorageError ||= removeError; }
     }
+    // Undo puts back whole arrays, such as a table's rows. A history kept across a reload, after another tab has
+    // saved, would lay this tab's older copy of them over that tab's work with no conflict to warn the tester.
+    // The newest revision this tab has seen is older than the server's exactly when another tab saved since.
+    try {
+      const lastSeen = sessionStorage.getItem(tabRevisionKey);
+      if (lastSeen && timestampMicros(serverReport.saved_at) > timestampMicros(lastSeen)) {
+        undoHistory = [];
+        redoHistory = [];
+        sessionStorage.removeItem(historyKey);
+      }
+    } catch (error) {
+      recoveryStorageError ||= error;
+    }
     let previousReport = clone(report);
     let activeTextTransaction = null;
     let autoSaveTimer;

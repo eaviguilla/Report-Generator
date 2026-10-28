@@ -62,6 +62,29 @@ inserted for each severity that has findings, severity is rendered as a font
 colour on the rating text (see [Tag formatting](#tag-formatting)), and fragments
 are rendered by `_render_component_fragment`.
 
+### Text a tester types
+
+Text from the report reaches the document through `replace_pattern_across_text_nodes`,
+`_replace_pattern_with_runs` and `_add_wrapped_run`, and each passes it through `user_text` in
+`app/docx_components.py`. `user_text` drops the characters XML 1.0 cannot hold, because lxml
+refuses them and a pasted escape character used to fail Generate with an error that named
+nothing. It also slips a private mark, U+E000 followed by `m`, inside each pair of braces and
+each entry of `UNRESOLVED_MARKERS`.
+
+`_unresolved_placeholders` looks for template text that was never replaced once the findings
+are in. The marks keep a typed `{{7*7}}`, a typed component token such as `{{table-body-cell}}`
+and a word such as `non-vulnerable` from counting. It reads one paragraph at a time and counts a
+line break as a space, so text that sits side by side only because of how the document is built
+never joins into one string. `_restore_user_text` takes every mark out after the check. A U+E000
+the tester typed is written as U+E000 followed by `s`, so the text prints exactly as typed. Text
+from a template that nothing replaced still stops generation with `Unresolved template
+placeholders`. Any new code that writes report text into the document has to go through
+`user_text`, or the check reads that text as the template's own.
+
+A replacement carries on searching after the text it has just written. A value that spells its
+own token, such as a table cell reading `{{table-body-cell}}`, is therefore written once. It used
+to match again for ever.
+
 ## Engagement fields
 
 | Template token | Report value |
@@ -153,6 +176,14 @@ keep the prototype's. Leaving the prototype placeholders in place would fail the
 unresolved-placeholder check at the end of generation, and the importer reads
 this row back as no findings (see
 [A report with no findings](#a-report-with-no-findings)).
+
+`render_report_docx` finds this table before the findings go in and hands it to
+`_populate_cvss_table`. A table a tester puts in a finding can be headed `Section`, and the Asia
+masters keep the real one after the findings, so a lookup made afterwards found the tester's
+table first. The importer's `_find_table` skips every table inside the findings, which run from
+the first finding heading after the Findings table to the Appendix, for the same reason. That
+also keeps a tester's table headed `Component` from being taken for the Component table that
+two of the four templates lack.
 
 **`{{section-number}}` becomes a Word `REF` field, never a number counted in
 Python.** `_populate_component_findings` bookmarks each finding-title paragraph
@@ -267,7 +298,12 @@ would change (`first_change`).
 An unlabelled table before Description is refused rather than discarded. So are
 unattached captions, a repeated non-empty image caption, a caption separated from
 its table or code block by prose, text beside a picture in one paragraph, pictures
-inside text-only table cells, merged cells, and body-level Word content controls. The refusal
+inside text-only table cells, merged cells, and body-level Word content controls. A table cell
+that holds a nested table, a content control, a tracked insertion, a symbol character, list
+numbering or text the read would miss (inside a simple field, for example) is refused too, as is
+a row that starts or ends partway across the grid. Deleted text in a tracked deletion is not
+visible, so it does not count. A table whose first row is not a header cannot be told from one
+that is, so it comes back with its first row as the header. The refusal
 names the finding and section where applicable. The tester can rearrange the Word
 content and retry; no partial draft is created.
 An unexpected non-Appendix group heading after the last finding is also refused,
@@ -469,6 +505,11 @@ paragraph, and a list that ends a content section loses it with the other
 trailing blanks. Rich-text bold, italic, and underline values are layered
 onto the formatting supplied by the fragment document. Numbered lists restart
 for each list fragment and increment within that list.
+
+Every row of a table fragment gets `w:cantSplit`, and a header row also gets `w:tblHeader`, from
+`_keep_row_whole`. `table_fragment.docx` sets neither and the binary templates are not edited. A
+table with no header row repeats nothing. Word has not been checked on this yet: render a table of
+30 rows and 8 columns on Windows and look at its second page.
 
 Word decides automatic page breaks itself and never records them in the file, so
 the renderer cannot detect one and move things around it. Instead it sets

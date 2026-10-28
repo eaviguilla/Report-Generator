@@ -28,7 +28,7 @@ from app.report_service import finding_input_issues, format_rule_message, setup_
 from app.storage import atomic_write_json, read_json
 from app.vocabulary import client_vocabulary
 from tests.support import SEGMENTS_WITHOUT_OWN_REPORT_NAME, png_bytes, use_temp_workspace
-from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TestAccount, TestWindow, Vulnerability
+from app.models import STATUS_LABELS, CodeFragment, Content, Engagement, EvidenceItem, ImageFragment, InstanceTitleFragment, LibraryRef, ListFragment, ListItem, NoteFragment, ParagraphFragment, Run, Scope, ScopeTarget, TableFragment, TestAccount, TestWindow, Vulnerability
 
 
 # Tests wait for "Saved" constantly, and the app autosaves after 5 s idle, so most of that wait was the
@@ -2915,6 +2915,68 @@ class BrowserWorkflowTests(unittest.TestCase):
             any(isinstance(fragment, ImageFragment) and fragment.frag_id == evidence_id and fragment.evidence_id for fragment in proof.fragments),
             "the armed image must hold the pasted evidence after reload",
         )
+
+    def _paste_from_clipboard(self, text: str, *, picture: bool = False) -> None:
+        """Paste as a person does: put the text, and a picture when asked, on the browser's clipboard and press the paste
+        shortcut where the cursor is, so the browser runs its own insert. A headless Chromium has a clipboard of its
+        own, so this leaves the tester's alone."""
+        self.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=self.base_url)
+        self.page.evaluate(
+            """async ([text, encoded]) => {
+                const flavours = {"text/plain": new Blob([text], {type: "text/plain"})};
+                if (encoded) flavours["image/png"] = new Blob([Uint8Array.from(atob(encoded), character => character.charCodeAt(0))], {type: "image/png"});
+                await navigator.clipboard.write([new ClipboardItem(flavours)]);
+            }""",
+            [text, base64.b64encode(png_bytes(2, 2)).decode() if picture else None],
+        )
+        self.page.keyboard.press("ControlOrMeta+V")
+
+    def test_text_pasted_with_a_picture_goes_into_the_text_box_and_leaves_the_screenshot_alone(self) -> None:
+        """Excel puts a picture of the cells it copies on the clipboard beside their text. The page took that for a
+        screenshot. With an evidence image armed, the paste was cancelled so no line reached the box, and the picture
+        replaced the screenshot. With none armed, the lines went in under a notice asking for an evidence image."""
+        pasted = "\n".join(f"{number:02d}_abcdefghijk" for number in range(1, 25))
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+        # One fragment per case, so no case has to clear what an earlier one pasted.
+        empty = {
+            "paragraph": (lambda frag_id: ParagraphFragment(frag_id=frag_id, type="paragraph", runs=[]), ".rich"),
+            "bulleted list": (lambda frag_id: ListFragment(frag_id=frag_id, type="bulleted_list", items=[ListItem(runs=[])]), "textarea"),
+            "code block": (lambda frag_id: CodeFragment(frag_id=frag_id, type="code_block", text=""), "textarea"),
+            "table cell": (lambda frag_id: TableFragment(frag_id=frag_id, type="table", header=[ListItem(runs=[])], rows=[[ListItem(runs=[])]]), '.table-cell-input[data-row="0"][data-column="0"]'),
+        }
+        cases = [(mode, name) for mode in ("unarmed", "armed") for name in empty]
+        frag_id = lambda mode, name: f"f_{mode}_{name.replace(' ', '_')}"
+        description.fragments = [empty[name][0](frag_id(mode, name)) for mode, name in cases]
+        main.workspace.save(report)
+        page = self.page
+        uploads = []
+        page.on("request", lambda request: uploads.append(request.url) if request.method == "POST" and request.url.endswith("/evidence") else None)
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        evidence_id = self.evidence_ids()[0]
+
+        for mode, name in cases:
+            with self.subTest(field=name, evidence_image=mode):
+                box = page.locator(f'[data-fragment-id="{frag_id(mode, name)}"] {empty[name][1]}').first
+                already = len(uploads)
+                if mode == "armed":
+                    self.arm_evidence(evidence_id)
+                box.click()
+                self._paste_from_clipboard(pasted, picture=True)
+                if name == "paragraph":
+                    expect(box).to_have_js_property("innerText", pasted)
+                else:
+                    expect(box).to_have_value(pasted)
+                self.assertEqual(uploads[already:], [], "the picture beside the text was uploaded as evidence")
+                self.assertEqual(page.locator(".evidence-tile .image-preview").count(), 0, "the picture replaced the screenshot")
+                self.assertEqual(page.locator("#evidence-notice.is-visible").count(), 0, "a text paste was answered with the evidence notice")
+
+        # An upload starts a moment after the paste, so the checks above can run ahead of it.
+        page.wait_for_load_state("networkidle")
+        self.assertEqual(uploads, [])
+        self.assertEqual(page.locator(".evidence-tile .image-preview").count(), 0)
 
     def test_two_rapid_pastes_into_one_armed_slot_leave_no_orphaned_evidence(self) -> None:
         """The target advances only when an upload finishes. Two pastes before then queue against
@@ -5870,6 +5932,111 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
         self.assertEqual(self._stored_text(report_id, "f_held"), held + " X")
 
+    def test_a_line_entered_in_any_fragment_is_still_there_when_something_happens(self) -> None:
+        """The paragraph once lost a line the tester had just entered, as soon as anything drew the pane again from the
+        model. Every fragment that takes text is held to the same rule here, through each thing that redraws the pane or
+        reads the saved copy back. A list differs in one way. Its items are the lines that have text, so it has no empty
+        line to keep once it is drawn again, but until then it has to keep the one the tester is about to type on."""
+        typed = "First\n\nSecond\n"
+        listed = "First\nSecond"
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+        description.fragments = [
+            ParagraphFragment(frag_id="f_paragraph", type="paragraph", runs=[]),
+            NoteFragment(frag_id="f_note", type="note", runs=[]),
+            ListFragment(frag_id="f_numbered", type="numbered_list", items=[ListItem(runs=[])]),
+            ListFragment(frag_id="f_bulleted", type="bulleted_list", items=[ListItem(runs=[])]),
+            CodeFragment(frag_id="f_code", type="code_block", text=""),
+            TableFragment(frag_id="f_table", type="table", header=[ListItem(runs=[])], rows=[[ListItem(runs=[])]]),
+        ]
+        main.workspace.save(report)
+        # The name, the fragment, the box inside it, and the text it holds once the pane has been drawn from the model.
+        fields = [
+            ("paragraph", "f_paragraph", ".rich", typed),
+            ("note", "f_note", ".rich", typed),
+            ("numbered list", "f_numbered", "textarea", listed),
+            ("bulleted list", "f_bulleted", "textarea", listed),
+            ("code block", "f_code", "textarea", typed),
+            ("table header cell", "f_table", '.table-cell-input[data-row="header"][data-column="0"]', typed),
+            ("table body cell", "f_table", '.table-cell-input[data-row="0"][data-column="0"]', typed),
+        ]
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        block = page.locator('.content-block[data-content-type="description"]')
+        box = lambda frag_id, selector: page.locator(f'[data-fragment-id="{frag_id}"] {selector}').first
+        join = lambda runs: "".join(run.text for run in runs)
+
+        def shown(moment: str, redrawn: bool) -> None:
+            for name, frag_id, selector, kept in fields:
+                with self.subTest(moment=moment, fragment=name, copy="shown"):
+                    wanted = kept if redrawn else typed
+                    if selector == ".rich":
+                        self.assertEqual(self._visible_lines(box(frag_id, selector)), wanted.count("\n") + 1)
+                    else:
+                        self.assertEqual(box(frag_id, selector).input_value(), wanted)
+
+        def saved(moment: str) -> None:
+            page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+            current = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "description")
+            fragments = {fragment.frag_id: fragment for fragment in current.fragments}
+            table = fragments["f_table"]
+            stored = {
+                "paragraph": join(fragments["f_paragraph"].runs),
+                "note": join(fragments["f_note"].runs),
+                "numbered list": "\n".join(join(item.runs) for item in fragments["f_numbered"].items),
+                "bulleted list": "\n".join(join(item.runs) for item in fragments["f_bulleted"].items),
+                "code block": fragments["f_code"].text,
+                "table header cell": join(table.header[0].runs),
+                "table body cell": join(table.rows[0][0].runs),
+            }
+            for name, _, _, kept in fields:
+                with self.subTest(moment=moment, fragment=name, copy="saved"):
+                    self.assertEqual(stored[name], kept)
+
+        for _, frag_id, selector, _ in fields:
+            box(frag_id, selector).click()
+            for index, part in enumerate(typed.split("\n")):
+                if index:
+                    page.keyboard.press("Enter")
+                if part:
+                    page.keyboard.type(part)
+
+        saved("after the autosave")
+        shown("after the autosave", redrawn=False)
+
+        self.add_fragment(block, "Description", "note")
+        expect(block.locator(".fragment .tag").filter(has_text="note")).to_have_count(2)
+        shown("after adding a fragment", redrawn=True)
+        saved("after adding a fragment")
+
+        block.locator('[data-fragment-id="f_paragraph"] .fragment-move-down').click()
+        shown("after moving a fragment", redrawn=True)
+        saved("after moving a fragment")
+
+        toggle = block.locator(":scope > .content-toggle")
+        toggle.click()
+        expect(block.locator('[data-fragment-id="f_code"]')).to_have_count(0)
+        toggle.click()
+        expect(block.locator('[data-fragment-id="f_code"]')).to_have_count(1)
+        shown("after folding and opening the section", redrawn=True)
+        saved("after folding and opening the section")
+
+        page.reload()
+        page.wait_for_selector("#issue-count")
+        shown("after a reload", redrawn=True)
+        saved("after a reload")
+
+        with page.expect_navigation():
+            page.locator("#undo-button").click()
+        page.wait_for_selector("#issue-count")
+        with page.expect_navigation():
+            page.locator("#redo-button").click()
+        page.wait_for_selector("#issue-count")
+        shown("after Undo and Redo", redrawn=True)
+        saved("after Undo and Redo")
+
     def _setup_page(self, report_id: str):
         page = self.page
         page.goto(f"{self.base_url}/reports/{report_id}")
@@ -7517,6 +7684,145 @@ class BrowserWorkflowTests(unittest.TestCase):
             "the redraw dropped an edit that was still only on screen",
         )
 
+    def _report_with_table(self, header, rows) -> str:
+        """A ready report whose description ends with the table given."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+        description.fragments.append(TableFragment(frag_id="f_seeded_table", type="table", header=header, rows=rows))
+        main.workspace.save(report)
+        return report_id
+
+    def _stored_table(self, report_id: str) -> TableFragment:
+        description = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "description")
+        return next(fragment for fragment in description.fragments if fragment.type == "table")
+
+    def test_a_structural_table_edit_keeps_the_formatting_of_cells_nobody_typed_in(self) -> None:
+        """Add row, Add column and the two removals redraw from the model. They used to write every box back as
+        one plain run first, which dropped bold, italic and underline from cells the tester never touched."""
+        def cell(text, **flags):
+            return ListItem(runs=[Run(text=text, **flags)])
+
+        header = [cell("Parameter", bold=True), cell("Notes", italic=True, underline=True)]
+        rows = [[cell("id", bold=True), cell("plain")], [cell("name", italic=True), cell("value", underline=True)]]
+        everything = lambda table: [(table.header[0], header[0]), (table.header[1], header[1]), (table.rows[0][0], rows[0][0]), (table.rows[0][1], rows[0][1]), (table.rows[1][0], rows[1][0]), (table.rows[1][1], rows[1][1])]
+        cases = [
+            ("add row", lambda block: block.get_by_role("button", name="Add row").click(), everything),
+            ("add column", lambda block: block.get_by_role("button", name="Add column").click(), everything),
+            ("remove row", lambda block: block.get_by_role("button", name="Remove row 2").click(), lambda table: [(table.header[0], header[0]), (table.header[1], header[1]), (table.rows[0][0], rows[0][0]), (table.rows[0][1], rows[0][1])]),
+            ("remove column", lambda block: block.locator(".table-remove-select").select_option("1"), lambda table: [(table.header[0], header[0]), (table.rows[0][0], rows[0][0]), (table.rows[1][0], rows[1][0])]),
+        ]
+        page = self.page
+        for name, act, survivors in cases:
+            with self.subTest(control=name):
+                report_id = self._report_with_table(header, rows)
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.wait_for_selector("#issue-count")
+                block = page.locator('.content-block[data-content-type="description"]')
+                with page.expect_response(lambda response: response.request.method == "PUT"):
+                    act(block)
+                kept = survivors(self._stored_table(report_id))
+                self.assertGreaterEqual(len(kept), 3, "the check looked at too few cells to mean anything")
+                for actual, original in kept:
+                    self.assertEqual(actual.runs, original.runs, f"{name} rewrote the formatting of {original.runs[0].text!r}")
+
+    def test_opening_a_table_with_a_short_row_leaves_the_saved_table_as_it_is(self) -> None:
+        """Drawing a table fills in the cells a short row lacks. It used to do that in the model without a change
+        mark, so the padding reached the file with the next unrelated save, inside that edit's Undo step."""
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        report_id = self._report_with_table([cell("A"), cell("B")], [[cell("a")]])
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        expect(description.locator(".table-cell-input")).to_have_count(4)
+        with page.expect_response(lambda response: response.request.method == "PUT"):
+            description.locator(".rich").first.click()
+            page.keyboard.type("An unrelated edit")
+        table = self._stored_table(report_id)
+        self.assertEqual((len(table.header), [len(row) for row in table.rows]), (2, [1]))
+
+    def test_typing_in_a_cell_a_short_row_lacks_adds_that_cell(self) -> None:
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        report_id = self._report_with_table([cell("A"), cell("B")], [[cell("a")]])
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        with page.expect_response(lambda response: response.request.method == "PUT"):
+            description.locator(".table-cell-input").nth(3).fill("b")
+        table = self._stored_table(report_id)
+        self.assertEqual([[run.text for item in row for run in item.runs] for row in table.rows], [["a", "b"]])
+
+    def test_pasting_many_lines_into_a_table_cell_is_registered_saved_and_kept(self) -> None:
+        """24 lines of 14 characters pasted into a cell. However many lines it brings, a paste is one change. The page has
+        to take every line into the report it sends, the server has to store them, the cell has to show them all, and a
+        reload has to bring them back. Pastes after that save have to reach the file too, because a save replaces the
+        cell objects the page edits."""
+        lines = [f"{number:02d}_abcdefghijk" for number in range(1, 25)]
+        self.assertEqual({len(line) for line in lines}, {14})
+        pasted = "\n".join(lines)
+        cell = lambda text: ListItem(runs=[Run(text=text)] if text else [])
+        report_id = self._report_with_table([cell("Hosts"), cell("Notes")], [[cell(""), cell("")], [cell(""), cell("")]])
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        page.wait_for_selector("#issue-count")
+        description = page.locator('.content-block[data-content-type="description"]')
+        box = lambda row, column: description.locator(f'.table-cell-input[data-row="{row}"][data-column="{column}"]')
+        join = lambda item: "".join(run.text for run in item.runs)
+
+        box(0, 0).click()
+        with page.expect_response(lambda response: response.request.method == "PUT") as saving:
+            self._paste_from_clipboard(pasted)
+        sent = next(
+            fragment for finding in saving.value.request.post_data_json["vulnerabilities"]
+            for content in finding["contents"] for fragment in content["fragments"] if fragment["frag_id"] == "f_seeded_table"
+        )
+        self.assertEqual("".join(run["text"] for run in sent["rows"][0][0]["runs"]), pasted, "the page did not register every line")
+        self.assertEqual(saving.value.status, 200)
+        expect(box(0, 0)).to_have_value(pasted)
+        self.assertLessEqual(box(0, 0).evaluate("node => node.scrollHeight - node.clientHeight"), 1, "the cell clips its lines")
+        self.assertEqual(join(self._stored_table(report_id).rows[0][0]), pasted)
+
+        page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        for row, column in ((0, 1), (1, 0)):
+            box(row, column).click()
+            with page.expect_response(lambda response: response.request.method == "PUT"):
+                self._paste_from_clipboard(pasted)
+            page.wait_for_selector('#save-button[data-save-state="saved"]', timeout=10_000)
+        table = self._stored_table(report_id)
+        self.assertEqual([[join(item) for item in row] for row in table.rows], [[pasted, pasted], [pasted, ""]])
+
+        page.reload()
+        page.wait_for_selector("#issue-count")
+        for row, column in ((0, 0), (0, 1), (1, 0)):
+            expect(box(row, column)).to_have_value(pasted)
+
+    def test_the_cursor_stays_in_the_table_after_a_row_or_column_is_added_or_removed(self) -> None:
+        """Each of these redraws the table, and the control that was used goes with it, which left the cursor
+        on the page body."""
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        header = [cell("A"), cell("B"), cell("C")]
+        rows = [[cell(f"{column}{number}") for column in "abc"] for number in (1, 2, 3)]
+        first_box = lambda row: row.locator(".table-cell-input").first
+        cases = [
+            ("add row", lambda block: block.get_by_role("button", name="Add row").click(), lambda table: first_box(table.locator("tbody tr").last)),
+            ("add column", lambda block: block.get_by_role("button", name="Add column").click(), lambda table: table.locator("thead .table-cell-input").last),
+            ("remove the first row", lambda block: block.get_by_role("button", name="Remove row 1").click(), lambda table: first_box(table.locator("tbody tr").first)),
+            ("remove the last row", lambda block: block.get_by_role("button", name="Remove row 3").click(), lambda table: first_box(table.locator("tbody tr").last)),
+            ("remove the first column", lambda block: block.locator(".table-remove-select").select_option("0"), lambda table: table.locator("thead .table-cell-input").first),
+            ("remove the last column", lambda block: block.locator(".table-remove-select").select_option("2"), lambda table: table.locator("thead .table-cell-input").last),
+        ]
+        page = self.page
+        for name, act, expected in cases:
+            with self.subTest(control=name):
+                report_id = self._report_with_table(header, rows)
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.wait_for_selector("#issue-count")
+                block = page.locator('.content-block[data-content-type="description"]')
+                act(block)
+                expect(expected(block.locator(".table-fragment"))).to_be_focused()
+
     def test_every_open_section_has_an_add_row_with_the_types_it_allows_in_one_order(self) -> None:
         report_id = self._report_with_every_section()
         page = self.page
@@ -8228,9 +8534,52 @@ class BrowserWorkflowTests(unittest.TestCase):
         def no_findings(report, finding):
             report.vulnerabilities = []
 
+        # A table is complete when it has a header row and a full grid with text in every cell. The editor
+        # draws it that way, so these are the shapes where a rule that judges the drawing and one that judges
+        # the saved table part company, and the characters that JavaScript's trim() and Python's strip() treat
+        # differently.
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+
+        def add_table(finding, header, rows):
+            description = next(content for content in finding.contents if content.type == "description")
+            description.fragments.append(TableFragment(frag_id="f_contract_table", type="table", header=header, rows=rows))
+
+        def table_complete(report, finding):
+            add_table(finding, [cell("A"), cell("B")], [[cell("a"), cell("b")]])
+
+        def table_header_only(report, finding):
+            add_table(finding, [cell("A"), cell("B")], [])
+
+        def table_blank_cell(report, finding):
+            add_table(finding, [cell("A"), cell("B")], [[cell("a"), cell("  ")]])
+
+        def table_short_row(report, finding):
+            add_table(finding, [cell("A"), cell("B")], [[cell("a")]])
+
+        def table_without_header(report, finding):
+            add_table(finding, [], [[cell("a"), cell("b")]])
+
+        def table_without_cells(report, finding):
+            add_table(finding, [], [])
+
+        def table_cell_of_a_byte_order_mark(report, finding):
+            add_table(finding, [cell("A")], [[cell("\ufeff")]])
+
+        def table_cell_of_a_unit_separator(report, finding):
+            add_table(finding, [cell("A")], [[cell("\x1f")]])
+
+        def table_cell_of_a_next_line(report, finding):
+            add_table(finding, [cell("A")], [[cell("\x85")]])
+
+        def table_cell_of_a_control_character(report, finding):
+            add_table(finding, [cell("A")], [[cell("\x01")]])
+
+        def table_cell_between_control_characters(report, finding):
+            add_table(finding, [cell("A")], [[cell("\x01a\x01")]])
+
         # Scope-rule drift is invisible here. A finding with no location cannot open the editor, so
         # the loop below never reaches the comparison. Those cases live in the Findings-gate test.
-        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, untouched_supporting_slot, started_supporting_image_without_an_upload, untested_environment_image, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss, no_findings]
+        cases = [unchanged, blank_caption, placeholder_text, no_affected_location, missing_rating, untouched_supporting_slot, started_supporting_image_without_an_upload, untested_environment_image, default_conclusion_left_in_place, conclusion_section_emptied, quoted_step_before_default_conclusion, duplicate_additional_locations, carried_section_holding_work, previous_proof_image_without_an_environment, asia_without_cvss, asia_with_cvss, no_findings, table_complete, table_header_only, table_blank_cell, table_short_row, table_without_header, table_without_cells, table_cell_of_a_byte_order_mark, table_cell_of_a_unit_separator, table_cell_of_a_next_line, table_cell_of_a_control_character, table_cell_between_control_characters]
         for case in cases:
             with self.subTest(case=case.__name__):
                 report_id = self.ready_report(include_finding=True)
@@ -8259,6 +8608,36 @@ class BrowserWorkflowTests(unittest.TestCase):
                     not server_issues,
                     f"{case.__name__}: generate button does not match server readiness",
                 )
+
+    def test_readiness_does_not_depend_on_which_finding_has_been_drawn(self) -> None:
+        """The editor draws only the open finding. Padding a table while drawing it gave a finding nobody
+        had opened a different answer from the one it gave once opened."""
+        report_id = self.ready_report(include_finding=True)
+        report, first = self._complete_finding(report_id)
+        first.severity = "high"
+        later = first.model_copy(deep=True)
+        later.uid = "v_opened_later"
+        later.title = "Opened later"
+        later.severity = "low"
+        for content in later.contents:
+            for fragment in content.fragments:
+                fragment.frag_id = f"{fragment.frag_id}_later"
+        description = next(content for content in later.contents if content.type == "description")
+        description.fragments = [TableFragment(frag_id="f_later_table", type="table", header=[], rows=[])]
+        report.vulnerabilities.append(later)
+        acceptance.provision(report)
+        main.workspace.save(report)
+        self.assertEqual(generation_issues(main.workspace.load(report_id)), ["Opened later: every table cell is required"])
+
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/edit")
+        count = page.locator("#issue-count")
+        expect(count).to_have_attribute("data-state", "issues")
+        before = count.inner_text()
+        page.locator(".finding-nav", has_text="Opened later").click()
+        expect(page.locator(".finding-nav.active")).to_contain_text("Opened later")
+        expect(count).to_have_attribute("data-state", "issues")
+        expect(count).to_have_text(before)
 
     def test_additional_information_shows_only_the_fields_that_apply(self) -> None:
         """The section has no visibility rule of its own. It appears when at least one of its fields

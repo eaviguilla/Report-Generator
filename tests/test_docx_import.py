@@ -488,6 +488,45 @@ class FragmentRecognitionTests(unittest.TestCase):
             finding = payload["vulnerabilities"][0]
             self.assertEqual((finding["cvss_score"], finding["cvss_vector"]), ("", ""))
 
+    def test_a_table_headed_like_a_template_table_does_not_stop_or_change_the_import(self) -> None:
+        """The importer finds the Component and Section tables by their header, and a tester's table can be headed
+        anything. Each master lacks one of them, and the Section table of the Asia masters sits after the findings."""
+        resources = Path(__file__).resolve().parent.parent / "resources"
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        text = lambda item: "".join(run["text"] for run in item["runs"])
+        every_lookup = ("Component", "Section", "Findings", "Limitations", "User Roles", "Environment", "URL(s) in Scope", "API Routes")
+        variants = (
+            ("web", "JH", "https://prod.example.test", "", every_lookup),
+            ("api", "Asia", "/v1/accounts/{id}", "", ("Component", "Section")),
+            ("thick_client", "JH", "Acme.exe", "Desktop client", ("Component", "Section")),
+            ("mobile", "Asia", "Acme.ipa", "iOS client", ("Component", "Section")),
+        )
+        for channel, segment, value, description, headers in variants:
+            for header in headers:
+                with self.subTest(channel=channel, segment=segment, header=header), tempfile.TemporaryDirectory() as temporary_directory:
+                    folder = Path(temporary_directory)
+                    report = self._report(folder)
+                    report.engagement.segment = segment
+                    report.engagement.tested_channels = [channel]
+                    report.scope_targets = [ScopeTarget(target_id="t_scope", environment="production", channel=channel, value=value, description=description)]
+                    report.vulnerabilities[0].scope.target_ids = ["t_scope"]
+                    if segment == "Asia":
+                        report.vulnerabilities[0].cvss_score = "8.1"
+                        report.vulnerabilities[0].cvss_vector = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+                    section = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+                    section.fragments.append(TableFragment(frag_id="f_collide", type="table", header=[cell(header), cell("Notes")], rows=[[cell("a"), cell("b")]]))
+                    data = render_report_docx(report, main_template_path(report, resources), folder)
+
+                    for mode in ("editable", "retest"):
+                        payload, _evidence, _summary = parse_report_docx(data, mode=mode)
+                        imported = payload["vulnerabilities"][0]
+                        self.assertEqual(payload["scope_targets"][0]["value"], value)
+                        self.assertEqual(imported["cvss_score"], "8.1" if segment == "Asia" else "")
+                    payload, _evidence, _summary = parse_report_docx(data, mode="editable")
+                    table = next(fragment for content in payload["vulnerabilities"][0]["contents"] if content["type"] == "description" for fragment in content["fragments"] if fragment["type"] == "table")
+                    self.assertEqual([text(item) for item in table["header"]], [header, "Notes"])
+                    self.assertEqual([[text(item) for item in row] for row in table["rows"]], [["a", "b"]])
+
     def test_a_report_with_no_findings_imports_as_a_draft_with_none(self) -> None:
         """Next year's pentest starts by importing this one, and no finding section claims the
         placeholder rows a no-findings report prints."""
@@ -1435,6 +1474,123 @@ class FindingRowTests(unittest.TestCase):
                 ReportImportError, r'Proof of Concept section of "Authorization bypass":.*merged',
             ):
                 parse_report_docx(_edited(base_render(), merge), mode="editable")
+
+    def test_table_cell_content_the_importer_cannot_read_is_refused_and_not_dropped(self) -> None:
+        """A generated report can be edited in Word, and a cell can then hold things the app's plain text boxes
+        cannot. Reading such a cell used to drop that text without a word, where editable import promises to refuse."""
+        def run_with(text_node):
+            run = OxmlElement("w:r")
+            run.append(text_node)
+            return run
+
+        def text_node(text):
+            node = OxmlElement("w:t")
+            node.text = text
+            return node
+
+        def body_cell(document):
+            return _table_starting(document, "Header").cell(1, 0)
+
+        def nested_table(document):
+            body_cell(document).add_table(rows=1, cols=1).cell(0, 0).text = "Nested text"
+
+        def content_control(document):
+            control, content = OxmlElement("w:sdt"), OxmlElement("w:sdtContent")
+            content.append(run_with(text_node("Controlled")))
+            control.append(content)
+            body_cell(document).paragraphs[0]._p.append(control)
+
+        def tracked_insertion(document):
+            insertion = OxmlElement("w:ins")
+            for name, value in (("w:id", "901"), ("w:author", "Reviewer"), ("w:date", "2026-01-01T00:00:00Z")):
+                insertion.set(qn(name), value)
+            insertion.append(run_with(text_node("Tracked")))
+            body_cell(document).paragraphs[0]._p.append(insertion)
+
+        def symbol(document):
+            mark = OxmlElement("w:sym")
+            mark.set(qn("w:font"), "Wingdings")
+            mark.set(qn("w:char"), "F0FC")
+            body_cell(document).paragraphs[0]._p.append(run_with(mark))
+
+        def list_in_cell(document):
+            body_cell(document).paragraphs[0]._p.get_or_add_pPr().get_or_add_numPr().get_or_add_numId().val = 5
+
+        def simple_field(document):
+            field = OxmlElement("w:fldSimple")
+            field.set(qn("w:instr"), " PAGE ")
+            field.append(run_with(text_node("7")))
+            body_cell(document).paragraphs[0]._p.append(field)
+
+        def row_with_grid(tag):
+            def edit(document):
+                properties = _table_starting(document, "Header").rows[1]._tr.get_or_add_trPr()
+                setting = OxmlElement(tag)
+                setting.set(qn("w:val"), "1")
+                properties.append(setting)
+            return edit
+
+        cases = [
+            ("a nested table", nested_table, r"another table inside a cell"),
+            ("a content control", content_control, r"content control"),
+            ("a tracked insertion", tracked_insertion, r"tracked change"),
+            ("a symbol", symbol, r"symbol character"),
+            ("a list", list_in_cell, r"numbered or bulleted list"),
+            ("a field around the text", simple_field, r"text the app cannot read back: \"Cell7\""),
+            ("a row that starts late", row_with_grid("w:gridBefore"), r"starts or ends partway"),
+            ("a row that ends early", row_with_grid("w:gridAfter"), r"starts or ends partway"),
+        ]
+        for name, edit, message in cases:
+            for mode in ("editable", "retest"):
+                with self.subTest(case=name, mode=mode), self.assertRaisesRegex(ReportImportError, r'"Authorization bypass":.*' + message):
+                    parse_report_docx(_edited(base_render(), edit), mode=mode)
+
+    def test_a_tracked_deletion_and_a_hyperlink_inside_a_table_cell_still_import(self) -> None:
+        """Deleted text is not visible, and a hyperlink's text is read, so neither is a reason to refuse."""
+        def edit(document):
+            paragraph = _table_starting(document, "Header").cell(1, 0).paragraphs[0]._p
+            deletion = OxmlElement("w:del")
+            for name, value in (("w:id", "902"), ("w:author", "Reviewer"), ("w:date", "2026-01-01T00:00:00Z")):
+                deletion.set(qn(name), value)
+            run = OxmlElement("w:r")
+            removed = OxmlElement("w:delText")
+            removed.text = "Removed"
+            run.append(removed)
+            deletion.append(run)
+            paragraph.append(deletion)
+            link = OxmlElement("w:hyperlink")
+            link_run = OxmlElement("w:r")
+            link_text = OxmlElement("w:t")
+            link_text.text = " linked"
+            link_run.append(link_text)
+            link.append(link_run)
+            paragraph.append(link)
+
+        for mode in ("editable", "retest"):
+            with self.subTest(mode=mode):
+                payload, _evidence, _summary = parse_report_docx(_edited(base_render(), edit), mode=mode)
+                finding = payload["vulnerabilities"][0]
+                tables = [fragment for content in finding["contents"] for fragment in content["fragments"] if fragment["type"] == "table"]
+                self.assertEqual("".join(run["text"] for run in tables[0]["rows"][0][0]["runs"]), "Cell linked")
+
+    def test_formatted_and_multi_line_table_cells_still_import_as_before(self) -> None:
+        def edit(document):
+            cell = _table_starting(document, "Header").cell(1, 0)
+            paragraph = cell.paragraphs[0]
+            for run in paragraph.runs:
+                run.text = ""
+            paragraph.add_run("Bold ").bold = True
+            paragraph.add_run("italic ").italic = True
+            paragraph.add_run("underlined").underline = True
+            cell.add_paragraph("Second line")
+
+        payload, _evidence, _summary = parse_report_docx(_edited(base_render(), edit), mode="editable")
+        proof = next(content for content in payload["vulnerabilities"][0]["contents"] if content["type"] == "proof_of_concept")
+        table = next(fragment for fragment in proof["fragments"] if fragment["type"] == "table")
+        runs = table["rows"][0][0]["runs"]
+        self.assertEqual("".join(run["text"] for run in runs), "Bold italic underlined\nSecond line")
+        flagged = {run["text"]: [flag for flag in ("bold", "italic", "underline") if run.get(flag)] for run in runs if run["text"].strip()}
+        self.assertEqual((flagged["Bold "], flagged["italic "], flagged["underlined"], flagged["Second line"]), (["bold"], ["italic"], ["underline"], []))
 
     def test_blank_paragraphs_inside_table_cells_keep_their_line_breaks(self) -> None:
         for label, lines in (("leading", ["", "Cell"]), ("middle", ["First", "", "Last"]), ("trailing", ["Cell", ""])):

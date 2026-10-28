@@ -553,6 +553,19 @@ class SaveModuleTests(unittest.TestCase):
                 self.assertEqual(len(self.saves), sent + 1)
                 self.assertEqual(self.saves[-1]["engagement"]["app_owner"], "Before" if planted else report_json()["engagement"]["app_owner"])
 
+    def test_an_undo_history_from_before_another_tabs_save_is_dropped_when_the_page_loads(self) -> None:
+        """Undo puts back whole arrays, such as a table's rows. A history carried over a reload would lay this
+        tab's old copy of them over what another tab saved in between, and no conflict would warn the tester."""
+        saved = self.step_made_on("setup", "Typed on Setup")
+        self.assertEqual(len(self.history()["undoHistory"]), 1)
+        self.page.goto(page_url("findings"))
+
+        # Another tab saved a minute later, so the server now holds a newer revision than this tab last saw.
+        self.start(report_json(**{**saved, "saved_at": START.replace(minute=1).isoformat()}), "findings")
+
+        self.assertEqual(self.history(), {}, "the undo history survived another tab's save")
+        expect(self.page.locator("#undo-button")).to_be_disabled()
+
     def test_a_refused_undo_still_opens_the_steps_page_with_its_recovery_copy(self) -> None:
         saved = self.step_made_on("setup", "Typed on Setup", in_field=True)
         self.page.goto(page_url("findings"))

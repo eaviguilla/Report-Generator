@@ -36,11 +36,16 @@ from .docx_captions import add_native_image_captions, center_paragraph, paragrap
 from .docx_import import FINDING_HEADING_STYLE, INSTANCE_PREFIX, NO_FINDINGS_TITLE
 from .docx_components import (
     RATING_FONT_COLORS,
+    UNRESOLVED_MARKERS,
+    USER_TEXT_MARK,
     clone_component_elements,
     replace_component_token,
     replace_component_token_runs,
     replace_pattern_across_text_nodes,
+    restore_user_text,
     set_page_break_before,
+    user_text,
+    xml_safe,
 )
 from .models import CHANNEL_LABELS, CHANNELS, COMPONENT_CHANNELS, REPORT_TYPE_LABELS, STATUS_LABELS
 from .report_service import PLACEHOLDER_TEXT, affected_environments, content_types_for_status, finding_is_complete, fragment_applies, is_default_status_conclusion, location_lines, report_name_for, setup_issues
@@ -56,15 +61,6 @@ PLAIN_METADATA_TOKENS = {"app-name", "app-owner", "tester-name"}
 # The one token whose value is free text. It goes in after every other token, so no later pass can
 # rewrite a word of it that happens to spell another token.
 REPORT_NAME_TOKEN = "report-name"
-UNRESOLVED_MARKERS = (
-    "-vuln",
-    "-affected-location",
-    "-fragments-here",
-    "-step-1-here",
-    "-step-2-here",
-    "-images-and-caption-here",
-    "brief-explanation-here",
-)
 CELL_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
 SEVERITY_COMPONENT_FILES = {
     "critical": "critical_severity.docx",
@@ -158,10 +154,8 @@ def generation_issues(report: Report) -> list[str]:
                         issues.append(f"{label}: {'/'.join(missing)} required for image fragment")
                 elif isinstance(fragment, CodeFragment) and not fragment.text.strip():
                     issues.append(f"{label}: {fragment.type} text is required")
-                elif isinstance(fragment, TableFragment):
-                    cells = [*fragment.header, *(cell for row in fragment.rows for cell in row)]
-                    if not cells or any(not _runs_have_text(cell.runs) for cell in cells):
-                        issues.append(f"{label}: every table cell is required")
+                elif isinstance(fragment, TableFragment) and not _table_is_complete(fragment):
+                    issues.append(f"{label}: every table cell is required")
                 if PLACEHOLDER_TEXT.search(_fragment_text(fragment)):
                     issues.append(f"{label}: replace placeholder text in {content.type}")
     return list(dict.fromkeys(issues))
@@ -200,6 +194,9 @@ def render_report_docx(
     _replace_metadata(document, report)
     if not _has_exact_body_token(document, "findings"):
         raise ReportGenerationError(f"Template has no {{{{findings}}}} anchor paragraph: {template_path}")
+    # Found now, while every table in the document is the template's. A table a tester puts in a finding can be
+    # headed anything, and the Asia masters keep this one after the findings.
+    cvss_table = _optional_table(document, "Section")
     rendered = _populate_component_findings(
         document,
         report,
@@ -209,18 +206,31 @@ def render_report_docx(
     )
     # After the findings so the headings exist to bookmark, before the caption pass so its
     # mark-every-field-dirty sweep reaches the references this writes.
-    _populate_cvss_table(document, rendered)
+    _populate_cvss_table(cvss_table, rendered)
     add_native_image_captions(document)
     unresolved = _unresolved_placeholders(document)
     if unresolved:
         raise ReportGenerationError(f"Unresolved template placeholders: {', '.join(unresolved)}")
+    _restore_user_text(document)
     output = BytesIO()
     document.save(output)
     return output.getvalue()
 
 
+# What leaves text looking empty: everything JavaScript's trim() removes and everything Python's strip() removes,
+# plus the control characters XML cannot hold, which generation drops. The browser's hasText holds the same list.
+_BLANK_TEXT = re.compile(r"[\x00-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff\ufffe\uffff\ud800-\udfff]*")
+
+
 def _runs_have_text(runs: list[Run]) -> bool:
-    return any(run.text.strip() for run in runs)
+    return any(not _BLANK_TEXT.fullmatch(run.text) for run in runs)
+
+
+def _table_is_complete(fragment: TableFragment) -> bool:
+    """A table needs a header row and a full grid with text in every cell, because that is what the editor draws
+    and what Word prints. The browser's tableIsComplete holds the same rule."""
+    columns = max([len(fragment.header), *(len(row) for row in fragment.rows), 1])
+    return all(len(row) == columns and all(_runs_have_text(cell.runs) for cell in row) for row in (fragment.header, *fragment.rows))
 
 
 def _fragment_text(fragment) -> str:
@@ -429,11 +439,12 @@ def _wrap_long_value(value: str, limit: int) -> list[str]:
 
 def _add_wrapped_run(paragraph, value: str, limit: int | None) -> None:
     """Add the value as one run, breaking inside it rather than starting a new bullet."""
+    value = xml_safe(value)
     segments = _wrap_long_value(value, limit) if limit else [value]
-    run = paragraph.add_run(segments[0])
+    run = paragraph.add_run(user_text(segments[0]))
     for segment in segments[1:]:
         run.add_break()
-        run.add_text(segment)
+        run.add_text(user_text(segment))
 
 
 def _set_cell_lines(cell, lines: list[str], *, wrap: int | None = None) -> None:
@@ -629,10 +640,9 @@ def _reference_field(paragraph: Paragraph, bookmark: str) -> None:
         paragraph._p.append(run)
 
 
-def _populate_cvss_table(document: DocumentType, rendered: list[tuple[Vulnerability, str]]) -> None:
+def _populate_cvss_table(table: Table | None, rendered: list[tuple[Vulnerability, str]]) -> None:
     """Fill the Asia-only findings table. Absent from the other two templates, and from any report
     the scripts render against MAIN.docx, so the table's presence is what selects this."""
-    table = _optional_table(document, "Section")
     if table is None:
         return
     prototype = _strip_data_rows(table)
@@ -1307,7 +1317,7 @@ def _render_table_component(
         table_element.remove(row)
     _set_component_table_grid(table_element, widths)
     if fragment.header:
-        table_element.append(_resize_component_row(source_rows[0], widths))
+        table_element.append(_resize_component_row(source_rows[0], widths, header=True))
     for _ in fragment.rows:
         table_element.append(_resize_component_row(source_rows[1], widths))
     table = Table(table_element, document._body)
@@ -1361,7 +1371,25 @@ def _set_component_table_grid(table, widths: list[int]) -> None:
     layout.set(qn("w:type"), "fixed")
 
 
-def _resize_component_row(source_row, widths: list[int]):
+def _keep_row_whole(row, *, repeat_as_header: bool) -> None:
+    """A row never splits across two pages, and a header row repeats at the top of each page its table runs onto.
+    table_fragment.docx sets neither, and the binary templates are not edited, so the code does."""
+    properties = row.find(qn("w:trPr"))
+    if properties is None:
+        properties = OxmlElement("w:trPr")
+        # Before the cells, and after an optional w:tblPrEx.
+        exceptions = row.find(qn("w:tblPrEx"))
+        if exceptions is not None:
+            exceptions.addnext(properties)
+        else:
+            row.insert(0, properties)
+    if properties.find(qn("w:cantSplit")) is None:
+        properties.append(OxmlElement("w:cantSplit"))
+    if repeat_as_header and properties.find(qn("w:tblHeader")) is None:
+        properties.append(OxmlElement("w:tblHeader"))
+
+
+def _resize_component_row(source_row, widths: list[int], *, header: bool = False):
     row = deepcopy(source_row)
     source_cells = list(source_row.iterchildren(qn("w:tc")))
     if not source_cells:
@@ -1383,6 +1411,7 @@ def _resize_component_row(source_row, widths: list[int]):
         cell_width.set(qn("w:type"), "dxa")
         cell_width.set(qn("w:w"), str(width))
         row.append(cell)
+    _keep_row_whole(row, repeat_as_header=header)
     return row
 
 
@@ -1552,8 +1581,24 @@ def _cached_image_fragment_format(template_path: str, modified_at: int):
 
 
 def _unresolved_placeholders(document: DocumentType) -> list[str]:
-    text = "\n".join(_element_text(root) for root in _document_roots(document))
+    """Template text that was never replaced. Text a tester typed carries marks that keep braces and markers inside
+    it from counting. Each paragraph is read on its own, and a line break reads as a space, so two pieces of text
+    that only sit next to each other because of how the document is built never join up into one."""
+    lines = []
+    for root in _document_roots(document):
+        for paragraph in root.iter(qn("w:p")):
+            pieces = (" " if node.tag == qn("w:br") else node.text or "" for node in paragraph.iter(qn("w:t"), qn("w:br")))
+            lines.append(re.sub(r"\s+", " ", "".join(pieces)))
+    text = "\n".join(lines)
     unresolved = set(re.findall(r"\{\{.*?\}\}", text))
     lower = text.casefold()
     unresolved.update(marker for marker in UNRESOLVED_MARKERS if marker in lower)
     return sorted(unresolved)
+
+
+def _restore_user_text(document: DocumentType) -> None:
+    """Take out the marks that kept the tester's text from being read as the template's own."""
+    for root in _document_roots(document):
+        for node in root.iter(qn("w:t")):
+            if node.text and USER_TEXT_MARK in node.text:
+                node.text = restore_user_text(node.text)

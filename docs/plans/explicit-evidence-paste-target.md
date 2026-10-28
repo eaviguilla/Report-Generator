@@ -265,3 +265,11 @@ commit rather than swept in with someone else's.
 **2026-09-21 follow-up:** Step 3's `event.defaultPrevented` guard was removed because it dropped
 an image pasted from a focused rich-text editor; upload completion now also removes both replaced
 and deleted-target evidence records when no remaining fragment references them.
+
+**2026-10-28 follow-up:** a clipboard that holds text beside the picture is a text paste. Cells copied from
+Excel carry a picture of themselves next to their text. The page took that for a screenshot, so with an
+evidence image armed the paste into a text box was cancelled and the picture replaced the screenshot, and
+with none armed the text arrived under the evidence notice. `pastesAsText` now makes both the tile and the
+document listener step aside when a text box has the cursor and `text/plain` is not blank. A picture with no
+text still goes to the armed image from anywhere, so "images by the armed image, text by focus" holds except
+for a clipboard that carries both. Pinned by `test_text_pasted_with_a_picture_goes_into_the_text_box_and_leaves_the_screenshot_alone`.

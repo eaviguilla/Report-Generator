@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import threading
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -9,7 +11,8 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from lxml import etree
 
-from app.docx_components import clone_component_elements, replace_component_token
+from app.docx_components import clone_component_elements, replace_component_token, replace_component_token_runs, replace_pattern_across_text_nodes, restore_user_text, user_text
+from app.models import Run
 from tests.support import numbering_details
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -93,6 +96,69 @@ class DocxComponentTests(unittest.TestCase):
         separate = numbered()
         self.assertNotEqual(separate[0], first[0])
         self.assertNotEqual(separate[1], first[1])
+
+    @staticmethod
+    def _finishes(call, seconds: float = 5.0) -> bool:
+        """Whether call() returns in time, so a loop that never ends fails the test instead of hanging the suite."""
+        worker = threading.Thread(target=call, daemon=True)
+        worker.start()
+        worker.join(seconds)
+        return not worker.is_alive()
+
+    def test_a_value_that_spells_its_own_token_is_written_once_and_the_replacement_ends(self) -> None:
+        """The loop looked for the next token from the start of the paragraph, so text it had just written that
+        spelled the token was found and replaced again, for ever."""
+        runs = lambda value: lambda element: replace_component_token_runs([element], "x", [Run(text=value)])
+        plain = lambda value: lambda element: replace_component_token([element], "x", value)
+        bare_word = lambda value: lambda element: replace_pattern_across_text_nodes(element, re.compile(r"(?<![\w-])name(?![\w-])"), value)
+        cases = [
+            ("rich runs", "Before {{x}} after {{ x }}.", runs("a {{x}} b"), "Before a {{x}} b after a {{x}} b."),
+            ("exactly the token", "{{x}}", runs("{{x}}"), "{{x}}"),
+            ("one string", "Before {{x}} after {{ x }}.", plain("a {{x}} b"), "Before a {{x}} b after a {{x}} b."),
+            ("a bare word", "Hello name and name.", bare_word("my name"), "Hello my name and my name."),
+        ]
+        for name, template, replace, expected in cases:
+            with self.subTest(name):
+                paragraph = Document().add_paragraph(template)
+                self.assertTrue(self._finishes(lambda: replace(paragraph._p)), "the replacement re-matched the text it had just written")
+                self.assertEqual(restore_user_text(paragraph.text), expected)
+
+    def test_marks_keep_braces_and_markers_out_of_the_check_and_come_out_exactly(self) -> None:
+        """What a tester typed goes in with a mark inside each pair of braces and each unfinished-template marker.
+        Taking the marks out has to give back exactly what was typed, even when the tester typed a mark."""
+        for typed in ("{{7*7}}", "}}}", "{{{x}}}", "non-vulnerable", "Brief-Explanation-Here", "a\ue000b", "\ue000m", "\ue000s{{", "plain"):
+            with self.subTest(typed=typed):
+                hidden = user_text(typed)
+                self.assertNotIn("{{", hidden)
+                self.assertNotIn("}}", hidden)
+                self.assertNotIn("-vuln", hidden.casefold())
+                self.assertEqual(restore_user_text(hidden), typed)
+        self.assertEqual(user_text("plain text, one { and one }"), "plain text, one { and one }", "text with nothing to hide was changed")
+
+    def test_a_token_split_across_runs_is_still_replaced(self) -> None:
+        """The loop now carries on from where it wrote, so a token the template split over runs, and one that
+        follows a replacement in the same paragraph, must both still be found."""
+        paragraph = Document().add_paragraph()
+        for piece in ("A {{", "x}} then {", "{x}} end"):
+            paragraph.add_run(piece)
+        replace_component_token_runs([paragraph._p], "x", [Run(text="one"), Run(text="two", bold=True)])
+        self.assertEqual(paragraph.text, "A onetwo then onetwo end")
+
+    def test_characters_xml_cannot_hold_are_dropped_where_text_is_written(self) -> None:
+        """lxml refuses these, which made Generate fail for text a tester had pasted, and nothing named it."""
+        typed = "a\x01b\x1bc\x00d\ud800e\ufffff\x0bg"
+        runs = lambda element: replace_component_token_runs([element], "x", [Run(text=typed)])
+        plain = lambda element: replace_component_token([element], "x", typed)
+        for name, replace in (("rich runs", runs), ("one string", plain)):
+            with self.subTest(name):
+                paragraph = Document().add_paragraph("{{x}}")
+                replace(paragraph._p)
+                self.assertEqual(paragraph.text, "abcdefg")
+
+    def test_a_line_break_a_tab_and_a_carriage_return_survive_the_character_filter(self) -> None:
+        paragraph = Document().add_paragraph("{{x}}")
+        replace_component_token_runs([paragraph._p], "x", [Run(text="one\r\ntwo\rthree\tfour\nfive")])
+        self.assertEqual(paragraph.text, "one\ntwo\nthree\tfour\nfive")
 
     @staticmethod
     def _run_formatting(paragraph) -> list[str | None]:

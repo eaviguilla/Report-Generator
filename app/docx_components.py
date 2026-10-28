@@ -33,6 +33,49 @@ class ComponentCompositionError(ValueError):
     """Raised when a DOCX component cannot be safely merged."""
 
 
+# Characters XML 1.0 cannot hold. lxml refuses them, so text a tester pasted would stop Generate with an error that
+# names nothing. They are dropped where text is written into a document.
+_XML_INVALID = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+# Text of the template that means it was left unfinished. Generation stops when any survives in the finished document.
+UNRESOLVED_MARKERS = (
+    "-vuln",
+    "-affected-location",
+    "-fragments-here",
+    "-step-1-here",
+    "-step-2-here",
+    "-images-and-caption-here",
+    "brief-explanation-here",
+)
+# Text a tester types must come out as typed, but the leftover-token check would take two things in it for the
+# template's own: a pair of braces, and a marker above. A mark goes inside each while the document is built, and
+# restore_user_text takes the marks out again once the check has run. A mark the tester typed is escaped first, so
+# the round trip is exact.
+USER_TEXT_MARK = "\ue000"
+_HIDDEN_FROM_THE_CHECK = re.compile(
+    "|".join([r"(?<=\{)(?=\{)", r"(?<=\})(?=\})", *(re.escape(marker) for marker in UNRESOLVED_MARKERS)]),
+    re.IGNORECASE,
+)
+_USER_TEXT_MARKS = re.compile(f"{USER_TEXT_MARK}([sm])")
+
+
+def xml_safe(text: str) -> str:
+    return _XML_INVALID.sub("", text)
+
+
+def user_text(text: str) -> str:
+    """Text a tester typed, ready to be written into a document."""
+    def hide(match: re.Match) -> str:
+        found = match.group()
+        return f"{USER_TEXT_MARK}m" if not found else f"{found[0]}{USER_TEXT_MARK}m{found[1:]}"
+
+    return _HIDDEN_FROM_THE_CHECK.sub(hide, xml_safe(text).replace(USER_TEXT_MARK, f"{USER_TEXT_MARK}s"))
+
+
+def restore_user_text(text: str) -> str:
+    return _USER_TEXT_MARKS.sub(lambda match: USER_TEXT_MARK if match.group(1) == "s" else "", text)
+
+
 def clone_component_elements(
     document: DocumentType,
     component_path: Path,
@@ -258,12 +301,16 @@ def replace_pattern_across_text_nodes(
     font_size_pt: int | None = None,
 ) -> None:
     """Replace split-run paragraph text while preserving its source formatting."""
+    replacement = user_text(replacement)
     nodes = list(paragraph.iter(qn("w:t")))
+    # Text just written is the tester's, so each search starts after it, as in _replace_pattern_with_runs.
+    resume = 0
     while nodes:
         text = "".join(node.text or "" for node in nodes)
-        match = pattern.search(text)
+        match = pattern.search(text, resume)
         if not match:
             return
+        tail_length = len(text) - match.end()
         positions = []
         offset = 0
         for node in nodes:
@@ -287,6 +334,7 @@ def replace_pattern_across_text_nodes(
             nodes[end_index].text = suffix
         for node in (nodes[start_index], nodes[end_index]):
             _preserve_text_spaces(node)
+        resume = len("".join(node.text or "" for node in nodes)) - tail_length
 
 
 def _set_text_node_color(text_node, font_color: RGBColor) -> None:
@@ -328,11 +376,15 @@ def _set_text_node_size(text_node, font_size_pt: int) -> None:
 
 def _replace_pattern_with_runs(paragraph, pattern: re.Pattern, replacement_runs: list[Run]) -> None:
     nodes = list(paragraph.iter(qn("w:t")))
+    # Text just written is the tester's, so each search starts after it. Searching from the top again would find a
+    # value that spells the token and replace it for ever.
+    resume = 0
     while nodes:
         text = "".join(node.text or "" for node in nodes)
-        match = pattern.search(text)
+        match = pattern.search(text, resume)
         if not match:
             return
+        tail_length = len(text) - match.end()
         positions = []
         offset = 0
         for node in nodes:
@@ -360,17 +412,17 @@ def _replace_pattern_with_runs(paragraph, pattern: re.Pattern, replacement_runs:
             start_node.text = prefix
             for source in source_runs:
                 generated_run = deepcopy(base_run)
-                _set_run_text(generated_run, source.text)
+                _set_run_text(generated_run, user_text(source.text))
                 _apply_run_formatting(generated_run, source)
                 insertion_point.addnext(generated_run)
                 insertion_point = generated_run
         elif source_runs:
             first, *remaining = source_runs
-            _set_run_text(start_run, first.text)
+            _set_run_text(start_run, user_text(first.text))
             _apply_run_formatting(start_run, first)
             for source in remaining:
                 generated_run = deepcopy(base_run)
-                _set_run_text(generated_run, source.text)
+                _set_run_text(generated_run, user_text(source.text))
                 _apply_run_formatting(generated_run, source)
                 insertion_point.addnext(generated_run)
                 insertion_point = generated_run
@@ -387,6 +439,7 @@ def _replace_pattern_with_runs(paragraph, pattern: re.Pattern, replacement_runs:
                 _set_run_text(suffix_run, suffix)
                 insertion_point.addnext(suffix_run)
         nodes = list(paragraph.iter(qn("w:t")))
+        resume = len("".join(node.text or "" for node in nodes)) - tail_length
 
 
 def _parent_run(node):
@@ -400,7 +453,7 @@ def _set_run_text(run, text: str) -> None:
     for child in list(run):
         if child.tag != qn("w:rPr"):
             run.remove(child)
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = xml_safe(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
     for index, line in enumerate(lines):
         if index:
             run.append(OxmlElement("w:br"))

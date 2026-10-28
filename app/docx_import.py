@@ -329,6 +329,33 @@ def _image_width_mm(paragraph, data: bytes) -> float:
     return round(width / 36_000, 2)
 
 
+def _refuse_unreadable_table_content(table) -> None:
+    """The app's table cells hold plain text. _cell_runs reads only a cell's own paragraphs and their direct runs, so
+    anything else in a cell used to be dropped without a word. Each kind of it is refused by name."""
+    root = table._tbl
+    if root.xpath(".//w:tc//w:tbl"):
+        raise ReportImportError("A table has another table inside a cell, which the app cannot represent. Move the nested table outside the cell before importing.")
+    if root.xpath(".//w:sdt"):
+        raise ReportImportError("A table cell holds a content control, which the app cannot represent. Remove the control and keep its text in the cell before importing.")
+    if root.xpath(".//w:ins | .//w:moveTo"):
+        raise ReportImportError("A table cell holds a tracked change, which the app does not read. Accept or reject the tracked changes before importing.")
+    if root.xpath(".//w:sym"):
+        raise ReportImportError("A table cell holds a symbol character, which the app cannot represent. Replace it with ordinary text before importing.")
+    if root.xpath(".//w:tc/w:p/w:pPr/w:numPr/w:numId[@w:val != '0']"):
+        raise ReportImportError("A table cell holds a numbered or bulleted list, which the app cannot represent. Write the items as plain lines before importing.")
+    if root.xpath(".//w:trPr/w:gridBefore[@w:val != '0'] | .//w:trPr/w:gridAfter[@w:val != '0']"):
+        raise ReportImportError("A table has a row that starts or ends partway across the grid, which the app cannot represent. Add the missing cells before importing.")
+
+
+def _read_whole_cell(cell) -> list[dict]:
+    """A cell's runs, refusing a cell whose text the read would miss (a simple field, a smart tag and the like)."""
+    runs = _cell_runs(cell)
+    present = " ".join("".join(node.text or "" for node in cell._tc.iter(qn("w:t"))).split())
+    if "".join(present.split()) != "".join("".join(run["text"] for run in runs).split()):
+        raise ReportImportError(f'A table cell holds text the app cannot read back: "{_excerpt(present)}". Put it in the cell as ordinary text before importing.')
+    return runs
+
+
 def _table_fragment(table, caption: str) -> dict:
     if table._tbl.xpath(".//w:drawing | .//w:pict"):
         raise ReportImportError("A table contains a picture, but the app's table cells hold text only. Move the picture outside the table before importing.")
@@ -336,7 +363,8 @@ def _table_fragment(table, caption: str) -> dict:
         span.val > 1 for span in table._tbl.xpath(".//w:tcPr/w:gridSpan")
     ):
         raise ReportImportError("A table has merged cells, which the app cannot represent. Unmerge the cells before importing.")
-    rows = [[{"runs": _cell_runs(cell)} for cell in row.cells] for row in table.rows]
+    _refuse_unreadable_table_content(table)
+    rows = [[{"runs": _read_whole_cell(cell)} for cell in row.cells] for row in table.rows]
     if not rows:
         raise ReportImportError("a table in this report has no rows")
     return {
@@ -472,11 +500,43 @@ def _build_fragments(document, elements, formats, non_production_label, evidence
     return fragments
 
 
+def _tables_headed(document, header: str) -> list:
+    wanted = header.casefold()
+    return [
+        table for table in document.tables
+        if table.rows and table.rows[0].cells and table.rows[0].cells[0].text.strip().casefold() == wanted
+    ]
+
+
+def _findings_span(document) -> tuple[int, int]:
+    """The body positions the findings occupy: from the first finding heading after the Findings table to the
+    Appendix, or to the end. A table inside it is the tester's."""
+    body = list(document.element.body.iterchildren())
+    summary = next(iter(_tables_headed(document, "Findings")), None)
+    if summary is None:
+        return len(body), len(body)
+    first = None
+    for index in range(body.index(summary._tbl) + 1, len(body)):
+        element = body[index]
+        if element.tag != qn("w:p"):
+            continue
+        style_id = paragraph_style_id(element) or ""
+        if style_id == FINDING_HEADING_STYLE and first is None:
+            first = index
+        elif style_id == GROUP_HEADING_STYLE and _collapsed(Paragraph(element, document).text).startswith("Appendix:"):
+            return (index, index) if first is None else (first, index)
+    return (len(body), len(body)) if first is None else (first, len(body))
+
+
 def _find_table(document, header: str):
-    for table in document.tables:
-        if table.rows and table.rows[0].cells and table.rows[0].cells[0].text.strip().casefold() == header.casefold():
-            return table
-    return None
+    """A table the template owns, found by its first cell. A table inside a finding is the tester's, so one headed
+    like a template table is never taken for it. The Section table of the Asia masters sits after the findings."""
+    candidates = _tables_headed(document, header)
+    if not candidates:
+        return None
+    first, last = _findings_span(document)
+    body = document.element.body
+    return next((table for table in candidates if not first <= body.index(table._tbl) < last), None)
 
 
 def _display_date(value: str, label: str) -> str | None:

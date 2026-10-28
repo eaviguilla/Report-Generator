@@ -35,7 +35,7 @@ from app.report_service import affected_channels, affected_environments, applica
 from app.storage import atomic_write_json, read_json
 from app.workspace import StaleReportError, Workspace, safe_name
 from tests.support import SEGMENTS_WITHOUT_OWN_REPORT_NAME, off_border_pixels, png_bytes, use_temp_workspace
-from app.models import Content, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TestWindow, Vulnerability, resolve_tested_channels
+from app.models import Content, ImageFragment, ListFragment, ListItem, NoteFragment, ParagraphFragment, Report, Run, Scope, ScopeTarget, TableFragment, TestWindow, Vulnerability, resolve_tested_channels
 from app.tester_identity import Identity, load_or_bootstrap
 
 
@@ -2900,6 +2900,63 @@ class ReportApiTests(unittest.TestCase):
 
         conclusion.fragments[0].runs = [*report_service.status_conclusion_runs("Quoted", "Open"), Run(text=" The account was fully exposed.")]
         self.assertNotIn(issue, generation_issues(report), "prose after the sentence was treated as boilerplate")
+
+    def test_a_table_needs_a_header_row_and_a_full_grid_with_text_in_every_cell(self) -> None:
+        """The editor always draws a header row and a rectangle, so a table that is short anywhere is
+        one the tester has not finished, and Word would print its missing cells blank."""
+        report = main.workspace.load(self.new_report())
+        finding = Vulnerability(uid="v_grid", title="Grid", status="open_new")
+        report.vulnerabilities = [finding]
+        provision(finding)
+        description = next(content for content in finding.contents if content.type == "description")
+        issue = "Grid: every table cell is required"
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        cases = [
+            ("a full grid", [cell("A"), cell("B")], [[cell("a"), cell("b")], [cell("c"), cell("d")]], False),
+            ("a header and no rows", [cell("A"), cell("B")], [], False),
+            ("a blank cell", [cell("A"), cell("B")], [[cell("a"), cell("  ")]], True),
+            ("a row shorter than the header", [cell("A"), cell("B")], [[cell("a")]], True),
+            ("a row longer than the header", [cell("A")], [[cell("a"), cell("b")]], True),
+            ("a header shorter than the rows", [cell("A")], [[cell("a"), cell("b")], [cell("c"), cell("d")]], True),
+            ("no header row", [], [[cell("a"), cell("b")]], True),
+            ("no cells at all", [], [], True),
+            ("one empty row", [], [[]], True),
+        ]
+        for name, header, rows, flagged in cases:
+            with self.subTest(name):
+                description.fragments = [TableFragment(frag_id="f_grid", type="table", header=header, rows=rows)]
+                self.assertEqual(issue in generation_issues(report), flagged)
+
+    def test_text_that_leaves_a_cell_looking_empty_counts_as_empty(self) -> None:
+        """JavaScript's trim() and Python's strip() remove different characters, and Word cannot hold the
+        control characters at all, so a cell holding only these has to read as empty on both sides."""
+        report = main.workspace.load(self.new_report())
+        finding = Vulnerability(uid="v_blank", title="Blank", status="open_new")
+        report.vulnerabilities = [finding]
+        provision(finding)
+        description = next(content for content in finding.contents if content.type == "description")
+        issue = "Blank: every table cell is required"
+        cases = [
+            ("a space", " ", True),
+            ("a no-break space", "\u00a0", True),
+            ("an ideographic space", "\u3000", True),
+            ("a byte order mark", "\ufeff", True),
+            ("a unit separator", "\x1f", True),
+            ("a next line", "\x85", True),
+            ("an escape", "\x1b", True),
+            ("a null", "\x00", True),
+            ("text between control characters", "\x01a\x01", False),
+            ("an emoji", "\U0001f600", False),
+            ("a letter", "a", False),
+        ]
+        for name, text, flagged in cases:
+            with self.subTest(name):
+                description.fragments = [TableFragment(
+                    frag_id="f_blank", type="table",
+                    header=[ListItem(runs=[Run(text="Header")])],
+                    rows=[[ListItem(runs=[Run(text=text)])]],
+                )]
+                self.assertEqual(issue in generation_issues(report), flagged)
 
     def test_a_list_fragment_without_the_continue_key_loads_and_gains_the_default(self) -> None:
         """Every list fragment on disk predates this field, so the model default is the whole

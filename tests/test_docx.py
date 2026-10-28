@@ -8,6 +8,7 @@ from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import get_args
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from docx import Document
@@ -23,13 +24,16 @@ from app.docx_report import (
     ReportGenerationError,
     _bordered_image_stream,
     _find_table,
+    _metadata,
     _populate_scope_tables,
+    _unresolved_placeholders,
     _wrap_long_value,
     generation_issues,
     main_template_path,
     render_report_docx,
 )
 from app.docx_captions import flatten_section_number_fields
+from app.docx_components import replace_component_token_runs
 from app.docx_import import NO_FINDINGS_TITLE
 from app.report_service import provision, sync_evidence_image_slots
 from tests.support import numbering_details, off_border_pixels, paragraph_texts, png_bytes
@@ -1005,7 +1009,7 @@ class DocxReportTests(unittest.TestCase):
 
             self.assertEqual(titles, ["Instance 1: Production"])
 
-    def _layout_document(self, report_folder: Path, contents: list, *, status: str = "open_new", tickets: str = ""):
+    def _layout_document(self, report_folder: Path, contents: list, *, status: str = "open_new", tickets: str = "", template: str = "MAIN.docx", segment: str = "JH"):
         """Render one finding through the shipped template, for page-layout assertions."""
         evidence_folder = report_folder / "evidence"
         evidence_folder.mkdir(exist_ok=True)
@@ -1015,7 +1019,7 @@ class DocxReportTests(unittest.TestCase):
         report = Report(
             report_id="r_layout", app_id="CI-DOCX", saved_at=now,
             engagement=Engagement(
-                app_name="Northstar Banking", ci_number="CI-DOCX", app_owner="Avery Morgan", segment="JH", report_type="annual_pentest",
+                app_name="Northstar Banking", ci_number="CI-DOCX", app_owner="Avery Morgan", segment=segment, report_type="annual_pentest",
                 report_date=date(2026, 9, 9), tester="QA Tester", network="Internal", tested_environments=["production"], tested_channels=["web"],
                 test_windows={"production": TestWindow(start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))},
             ),
@@ -1028,7 +1032,7 @@ class DocxReportTests(unittest.TestCase):
             scope=Scope(mode="custom", target_ids=["t_web"]), contents=contents,
             severity_review_tickets=tickets,
         )]
-        return Document(BytesIO(render_report_docx(report, RESOURCES / "MAIN.docx", report_folder, allow_incomplete=True)))
+        return Document(BytesIO(render_report_docx(report, RESOURCES / template, report_folder, allow_incomplete=True)))
 
     @staticmethod
     def _table(suffix: str) -> TableFragment:
@@ -1037,6 +1041,29 @@ class DocxReportTests(unittest.TestCase):
             header=[ListItem(runs=[Run(text="Header")])],
             rows=[[ListItem(runs=[Run(text=f"Row {suffix}")])]],
         )
+
+    def test_a_table_repeats_its_header_row_and_keeps_each_row_on_one_page(self) -> None:
+        """table_fragment.docx sets neither, so Word would split a row across two pages and leave the columns of a
+        long table unlabelled from its second page on. The header repeats only when the table has a header row."""
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        cases = [
+            ("a header and rows", [cell("Alpha"), cell("Beta")], [[cell("gamma"), cell("delta")], [cell("epsilon"), cell("zeta")]], True),
+            ("a header only", [cell("Alpha"), cell("Beta")], [], True),
+            ("no header", [], [[cell("gamma"), cell("delta")]], False),
+        ]
+        for name, header, rows, repeats in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory() as temporary_directory:
+                fragment = TableFragment(frag_id="f_rows", type="table", header=header, rows=rows)
+                document = self._layout_document(Path(temporary_directory), [Content(type="description", fragments=[fragment])])
+                table = next(table for table in document.tables if any(item.text in {"Alpha", "gamma"} for row in table.rows for item in row.cells))
+                properties = [row._tr.find(qn("w:trPr")) for row in table.rows]
+                self.assertGreaterEqual(len(properties), 1)
+                for position, row_properties in enumerate(properties):
+                    self.assertIsNotNone(row_properties, f"row {position} has no properties")
+                    self.assertIsNotNone(row_properties.find(qn("w:cantSplit")), f"row {position} can split across pages")
+                    self.assertEqual(row_properties.find(qn("w:tblHeader")) is not None, repeats and position == 0, f"row {position}")
+                # w:trPr comes before the cells, as the schema says.
+                self.assertTrue(all(row._tr[0].tag == qn("w:trPr") for row in table.rows))
 
     def test_a_table_is_followed_by_one_spacer_so_two_tables_never_merge(self) -> None:
         """A table fragment contributes only its w:tbl, and Word silently merges adjacent tables."""
@@ -1557,6 +1584,93 @@ class DocxReportTests(unittest.TestCase):
             table = next(table for table in rendered.tables if table.cell(0, 0).text.strip() == "Component")
             self.assertEqual([(row.cells[0].text, row.cells[1].text) for row in table.rows[1:]], [("N/A", "N/A")])
             self.assertIn("Mobile", "\n".join(paragraph.text for paragraph in rendered.paragraphs))
+
+    @staticmethod
+    def _fragments_holding(texts: list[str]) -> dict[str, list]:
+        """One section's worth of every fragment type that carries free text, each holding every text given."""
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        return {
+            "paragraphs": [ParagraphFragment(frag_id=f"f_p{index}", type="paragraph", runs=[Run(text=text)]) for index, text in enumerate(texts)],
+            "notes": [NoteFragment(frag_id=f"f_n{index}", type="note", runs=[Run(text=text)]) for index, text in enumerate(texts)],
+            "a numbered list": [ListFragment(frag_id="f_nl", type="numbered_list", items=[cell(text) for text in texts])],
+            "a bulleted list": [ListFragment(frag_id="f_bl", type="bulleted_list", items=[cell(text) for text in texts])],
+            "code blocks": [CodeFragment(frag_id=f"f_c{index}", type="code_block", text=text) for index, text in enumerate(texts)],
+            "table cells": [TableFragment(frag_id="f_tc", type="table", header=[cell("Header")], rows=[[cell(text)] for text in texts])],
+            "table headers": [TableFragment(frag_id="f_th", type="table", header=[cell(text) for text in texts], rows=[[cell("x") for _ in texts]])],
+        }
+
+    def test_text_that_looks_like_a_template_placeholder_prints_as_typed(self) -> None:
+        """A tester documents payloads such as {{7*7}} and writes words such as non-vulnerable. Neither is the
+        template's own text, so neither may stop generation, and each has to print as it was typed."""
+        typed = [
+            "The field reflects {{7*7}} back.",
+            "The host is non-vulnerable.",
+            "{{table-body-cell}}",
+            "{{findings}}",
+            "{{{x}}}",
+            "open {{ here",
+            "close }} there",
+            "Words like brief-explanation-here and step-1-here are plain text.",
+        ]
+        for kind, fragments in self._fragments_holding(typed).items():
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    document = self._layout_document(Path(temporary_directory), [Content(type="description", fragments=fragments)])
+                printed = paragraph_texts(document.element.body)
+                for text in typed:
+                    self.assertTrue(any(text in line for line in printed), f"{text!r} did not print as typed")
+                self.assertNotRegex("".join(printed), "[\ue000-\uf8ff]", "a private marker survived into the document")
+
+    def test_control_characters_in_text_are_dropped_and_do_not_stop_generation(self) -> None:
+        """lxml refuses them, and the error that reached the tester named nothing."""
+        for kind, fragments in self._fragments_holding(["a\x01b\x1bc", "d\x00e\x0bf"]).items():
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    document = self._layout_document(Path(temporary_directory), [Content(type="description", fragments=fragments)])
+                printed = paragraph_texts(document.element.body)
+                for text in ("abc", "def"):
+                    self.assertTrue(any(text in line for line in printed), f"{text!r} did not print")
+
+    def test_a_leftover_template_placeholder_still_stops_generation(self) -> None:
+        """The check reads the template's own text. Text a tester typed is hidden from it while the document is built."""
+        leftover = Document()
+        leftover.add_paragraph("For {{app-name}} on the cover")
+        leftover.add_paragraph("Findings for the xxx-vuln-name here")
+        self.assertEqual(_unresolved_placeholders(leftover), ["-vuln", "{{app-name}}"])
+
+        typed = Document()
+        paragraph = typed.add_paragraph("{{x}}")
+        replace_component_token_runs([paragraph._p], "x", [Run(text="{{7*7}} and non-vulnerable")])
+        self.assertEqual(_unresolved_placeholders(typed), [])
+
+    def test_a_template_token_nothing_replaced_stops_a_full_render(self) -> None:
+        real_metadata = _metadata
+        without_app_name = lambda report: {token: value for token, value in real_metadata(report).items() if token != "app-name"}
+        with patch("app.docx_report._metadata", side_effect=without_app_name), tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaisesRegex(ReportGenerationError, r"Unresolved template placeholders: .*\{\{app-name\}\}"):
+                self._layout_document(Path(temporary_directory), [])
+
+    def test_a_table_headed_like_a_template_table_is_never_taken_for_it(self) -> None:
+        """The renderer finds the Section table by its header once the findings are in, and a tester's table can be
+        headed anything. Each master lacks a different template table, so all four are tried."""
+        cell = lambda text: ListItem(runs=[Run(text=text)])
+        headers = ("Section", "Component", "Findings", "Limitations", "User Roles", "URL(s) in Scope", "API Routes")
+        for channel, segment in (("web", "JH"), ("web", "Asia"), ("thick_client", "JH"), ("mobile", "Asia")):
+            for header in headers:
+                with self.subTest(channel=channel, segment=segment, header=header), tempfile.TemporaryDirectory() as temporary_directory:
+                    report_folder = Path(temporary_directory)
+                    report = self._component_report(report_folder, channel, segment, [
+                        ScopeTarget(target_id="t_one", environment="production", channel=channel, value="Acme.exe", description="Main client"),
+                    ])
+                    description = next(content for content in report.vulnerabilities[0].contents if content.type == "description")
+                    description.fragments.append(TableFragment(frag_id="f_collide", type="table", header=[cell(header), cell("Notes")], rows=[[cell("a"), cell("b")]]))
+                    rendered = Document(BytesIO(render_report_docx(report, main_template_path(report, RESOURCES), report_folder)))
+                    ours = [table for table in rendered.tables if [item.text for item in table.rows[0].cells] == [header, "Notes"]]
+                    self.assertEqual(len(ours), 1)
+                    self.assertEqual([[item.text for item in row.cells] for row in ours[0].rows], [[header, "Notes"], ["a", "b"]])
+                    if segment == "Asia":
+                        carrying = [table for table in rendered.tables if any(item.text.strip() == "8.1" for row in table.rows for item in row.cells)]
+                        self.assertEqual(len(carrying), 1, "the Section table lost its CVSS row")
 
     def _no_findings_document(self, report_folder: Path, segment: str = "JH"):
         report = self._component_report(report_folder, "web", segment, [

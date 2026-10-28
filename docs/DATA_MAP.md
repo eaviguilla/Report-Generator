@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-26**, after the Application Owner and each tested environment's Time became required Setup details, the Test Coverage fields lost the stars of their own, and section 1 gained how a new release is pasted over the folder in use.
+> Last verified against source: **2026-10-28**, after a table's readiness rule became one rule on both sides, the table editor stopped padding the model while it draws, a tab began dropping an undo history older than another tab's save, and section 12 gained the shared definition of empty text.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -180,7 +180,9 @@ and `test_a_numbered_ordinary_name_keeps_its_whole_stem`.
 - **Client serialization:** `trackMutation` queues library inserts and evidence uploads. A queued operation starts only after the previous one settles, so it reads the updated in-memory `saved_at`; `pendingMutation` is the caught queue tail.
   Each rendered library option is one-shot and clears the search synchronously, so repeated Enter cannot queue it twice while a new query gets a new option that can join the queue. A failed latest selection restores its captured query when the tester has not started another one.
   `waitForMutations` drains the live queue tail in a loop, so Back or Next also waits for work appended after the navigation click. Undo and Redo (button and Ctrl/Cmd+Z, one shared `settleThenStep` in `save.js`) wait the same way before choosing a step, because a settled insert or upload adds its own history step and clears Redo; a second request during that wait is dropped.
-- **Same-tab history handoff:** each successful `applyServerRevision` records the newest revision in `sessionStorage["vulnreport-saved-at:{reportId}"]`. Separate tabs keep separate values. A clean document restored by bfcache or a Navigation Timing `back_forward` load reloads when this tab saved a newer revision on another page.
+- **Same-tab history handoff:** each successful `applyServerRevision` records the newest revision in `sessionStorage["vulnreport-saved-at:{reportId}"]`. Separate tabs keep separate values.
+  A clean document restored by bfcache or a Navigation Timing `back_forward` load reloads when this tab saved a newer revision on another page.
+  A page load also compares the value with the server's `saved_at` to decide whether the undo history survives (§9).
 - **409 body** (`main.stale_report_detail`) carries `code: "stale_report"`, `recoverable`, and `latest_saved_at`.
   Evidence upload converts a stale write under the evidence lock into this same response; the file is not left behind.
 
@@ -312,6 +314,14 @@ The editor is a `contenteditable`, so the break is markup and not text: Enter ma
 `runsFrom` reads the editor by the lines it shows, and `rich()` draws a text that holds `\n` as one `<div>` per line, so each reads back what the other wrote.
 Empty lines at the start or end of a paragraph are kept and print as empty paragraphs, except at the end of a section, where `_trim_trailing_empty_paragraphs` removes them.
 Before 2026-10-15 `runsFrom` read only the text nodes, so a line break typed with Enter never reached the draft. A draft saved before then has lost them, and nothing can bring them back.
+
+A `table` holds a `header` (a list of cells) and `rows` (a list of lists of cells), and each cell is a `ListItem` of runs.
+The schema accepts any shape, so a short row, an empty header and a table with no cells all load and save as they are.
+A table is complete only with a header row and a full grid, with text in every cell. The column count is the longest of the header and the rows, and the header and every row must have that many cells (`_table_is_complete`, and `tableIsComplete` in the browser, §12).
+The editor draws that grid. A cell the model lacks is drawn empty and joins the model when the tester types in it, or when Add row, Add column or a removal changes the table, which first fills every row to full width.
+Drawing never changes the model.
+Those four controls write back only the boxes whose text differs from their cell, so a cell keeps its bold, italic and underline until someone types in it.
+Formatting reaches a table only by import, because the editor's cells are plain text boxes.
 
 **Cross-object invariants enforced by `Report.validate_references`:**
 
@@ -540,6 +550,9 @@ The mutable object named `report` is the client's source of truth. Page code get
 
 Client-only, with no Python counterpart.
 `undoHistory` and `redoHistory` hold `{changes, page, field}` actions produced by `diff(previousReport, report)` and replayed by `applyChanges`; both live in `sessionStorage["vulnreport-history:{reportId}"]` and survive the page loads that navigation and undo itself cause.
+A page load drops both lists when the server's `saved_at` is newer than the newest revision this tab has seen (`vulnreport-saved-at:{reportId}`, §5).
+Another tab has then saved since, and an Undo would lay this tab's older copy of whole arrays, such as a table's rows, over that tab's work with no conflict to warn the tester.
+A history stored with no remembered revision is kept.
 `page` is the page the step was made on, even when the change also altered data another page shows: a scope change on Setup that removed a finding's location belongs to Setup.
 Steps written before 2026-10-05 have no `page`.
 `field` is the page's name for the element that had focus when the step was made, from the `nameField` function the page passed to `start`; the save code stores it and never looks inside it.
@@ -720,6 +733,8 @@ Dropping only a fragment's `evidence_id` without removing its registry entry sti
 **A pasted image reaches a fragment by one route only.** `pasteTargetId` holds the `frag_id` of the armed evidence image, client-only and never persisted.
 It is set by `pointerdown` or `focusin` anywhere on an evidence card, and cleared by `refreshPasteHints` whenever the pane no longer shows that tile — a different finding selected, a collapsed section, a deleted image.
 With nothing armed the document paste listener imports nothing and shows `#evidence-notice`; there is no fallback to the first empty tile, and `uploadImage` advances the target to the next empty image in the same set.
+A clipboard that holds non-blank `text/plain` beside the image, such as cells copied from Excel, is a text paste while a text box has the cursor (`pastesAsText`). Neither the tile's `onpaste` nor the document listener takes it, so the text lands in the box and no evidence is imported or replaced, armed or not.
+A picture with no text still goes to the armed image from anywhere.
 
 **`applyChanges` refuses to delete a registry entry.** A change under `evidence.<id>` is skipped when it would remove the key, because undo would otherwise let the next save prune that PNG and a redo would restore a fragment pointing at a file nothing can recreate.
 `Report.validate_references` does not catch this: it checks that referenced ids exist in `report.evidence`, never that the file exists.
@@ -796,6 +811,8 @@ A stored value that breaks a rule is a Setup issue (`setup_issues` words every r
 | installing proof-of-concept steps, replace or merge-append | `apply_poc_variant` (`mode="replace"`/`"merge"`) | `applyPocVariant` (`mode` param) |
 | collapsing adjacent appended steps into one numbered list, without crossing an intervening fragment | `merge_step_lists` | `mergeStepLists` |
 | generation readiness | `generation_issues` | `updateReadinessPanel`, `fragmentIssues` |
+| what counts as empty text | `_BLANK_TEXT`, read by `_runs_have_text` | the `blankText` pattern, read by `hasText` in `updateReadinessPanel`. Both list what `trim()` removes, what `strip()` removes and the control characters XML cannot hold, which generation drops. Code blocks, captions and titles still use `strip()` and `trim()`, which differ on a few characters. Pinned for runs by the `table_cell_*` cases of the readiness contract test and by `test_text_that_leaves_a_cell_looking_empty_counts_as_empty` |
+| a table is complete | `_table_is_complete`: a header row and a full grid, with text in every cell. The column count is the longest of the header and the rows, as in `_render_table_component` | `tableIsComplete` with `tableColumnCount`, which the editor's draw uses too. Both judge the stored table, never the drawn one. Pinned by the `table_*` cases of the readiness contract test, by `test_readiness_does_not_depend_on_which_finding_has_been_drawn` and by `test_a_table_needs_a_header_row_and_a_full_grid_with_text_in_every_cell` |
 | a report with no findings is ready to generate | `generation_issues` raises nothing for an empty list. The confirmation is not a readiness issue: `finalized_report` checks it on each request and refuses with `NO_FINDINGS_UNCONFIRMED` | `updateReadinessPanel` calls it ready, and the Generate click handler asks before sending `confirm_no_findings=true`. Pinned by the `no_findings` case of the readiness contract test |
 | the CVSS pair is required, but only on an Asia report | the `report.engagement.segment == "Asia"` block in `generation_issues`, raising `"<label>: CVSS Score is required"` and the vector equivalent | `cvssIssues` in `updateReadinessPanel`, **not** in `fragmentIssues`, which takes only the finding and so cannot see the segment. Deliberately absent from `finding_is_complete` / `validateFindingsPage`, see below |
 | which Additional Information fields a finding shows | no direct owner — the document says it instead: `_render_finding_component` picks `new_finding.docx` for `open_new` and `retest_finding.docx` otherwise, and only the latter carries `{{severity-review-tickets}}`; `main_template_path` adds the `_ASIA` suffix, and only those templates carry the `Section` table holding the CVSS cells | `additionalInformationFields`. The section's visibility is **derived**, not stated: it is drawn when at least one field is |
@@ -1074,6 +1091,7 @@ Recorded so they are not rediscovered as bugs.
   `_save_unlocked` renames on the save that supplies the missing value and freezes afterwards, so a later rename leaves the folder alone.
   The manager groups by `engagement.app_name`, not by the folder, so that drift never shows.
 - **One backup only.** `draft.bak.json` is overwritten on every save.
+- **Typing in a table cell makes that cell one plain run.** The editor's cells are plain text boxes, so a table imported from a document keeps its bold, italic and underline only in cells nobody types in. Add row, Add column and the removals leave the other cells alone.
 - **Removed evidence may remain in the private Undo archive.** A scope decision that removes a screenshot drops its fragment and registry entry immediately, so it cannot print, export or download, but `Workspace._drop_orphan_evidence` moves its PNG under `evidence/.undo/` so a later browser Undo can restore it.
   Those bytes still count toward the report's 250 MB evidence limit and leave only when Undo restores them or the report folder is deleted.
 - **`.gitignore` names `data/` children one by one** (`apps/`, `.locks/`, `prefs.json`, `vulnreport-errors.log*`), not the folder. Any other file the app writes there, today `prefs.corrupt.json`, and `prefs.tmp` when a kill leaves it before its replace, shows as untracked in a checkout, and `prefs.corrupt.json` carries the tester's name.

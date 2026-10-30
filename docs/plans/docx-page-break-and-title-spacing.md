@@ -485,6 +485,8 @@ Ship steps 1–7. Revisit step 8 only after reviewing a real Windows-generated r
 **Q2. Should `Severity Review Ticket (if applicable):` get orphan protection? → NO — scope it out, assert the gap.**
 It is filled by token replacement, not an anchor splice, so step 3's walk cannot reach it. Covering it would require a second mechanism that puts a literal heading string into `docx_report.py`, breaking the rule that `SECTION_HEADINGS` in `docx_import.py` is the sole owner of those strings. **Step 3 must assert its absence**, so the gap is pinned and visible rather than silently forgotten. Low impact: the heading is short, sits at the end of a finding, and the next finding starts on a fresh page regardless.
 
+**Reversed 2026-10-30.** A report showed the label at the foot of one page with its `N/A` at the top of the next, so the label now gets `keepNext`. The walk starts from the `{{severity-review-tickets}}` token directly under the label, which is an anchor after all, so no heading string enters `docx_report.py` and the rule above still holds. The absence assertion became `test_the_severity_review_ticket_label_is_kept_on_the_page_with_its_value`. `docs/DOCX_TEMPLATE.md` has the current rule.
+
 **Q3. Should step 5 refuse to keep a table with an unusually long lead-in? → NO — no size limit.**
 `keepNext` prevents a break *between* two paragraphs; it ties the **last line** of the lead-in to the start of the table. Word remains free to split the lead-in paragraph itself across pages (that is `keepLines`, which is not being set). So even a very long lead-in costs at most one line moved, never the whole paragraph. A size limit would add a tuning constant with no natural value, guarding against something the mechanism already prevents. Where a table is taller than a page, Word abandons the keep and breaks anyway — no worse than today.
 
@@ -518,7 +520,7 @@ It is filled by token replacement, not an anchor splice, so step 3's walk cannot
 
 - **Files:** [app/docx_report.py](../../app/docx_report.py#L994) — add `_keep_with_next` beside `_set_page_break_before`. Insert the walk in `_render_finding_component` **between [#L643](../../app/docx_report.py#L643) and [#L654](../../app/docx_report.py#L654)** — the only implementable window, because the anchor must still be present in `elements` and must be re-located each iteration after earlier splices shift the indices.
 - **Mechanism:** `index = _component_anchor_index(elements, anchor)`, then walk backwards from `index - 1`, marking each element while it is a non-empty `w:p`; stop at the first blank `w:p` or first non-`w:p`.
-- **Scope-out (agreed Q2):** `Severity Review Ticket (if applicable):` is **not covered** — it has no `-fragments-here` anchor.
+- **Scope-out (agreed Q2):** `Severity Review Ticket (if applicable):` is **not covered** — it has no `-fragments-here` anchor. *Reversed 2026-10-30, see Q2. The absence assertion in the Test line below no longer holds.*
 - **Test:** assert `keepNext` present on the anchored lead-ins (`Description:`, `Recommended Remediation:`, `Proof of Concept:`, `The following demonstrates the vulnerability:`, plus `Previous Proof of Concept:` and `In Conclusion:` in the retest template). Assert **absent** on every blank above them, on the finding title, and on `Severity Review Ticket (if applicable):` — pinning the agreed gap so it cannot drift into an unnoticed one. Assert each walk terminated on a blank in **both** templates, converting the one remaining template assumption into a test. **Runs on macOS.**
 - **Invariant:** no literal heading string enters `docx_report.py`; `SECTION_HEADINGS` in `docx_import.py` stays the sole owner.
 
@@ -569,7 +571,7 @@ Not started. Revisit only after a real Windows-generated report has been reviewe
 | Adding the spacer in a pass after fragments are assembled | It would run after the trim at [#L726](../../app/docx_report.py#L726), stacking a spacer on the template blank and breaking `blank_count <= 1`. |
 | `keepNext` inside `_render_caption_component` | It also emits the post-image caption — the end of a chain, not its start. |
 | Round 1's table-caption call-site mark | A no-op for every uncaptioned table, and even for captioned ones it misses the blank `caption_fragment.docx` inserts. Silently doing nothing in the majority case is worse than not claiming coverage. |
-| Counting `Severity Review Ticket:` among step 3's titles | The mechanism cannot reach it. Asserting on four titles when only three are reachable papers over the gap. |
+| Counting `Severity Review Ticket:` among step 3's titles | The mechanism cannot reach it. Asserting on four titles when only three are reachable papers over the gap. *(Reversed 2026-10-30: the walk reaches it from its token. See Q2.)* |
 | Mirroring `_keep_with_next` into `docx_components.py` | Two copies of `_set_page_break_before` already exist and have already diverged in reachability. |
 | `keepNext` on the finding title | No orphan case exists — every finding after the first carries `pageBreakBefore`, and the first sits under a severity heading that carries one. |
 | A size limit on step 5's lead-in walk | `keepNext` ties only the last line; a long paragraph still splits. The guarded failure cannot occur. |

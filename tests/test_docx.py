@@ -1123,12 +1123,41 @@ class DocxReportTests(unittest.TestCase):
                     self.assertFalse(_keeps_next(previous), f"the walk above {title!r} must stop at the blank")
             self.assertGreater(blanks_checked, 0, "no heading had a blank above it, so the walk's stop went unchecked")
 
-            # Filled by token replacement rather than an anchor, so the walk cannot reach it. This pins
-            # the gap so it stays visible instead of being mistaken for coverage.
-            ticket = next(item for item in document.paragraphs if item.text.strip() == "Severity Review Ticket (if applicable):")
-            self.assertFalse(_keeps_next(ticket._p))
             title = next(item for item in document.paragraphs if item.text.strip() == "Layout finding")
             self.assertFalse(_keeps_next(title._p), "a finding title already carries its own page break")
+
+    def test_the_severity_review_ticket_label_is_kept_on_the_page_with_its_value(self) -> None:
+        """Word can break the page between the label and its value, which leaves the label alone at the
+        foot of one page with N/A or the tickets at the top of the next."""
+        paragraph = lambda name: [ParagraphFragment(frag_id=f"f_{name}", type="paragraph", runs=[Run(text=f"The {name} text.")])]
+        contents = lambda: [
+            Content(type="description", fragments=paragraph("description")),
+            Content(type="recommended_remediation", fragments=paragraph("remediation")),
+            Content(type="previous_proof_of_concept", fragments=paragraph("previous")),
+            Content(type="proof_of_concept", fragments=paragraph("proof")),
+            Content(type="in_conclusion", fragments=paragraph("conclusion")),
+        ]
+        cases = [
+            ("open_previously_discovered", "", "N/A"),
+            ("open_previously_discovered", "1234\n5678", "GRIMPEN-1234GRIMPEN-5678"),
+            ("open_resolved_on_non_prod", "", "N/A"),
+            ("resolved", "", "N/A"),
+            ("closed", "", "N/A"),
+        ]
+        for status, tickets, printed in cases:
+            with self.subTest(status=status, tickets=tickets), tempfile.TemporaryDirectory() as temporary_directory:
+                document = self._layout_document(Path(temporary_directory), contents(), status=status, tickets=tickets)
+                label = next(item for item in document.paragraphs if item.text.strip() == "Severity Review Ticket (if applicable):")
+                self.assertTrue(_keeps_next(label._p), "the label must stay on the page where its value starts")
+
+                # keepNext only helps when the very next paragraph is the value, not a template blank.
+                value = label._p.getnext()
+                self.assertEqual("".join(node.text or "" for node in value.iter(qn("w:t"))), printed)
+                self.assertFalse(_keeps_next(value), "the chain ends at the value")
+
+                above = label._p.getprevious()
+                self.assertTrue(_is_blank_paragraph(above), "the walk relies on a blank paragraph above the label to stop at")
+                self.assertFalse(_keeps_next(above), "the walk above the label must stop at the blank")
 
     def test_severity_review_tickets_print_one_prefixed_value_per_line(self) -> None:
         """The prefix belongs to the document. The draft stores bare digits, so a tester never types

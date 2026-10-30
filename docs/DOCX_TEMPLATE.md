@@ -459,7 +459,12 @@ with "Appendix:", so the body scan passes over it.
 `closed` findings and never for `open_new` —
 on `new_finding.docx` the replacement is a no-op because there is no such token.
 The static label `Severity Review Ticket (if applicable):` is one paragraph, and
-the token owns the whole of the paragraph below it.
+the token owns the whole of the paragraph below it. The label carries
+`w:keepNext`, so Word moves it to the page where its value starts (see the
+page-break note under Fragment anchors). The renderer finds the label by walking
+up from the token, so the two must stay in adjacent paragraphs. A blank
+paragraph between them stops the walk, and
+`test_the_severity_review_ticket_label_is_kept_on_the_page_with_its_value` fails.
 
 It is written with `replace_component_token_runs` rather than the plain string
 path (`app/docx_report.py` L772-L776), because only `_set_run_text` turns a
@@ -516,16 +521,17 @@ the renderer cannot detect one and move things around it. Instead it sets
 `w:keepNext` on anything that introduces content: section headings (found by
 walking back from their `{{...-fragments-here}}` anchor, never by matching the
 heading text, so `SECTION_HEADINGS` in `app/docx_import.py` stays the only place
-those strings live), the `PROD:`/`UAT:` evidence labels, instance titles, code
-captions, an image that has a caption, and the lead-in paragraph above a table.
-Two cases are deliberately uncovered: `Severity Review Ticket (if applicable):`,
-which is filled by token replacement and has no anchor to walk back from, and an
-uncaptioned code block, which is a run of ordinary paragraphs with no
-all-or-nothing block to strand. Now that the ticket value is a tester input, the
-first gap is easier to see: a multi-line value is a taller block that can fall
-to the next page and leave its label stranded above. Where the break lands is
-Word's to decide and nothing in the file records it, so this was left alone
-rather than guessed at.
+those strings live), the `Severity Review Ticket (if applicable):` label (found
+the same way, by walking back from the `{{severity-review-tickets}}` token under
+it before the token is replaced), the `PROD:`/`UAT:` evidence labels, instance
+titles, code captions, an image that has a caption, and the lead-in paragraph
+above a table. On the ticket label, `w:keepNext` keeps the label on the page where
+its value starts, whether the value is `N/A` or a list of tickets. An Open (New)
+finding has no label, because only `retest_finding.docx` carries the token. Two
+cases are not covered. An uncaptioned code block is a run of ordinary paragraphs
+with no all-or-nothing block to strand. A long list of tickets can still split
+across two pages, because its paragraph has no `w:keepLines` and `w:keepNext`
+only ties the label to the first lines of the value.
 
 Fragment-template blank paragraphs are preserved between fragments and trimmed
 at content-section boundaries. The exception is a code block in a proof-of-concept

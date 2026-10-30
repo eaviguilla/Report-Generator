@@ -810,6 +810,9 @@ def _render_finding_component(
     }
     for token, value in values.items():
         replace_component_token(elements, token, value)
+    if finding.status != "open_new":
+        # The label has no anchor of its own, so walk up from the token under it before that is replaced.
+        _keep_anchor_lead_in(elements, "severity-review-tickets")
     # Use the runs path, not the string path. Only _set_run_text turns a newline into a real
     # w:br. The call does nothing on new_finding.docx, which carries no such token.
     tickets = [line.strip() for line in finding.severity_review_tickets.splitlines() if line.strip()]
@@ -1435,10 +1438,11 @@ def _component_anchor_index(elements: list, token: str) -> int:
 
 
 def _keep_anchor_lead_in(elements: list, token: str) -> None:
-    """Keep a section heading with the content that replaces its anchor.
+    """Keep a heading with the content that replaces its anchor.
 
-    Walks by position rather than by heading text, so docx_import's SECTION_HEADINGS stays the only
-    place those strings live. "Severity Review Ticket" has no anchor and is deliberately not covered.
+    Walks by position rather than by heading text, so docx_import's SECTION_HEADINGS and
+    SEVERITY_TICKET_LABEL stay the only places those strings live. The Severity Review Ticket label
+    has no fragment anchor, so it is reached from its {{severity-review-tickets}} token instead.
     """
     index = _component_anchor_index(elements, token)
     for element in reversed(elements[:index]):

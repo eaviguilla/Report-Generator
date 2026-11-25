@@ -834,6 +834,11 @@ class ReleaseHardeningTests(unittest.TestCase):
                     (mirror / "app" / "main.py").write_text("hardened", encoding="utf-8")
                     (staging / "app").mkdir(parents=True)
                     (staging / "app" / "main.py").write_text("original", encoding="utf-8")
+                    (staging / ".blarc").write_text("seed", encoding="utf-8")
+                    (staging / "bla-harden-summary.json").write_text(
+                        '{"artifacts":[{"relativePath":"app/main.py","success":true}]}',
+                        encoding="utf-8",
+                    )
                     result = subprocess.CompletedProcess(args=["npx"], returncode=0, stdout="", stderr="")
                     with patch.object(script.subprocess, "run", return_value=result) as run_call:
                         script.harden_staging(staging)
@@ -846,11 +851,29 @@ class ReleaseHardeningTests(unittest.TestCase):
                     )
                     self.assertEqual((staging / "app" / "main.py").read_text(encoding="utf-8"), "hardened")
                     self.assertFalse(mirror.exists())
+                    self.assertFalse((staging / ".blarc").exists())
+                    self.assertFalse((staging / "bla-harden-summary.json").exists())
+
+    def test_harden_staging_refuses_failed_artifacts_from_summary(self) -> None:
+        for script in (default_release, burp_release):
+            with self.subTest(script=script.__name__), tempfile.TemporaryDirectory() as directory:
+                staging = Path(directory)
+                mirror = staging / ".bla-hardened"
+                mirror.mkdir(parents=True)
+                (staging / "bla-harden-summary.json").write_text(
+                    '{"artifacts":[{"relativePath":"app/main.py","success":false}]}',
+                    encoding="utf-8",
+                )
+                result = subprocess.CompletedProcess(args=["npx"], returncode=0, stdout="", stderr="")
+                with patch.object(script.subprocess, "run", return_value=result):
+                    with self.assertRaisesRegex(RuntimeError, "left failed artifacts"):
+                        script.harden_staging(staging)
 
     def test_harden_staging_refuses_success_without_hardened_mirror(self) -> None:
         for script in (default_release, burp_release):
             with self.subTest(script=script.__name__), tempfile.TemporaryDirectory() as directory:
                 staging = Path(directory)
+                (staging / "bla-harden-summary.json").write_text('{"artifacts":[]}', encoding="utf-8")
                 result = subprocess.CompletedProcess(args=["npx"], returncode=0, stdout="", stderr="")
                 with patch.object(script.subprocess, "run", return_value=result) as run_call:
                     expected = re.escape(f"BLA harden failed for {staging}: missing {staging / '.bla-hardened'}")

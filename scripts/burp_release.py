@@ -12,6 +12,7 @@ Nothing it ships should hint that a non-Burp build exists.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -65,6 +66,14 @@ def harden_staging(staging: Path) -> None:
     command = [*BLA_COMMAND, "harden", ".", "--exclude", ",".join(BLA_EXCLUDES)]
     result = subprocess.run(command, cwd=staging, capture_output=True, text=True, check=False)
     if result.returncode == 0:
+        summary = staging / "bla-harden-summary.json"
+        if summary.is_file():
+            report = json.loads(summary.read_text(encoding="utf-8"))
+            failed = [item.get("relativePath", "<unknown>") for item in report.get("artifacts", []) if not item.get("success", False)]
+            if failed:
+                show = ", ".join(failed[:5])
+                suffix = "" if len(failed) <= 5 else f" and {len(failed) - 5} more"
+                raise RuntimeError(f"BLA harden failed for {staging}: left failed artifacts: {show}{suffix}")
         hardened = staging / ".bla-hardened"
         if not hardened.is_dir():
             raise RuntimeError(f"BLA harden failed for {staging}: missing {hardened}")
@@ -77,6 +86,9 @@ def harden_staging(staging: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
         shutil.rmtree(hardened)
+        for artifact in (staging / ".blarc", summary):
+            if artifact.exists():
+                artifact.unlink()
         return
     detail = (result.stderr or result.stdout).strip() or f"exit code {result.returncode}"
     raise RuntimeError(f"BLA harden failed for {staging}: {detail}")

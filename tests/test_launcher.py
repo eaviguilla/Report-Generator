@@ -815,6 +815,10 @@ class ReleaseTests(unittest.TestCase):
 
 
 class ReleaseHardeningTests(unittest.TestCase):
+    def test_burp_hardening_excludes_launcher_runtime_files(self) -> None:
+        self.assertIn("report_generator_burp.py", burp_release.BLA_EXCLUDES)
+        self.assertIn("app/init.py", burp_release.BLA_EXCLUDES)
+
     def test_build_release_calls_hardening_only_when_requested(self) -> None:
         for script in (default_release, burp_release):
             with self.subTest(script=script.__name__), tempfile.TemporaryDirectory() as dist, patch.object(script, "DIST", Path(dist)):

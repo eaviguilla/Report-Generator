@@ -65,8 +65,10 @@ minus `app/init.py` (the other build's launcher), and `resources/` only, then ru
 inside the staging folder and overlays the generated `.bla-hardened/` mirror before zipping.
 `scripts/burp_release.py` stages the Burp build the same way, but from
 `README-burp.md` (shipped renamed to `README.md`), `report_generator_burp.py`, and `app/`
-complete with `app/init.py`; it leaves `run.py` out, runs the same BLA hardening and
-DOCX exclusions inside its staging folder, overlays the hardened mirror, then zips.
+complete with `app/init.py`; it leaves `run.py` out, runs BLA hardening with DOCX plus
+`report_generator_burp.py` and `app/init.py` exclusions (the Burp launcher/runtime pair
+must stay byte-for-byte compatible with Jython and the launcher contract), overlays the
+hardened mirror, then zips.
 Either way `data/` and `generated/` are deliberately left behind, so a release zip carries the library but no drafts, no evidence, and no finished documents.
 `dist/` is a build output and gitignored.
 

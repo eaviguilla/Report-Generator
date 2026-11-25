@@ -48,7 +48,7 @@ EXCLUDE_SUFFIXES = {".pyc"}
 # Pinned so release hardening is deterministic across machines.
 BLA_PACKAGE = "bla-agents@3.6.0"
 BLA_COMMAND = ("npx", "--yes", BLA_PACKAGE)
-BLA_EXCLUDES = ("resources/*.docx", "resources/**/*.docx")
+BLA_EXCLUDES = ("resources/*.docx", "resources/**/*.docx", "report_generator_burp.py", "app/init.py")
 
 
 def _ignore(directory: str, names: list[str]) -> set[str]:

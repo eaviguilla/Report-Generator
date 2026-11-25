@@ -19,7 +19,7 @@ Follow these steps in order. Stop at the first one that fails and report what it
    with origin.
 5. Create and push a new release tag so `.github/workflows/release.yml` builds and publishes fresh
    BLA-hardened zip assets. Use:
-   - `tag="v$(date -u +%Y.%m.%d-%H%M%S)"`
+   - `tag="$(date -u +%Y-%m-%d)"`
    - `git tag "$tag"`
    - `git push origin "$tag"`
    Then print the tag name you pushed.

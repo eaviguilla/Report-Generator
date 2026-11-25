@@ -21,6 +21,6 @@ Close the console window to stop Report Generator.
 
 ## Maintainer release publishing
 
-- Push a version tag (for example `v1.4.2`).
+- Push a date tag (for example `2026-11-26`).
 - GitHub Actions runs both release scripts, hardens the staging folders, and uploads the zip files to GitHub Releases for that tag.
 - The generated SHA-256 file is uploaded with the zips.

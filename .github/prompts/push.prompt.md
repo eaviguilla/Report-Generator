@@ -1,5 +1,5 @@
 ---
-description: "Push this repo: check the GitHub identity, commit every change with a conventional commit message, push the current branch and confirm it is in sync with origin. Use when the user says push."
+description: "Push this repo: check the GitHub identity, commit every change with a conventional commit message, push the current branch, then create and push a release tag so CI publishes BLA-hardened zips. Use when the user says push."
 agent: "agent"
 tools: [execute, read]
 ---
@@ -17,3 +17,9 @@ Follow these steps in order. Stop at the first one that fails and report what it
    "Generated with" footer. If the pre-commit hook blocks the commit, stop and show its message.
 4. Push the current branch with `git push`, then confirm that `git status -sb` shows it in sync
    with origin.
+5. Create and push a new release tag so `.github/workflows/release.yml` builds and publishes fresh
+   BLA-hardened zip assets. Use:
+   - `tag="v$(date -u +%Y.%m.%d-%H%M%S)"`
+   - `git tag "$tag"`
+   - `git push origin "$tag"`
+   Then print the tag name you pushed.

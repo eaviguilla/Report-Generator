@@ -18,3 +18,9 @@ Close the console window to stop Report Generator.
   paste. If the new release needs more packages, the next run installs them.
 - Your reports are in the `data` folder and your finished Word documents are in the
   `generated` folder. A release contains neither, so pasting a release leaves them alone.
+
+## Maintainer release publishing
+
+- Push a version tag (for example `v1.4.2`).
+- GitHub Actions runs both release scripts, hardens the staging folders, and uploads the zip files to GitHub Releases for that tag.
+- The generated SHA-256 file is uploaded with the zips.

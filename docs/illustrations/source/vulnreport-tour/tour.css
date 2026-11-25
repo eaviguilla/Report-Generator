@@ -1,0 +1,22 @@
+/* Three windows at one top and height, one 14px gap. The lead is centered; the outer two run off
+   the stage on their outer side. */
+.vt .vt-win {
+  position: absolute;
+  top: 28px;
+  width: 456px;
+  height: 800px;
+}
+
+.vt .vt-win--lead {
+  left: 172px;
+  z-index: 1;
+  box-shadow: var(--ss-shadow-hero);
+}
+
+.vt .vt-win--left {
+  left: -298px;
+}
+
+.vt .vt-win--right {
+  left: 642px;
+}

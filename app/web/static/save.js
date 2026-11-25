@@ -476,6 +476,47 @@
         else delete parent[key];
       });
     }
+    const isScalarHistoryValue = value => value === null || ["string", "number", "boolean"].includes(typeof value);
+    const pathKey = path => path.map(part => String(part)).join(".");
+    const valueAtPath = (target, path) => path.reduce((current, key) => current?.[key], target);
+    const inlineRestoreIgnoredRoots = new Set(["saved_at", "app_id", "_folder_name_hint"]);
+    function inlineRestoreControl(path) {
+      if (!Array.isArray(path) || !path.length || !path.every(part => typeof part === "string")) return null;
+      const control = root.querySelector(`[data-path="${CSS.escape(pathKey(path))}"]`);
+      if (!control) return null;
+      if (!control.matches('input:not([type="checkbox"],[type="radio"],[type="file"]), textarea')) return null;
+      return control;
+    }
+    function canRestoreInline(action, stepPage) {
+      if (stepPage !== page || knownPage(action?.page) !== page) return false;
+      if (!Array.isArray(action?.changes) || !action.changes.length) return false;
+      let hasControl = false;
+      const allowed = action.changes.every(change => {
+        if (!change.beforePresent || !change.afterPresent) return false;
+        if (!isScalarHistoryValue(change.before) || !isScalarHistoryValue(change.after)) return false;
+        if (!Array.isArray(change.path) || !change.path.length || !change.path.every(part => typeof part === "string")) return false;
+        if (change.path.length === 1 && inlineRestoreIgnoredRoots.has(change.path[0])) return true;
+        const control = inlineRestoreControl(change.path);
+        if (control) hasControl = true;
+        return !!control;
+      });
+      return allowed && hasControl;
+    }
+    function syncInlineRestoreChanges(changes) {
+      changes.forEach(change => {
+        const control = inlineRestoreControl(change.path);
+        if (!control) return;
+        const value = valueAtPath(report, change.path);
+        control.value = value == null ? "" : String(value);
+        if (control.tagName === "TEXTAREA") {
+          control.style.height = "auto";
+          control.style.height = `${control.scrollHeight}px`;
+        }
+        // Programmatic value changes fire no input/change events, so setup validators do not refresh unless we do.
+        control.dispatchEvent(new Event("change", {bubbles: true}));
+      });
+      queueReportChange();
+    }
     function updateHistoryControls() {
       const undoButton = document.querySelector("#undo-button");
       const redoButton = document.querySelector("#redo-button");
@@ -492,7 +533,9 @@
       const priorPendingSave = pendingSave;
       const priorDraftField = draftField;
       const stepPage = knownPage(action.page);
+      const inlineRestore = canRestoreInline(action, stepPage);
       applyChanges(report, action.changes, direction);
+      if (inlineRestore) syncInlineRestoreChanges(action.changes);
       previousReport = clone(report);
       activeTextTransaction = null;
       pendingSave = true;
@@ -501,6 +544,7 @@
       draftField = action.field || null;
       const rollback = () => {
         applyChanges(report, action.changes, direction === "undo" ? "redo" : "undo");
+        if (inlineRestore) syncInlineRestoreChanges(action.changes);
         previousReport = clone(report);
         pendingSave = priorPendingSave;
         draftPage = page;
@@ -516,10 +560,18 @@
         showRecoveryStorageWarning(error);
         return rollback();
       }
-      allowUnsavedUnload = true;
-      // Leave only once the server has the undone state, so its page gate judges that; a refused save still leaves.
+      if (!inlineRestore) allowUnsavedUnload = true;
+      // Cross-page history restores leave only once the server has the undone state, so its page gate judges that.
       return save().then(() => {
-        openPage(stepPage);
+        if (inlineRestore) {
+          try {
+            sessionStorage.removeItem(recoverySelectionKey);
+            sessionStorage.removeItem(changedFieldKey);
+          } catch (error) {
+            showRecoveryStorageWarning(error);
+          }
+        }
+        if (!inlineRestore) openPage(stepPage);
         return true;
       });
     }
@@ -531,6 +583,21 @@
         if (index >= 0) undoHistory.splice(index, 1);
       }
       activeTextTransaction = null;
+      previousReport = clone(report);
+      storeHistory();
+    }
+    // Rebuilds the latest Undo step after an app-owned follow-on edit, so one tester action still undoes in one press.
+    function amendLastStep(change, belongsToStep = () => true) {
+      finalizeTextTransaction();
+      const action = undoHistory.at(-1);
+      if (!action || redoHistory.length || knownPage(action.page) !== page || !belongsToStep(action.changes)) {
+        change();
+        return;
+      }
+      const before = clone(report);
+      applyChanges(before, action.changes, "undo");
+      change();
+      action.changes = diff(before, report);
       previousReport = clone(report);
       storeHistory();
     }
@@ -591,6 +658,10 @@
     }
     function hasUnsavedEdits() {
       return pendingSave || savedRevision < saveRevision;
+    }
+    function markHistoryBaseline() {
+      previousReport = clone(report);
+      if (activeTextTransaction) activeTextTransaction.before = clone(report);
     }
     // Sends the current report object to the server for validation and atomic saving.
     async function save(successStatus) {
@@ -782,7 +853,7 @@
     } else if (recoveryCandidate) {
       showLocalRecovery(recoveryCandidate);
     }
-    return {report, changedField, scheduleSave, scheduleAutomaticSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits};
+    return {report, changedField, scheduleSave, scheduleAutomaticSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits, amendLastStep, markHistoryBaseline};
   }
   window.vrSave = {start, reconcileCanonicalObject, isRecord, activeTextEntry, TEXT_ENTRY_SELECTOR};
 })();

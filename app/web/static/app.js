@@ -312,7 +312,7 @@
     return stored.some((finding, index) => finding !== findings[index]);
   };
   const sortedOnArrival = page === "edit" && sortFindings(serverReport.vulnerabilities);
-  const {report, changedField, scheduleSave, scheduleAutomaticSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
+  const {report, changedField, scheduleSave, scheduleAutomaticSave, save, setSaveState, SAVE_STATES, trackMutation, waitForMutations, markSaveConflict, queueConflictRetry, showOperationError, applyServerRevision, finalizeTextTransaction, holdSaves, hasUnsavedEdits, amendLastStep, markHistoryBaseline} = window.vrSave.start({root, serverReport, page, pageNames: Object.fromEntries(vocabulary.report_pages), saveCheck, onSaved, nameField});
   // The order is in place before start() takes its baseline, so sorting is no Undo step. A recovery copy keeps its own order.
   if (sortedOnArrival && report === serverReport) scheduleAutomaticSave();
   const updateSetupValidationNotice = () => {
@@ -1342,6 +1342,9 @@
         }
       });
     });
+    // Setup seeds missing structures after save.js took its baseline. Keep these app-owned normalisations
+    // out of the first tester undo step while still sending them on the next save.
+    markHistoryBaseline();
     root.querySelectorAll("[data-path]").forEach(input => {
       const [section, field] = input.dataset.path.split(".");
       input.value = report[section][field] ?? "";
@@ -1595,6 +1598,7 @@
     // go away, while filled evidence keeps the environment where it was actually captured.
     const dropTargetsEverywhere = targetIds => {
       if (!targetIds.size) return;
+      report.scope_targets = (report.scope_targets || []).filter(target => !targetIds.has(target.target_id));
       (report.vulnerabilities || []).forEach(finding => {
         const scope = finding.scope || {};
         const had = scopeEnvironments({target_ids:scope.target_ids || []});
@@ -1699,16 +1703,23 @@
         .filter(finding => scopeReaches(finding.scope, report.scope_targets) && !scopeReaches(finding.scope, surviving, coverage))
         .map(finding => finding.title || "Untitled finding");
     };
+    const scopeTextLoss = () => {
+      const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
+      const doomed = new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id));
+      const stranded = scopeTextStrandedFindings();
+      return {doomed, stranded, impact:scopeChangeImpact(doomed)};
+    };
+    const scopeTextNeedsConfirmation = () => {
+      const {stranded, impact} = scopeTextLoss();
+      return stranded.length > 0 || impact.findings > 0;
+    };
     setupSaveCheck = () => {
       if (!validateSetupInputs(true)) return "Correct invalid Setup fields";
       const stranded = scopeTextStrandedFindings();
       if (stranded.length) return `Give ${stranded.join(", ")} another affected location`;
     };
     const confirmScopeTextLoss = async () => {
-      const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
-      const doomed = new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id));
-      const stranded = scopeTextStrandedFindings();
-      const impact = scopeChangeImpact(doomed);
+      const {stranded, impact} = scopeTextLoss();
       if (!stranded.length && !impact.findings) return true;
       const lines = [];
       if (impact.findings) lines.push(`${impact.findings} finding${impact.findings === 1 ? "" : "s"} point at a target you are removing or renaming, and lose it.`);
@@ -1904,6 +1915,9 @@
         const surviving = new Set(survivingAfterScopeText().map(target => target.target_id));
         dropTargetsEverywhere(new Set((report.scope_targets || []).filter(target => !surviving.has(target.target_id)).map(target => target.target_id)));
       };
+      const dropRemovedTargetsWithEdit = () => {
+        amendLastStep(dropRemovedTargets, changes => changes.some(change => change.path[0] === "scope_text"));
+      };
       // A component channel stores two strings that the server pairs by line index. One row per index
       // shows that pairing instead of asking the tester to keep two lists aligned by counting lines.
       const buildComponentTable = (environment, channel) => {
@@ -1962,7 +1976,7 @@
                     return;
                   }
                   if (await confirmScopeTextLoss()) {
-                    dropRemovedTargets();
+                    dropRemovedTargetsWithEdit();
                     input.dataset.scopeTextBefore = input.value;
                   } else {
                     input.value = input.dataset.scopeTextBefore;
@@ -2086,21 +2100,31 @@
             textarea.style.height = "auto";
             textarea.style.height = `${textarea.scrollHeight}px`;
           };
-          textarea.oninput = () => { setScopeTextField(environment, channel, "component", textarea.value); grow(); clearScopeErrors(); scheduleSave(); };
+          textarea.oninput = () => {
+            setScopeTextField(environment, channel, "component", textarea.value);
+            grow();
+            clearScopeErrors();
+            holdSaves(textarea.dataset.scopeTextBefore !== undefined && textarea.value !== textarea.dataset.scopeTextBefore && scopeTextNeedsConfirmation());
+            scheduleSave();
+          };
           const lineRefusals = () => window.vrRules.scopeRefusals(report, vocabulary)
             .filter(result => result.environment === environment && result.app_type === channel);
           textarea.onfocus = () => { textarea.dataset.scopeTextBefore = textarea.value; };
           // Confirm on commit rather than per keystroke, so a half-typed target never counts as removed.
           textarea.onchange = async () => {
-            if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) return;
-            if (await confirmScopeTextLoss()) {
-              dropRemovedTargets();
-              textarea.dataset.scopeTextBefore = textarea.value;
+            if (textarea.dataset.scopeTextBefore === undefined || textarea.dataset.scopeTextBefore === textarea.value) {
+              holdSaves(false);
               return;
             }
-            textarea.value = textarea.dataset.scopeTextBefore;
-            setScopeTextField(environment, channel, "component", textarea.value);
-            grow();
+            if (await confirmScopeTextLoss()) {
+              dropRemovedTargetsWithEdit();
+              textarea.dataset.scopeTextBefore = textarea.value;
+            } else {
+              textarea.value = textarea.dataset.scopeTextBefore;
+              setScopeTextField(environment, channel, "component", textarea.value);
+              grow();
+            }
+            holdSaves(false);
             scheduleSave();
           };
           label.append(textarea);

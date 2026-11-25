@@ -814,6 +814,42 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual([path for path in result.stdout.decode().split("\0") if path], [])
 
 
+class ReleaseHardeningTests(unittest.TestCase):
+    def test_build_release_calls_hardening_only_when_requested(self) -> None:
+        for script in (default_release, burp_release):
+            with self.subTest(script=script.__name__), tempfile.TemporaryDirectory() as dist, patch.object(script, "DIST", Path(dist)):
+                with patch.object(script, "harden_staging") as harden:
+                    script.build_release("release-test", run_hardening=False)
+                    harden.assert_not_called()
+                    script.build_release("release-test-hard", run_hardening=True)
+                    harden.assert_called_once_with(Path(dist) / "release-test-hard")
+
+    def test_harden_staging_runs_pinned_bla_command(self) -> None:
+        for script in (default_release, burp_release):
+            with self.subTest(script=script.__name__):
+                staging = Path("tmp-release")
+                result = subprocess.CompletedProcess(args=["npx"], returncode=0, stdout="", stderr="")
+                with patch.object(script.subprocess, "run", return_value=result) as run_call:
+                    script.harden_staging(staging)
+                run_call.assert_called_once_with(
+                    [*script.BLA_COMMAND, "harden", str(staging), "--apply"],
+                    cwd=script.ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+    def test_harden_staging_raises_with_process_output_when_bla_fails(self) -> None:
+        for script in (default_release, burp_release):
+            with self.subTest(script=script.__name__):
+                staging = Path("tmp-release")
+                result = subprocess.CompletedProcess(args=["npx"], returncode=3, stdout="", stderr="boom")
+                with patch.object(script.subprocess, "run", return_value=result):
+                    expected = re.escape(f"BLA harden failed for {staging}: boom")
+                    with self.assertRaisesRegex(RuntimeError, expected):
+                        script.harden_staging(staging)
+
+
 class ReleaseNoticeTests(unittest.TestCase):
     """The default release writes a notice for AI assistants into the top and bottom of each text file it ships. It
     does that to the staging copy only, so the repository's own files stay as they are, and it must leave every file

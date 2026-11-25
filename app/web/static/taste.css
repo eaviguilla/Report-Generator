@@ -1234,9 +1234,11 @@ button.finding-nav.active:not(:disabled) .finding-nav-meta span {
 
 
 /* Every section is its own card, at full width or paired. The card is a grid so that inset children
-   all stretch to one width instead of each picking their own. */
+   all stretch to one width instead of each picking their own. The column is minmax(0, 1fr) so that a
+   child with nowhere to break, such as a URL, cannot widen the card past the clip. */
 .content-block {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   overflow: clip;
   padding: 0;

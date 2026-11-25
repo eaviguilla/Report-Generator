@@ -2,7 +2,7 @@
 
 The single reference for how report data is shaped, saved, and moved through this app.
 
-> Last verified against source: **2026-10-28**, after a table's readiness rule became one rule on both sides, the table editor stopped padding the model while it draws, a tab began dropping an undo history older than another tab's save, and section 12 gained the shared definition of empty text.
+> Last verified against source: **2026-11-25**, after same-page scalar text undo and redo began revalidating restored Setup fields, Setup scope-text removals started holding saves and merging their target purge into the same undo step, Setup kept app-owned normalisation out of the first undo step, and release packaging began running pinned BLA hardening on staging folders before zipping.
 
 > **Maintenance contract.** This file is the source of truth consulted by the `loremaster` agent.
 > Any change to `app/models.py`, `app/storage.py`, `app/workspace.py`, `app/report_service.py`, `app/acceptance.py`, or the save and navigation paths in `app/web/static/save.js` and `app/web/static/app.js` must update the affected section here in the same change.
@@ -58,8 +58,8 @@ A file that a newer release no longer has stays behind, and Burp keeps running t
 
 **Folder names are derived, not authoritative.** A report is located by scanning every `apps/*/*/draft.json` and matching the `report_id` field (`Workspace.find_path`). Renaming a folder by hand does not break lookup; editing `report_id` inside the file does.
 
-**Report data never ships.** `scripts/default_release.py` builds the plain web app's `dist/<name>.zip` from `requirements.txt`, `README.md`, `run.py` (its launcher, at the release root), `app/` minus `app/init.py` (the other build's launcher), and `resources/` only.
-`scripts/burp_release.py` builds the Burp build's zip the same way, but from `README-burp.md` (shipped renamed to `README.md`), `report_generator_burp.py`, and `app/` complete with `app/init.py`; it leaves `run.py` out.
+**Report data never ships.** `scripts/default_release.py` stages the plain web app from `requirements.txt`, `README.md`, `run.py` (its launcher, at the release root), `app/` minus `app/init.py` (the other build's launcher), and `resources/` only, then runs `npx --yes bla-agents@3.6.0 harden <staging> --apply` before zipping.
+`scripts/burp_release.py` stages the Burp build the same way, but from `README-burp.md` (shipped renamed to `README.md`), `report_generator_burp.py`, and `app/` complete with `app/init.py`; it leaves `run.py` out, runs the same BLA hardening on its staging folder, then zips.
 Either way `data/` and `generated/` are deliberately left behind, so a release zip carries the library but no drafts, no evidence, and no finished documents.
 `dist/` is a build output and gitignored.
 
@@ -533,7 +533,7 @@ The browser code is two IIFEs.
 `page` is the last part of the page's address, `setup`, `findings` or `edit`, which `app.js` works out; the save code does not read the page's markup.
 `pageNames` maps each of the three to the name a tester sees, from the vocabulary's `report_pages` (§12).
 `start` decides which report the page edits, the server's or a restored recovery copy, and returns it with the field to point at (`changedField`, §10) and the save functions page code calls (`scheduleSave`, `save`, `setSaveState`, `SAVE_STATES`, `trackMutation`, `waitForMutations`, `markSaveConflict`, `showOperationError`, `applyServerRevision`, `finalizeTextTransaction`, `holdSaves`,
-`hasUnsavedEdits`).
+`hasUnsavedEdits`, `amendLastStep`).
 `vrSave` also carries three helpers that need no page: `reconcileCanonicalObject`, `isRecord`, and `activeTextEntry`.
 It carries `TEXT_ENTRY_SELECTOR` too, the one rule for which element counts as a text field.
 `activeTextEntry` applies it to the focused element, and the cursor lookup for a fragment just added applies it to that fragment's card.
@@ -584,8 +584,11 @@ Every Findings name or Vuln ID edit then left a second, empty step, from the sav
 `maxHistoryEntries` caps the undo stack at 20 and any new edit clears the redo stack (`scheduleSave`).
 
 One focused field is one undo step: `scheduleSave` opens an `activeTextTransaction` on the first edit, skips pushing further actions while that field stays focused, and `finalizeTextTransaction` recomputes the action's `changes` on `focusout`, on `pagehide`, on the next non-text edit, and at the top of `undo`. A transaction whose net diff is empty is spliced back out of `undoHistory`.
+`amendLastStep` lets page code fold an app-owned follow-on edit into the latest tester step when it is still on the same page and no redo history exists; Setup uses it so a confirmed scope-text rename and the target links that confirmation drops undo together.
+Setup seeds missing `test_windows` and `scope_text` shapes after `start()` has taken its baseline, so setup() calls `markHistoryBaseline()` once that normalisation is done.
+That keeps app-owned normalisation out of the first tester Undo step while still sending it in the next save.
 
-**`restoreHistory` is a navigation event** (see section 10). `undo`/`redo` are also bound to Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z by a document-level `keydown` listener that calls `preventDefault()` regardless of focus, so native undo is suppressed inside `.rich` contenteditables, textareas, and inputs.
+**`restoreHistory` usually navigates** (see section 10). `undo`/`redo` are also bound to Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z by a document-level `keydown` listener that calls `preventDefault()` regardless of focus, so native undo is suppressed inside `.rich` contenteditables, textareas, and inputs.
 
 ### `scope_text` is client-only
 
@@ -606,7 +609,8 @@ Three consequences.
 A cell is an `<input>`, so a pasted newline collapses to a space instead of quietly becoming a row; multi-line entry is gone for these two channels.
 Every selector that finds these boxes is therefore attribute-only (`[data-scope-field="component"]`), never `textarea[...]`, and `blankDescriptionBoxes` walks `closest("tr")` so only a row that names a component is marked for a missing description.
 Row deletion is staged outside the saveable draft while its impact dialog is open; accepting applies and schedules it, while cancelling leaves no proposed deletion for an unrelated save to capture.
-Renaming a persisted component remains in local recovery but blocks backend saves until its equivalent impact decision resolves, including the next iteration of a save already in flight.
+Renaming a persisted component remains in local recovery but blocks backend saves until its equivalent impact decision resolves, including the next iteration of a save already in flight. Web/API scope text does the same while a typed change would remove targets.
+Accepted scope-text removals call `amendLastStep` so the confirmed text edit and the dropped targets remain one undo step.
 The same barrier covers finding-location and custom-endpoint changes while their evidence-loss decisions are open.
 And rows are not durable: `scope_text` is reseeded from `scope_targets` on load, so a blank or `#` row is gone after a reload, exactly as the blank and `#` lines always were.
 
@@ -660,9 +664,11 @@ Three server-rendered documents (`page1_setup`, `page2_findings`, `page2_editor`
 - `beforeunload` prompts when `saveRevision > savedRevision` or `pendingMutation` is set, unless `allowUnsavedUnload` is set. Native Back, reload and tab close can otherwise abandon a screenshot after the report save finishes but before the upload reaches the server. Dismissing the prompt keeps the upload running; in-app Back drains the mutation queue first.
 - `visibilitychange` to hidden forces an immediate save when one is pending.
 
-**Undo and redo navigate too.** `restoreHistory` applies the change, forces `pendingSave`, persists the local draft and the history stacks, points `sessionStorage["vulnreport-recovery:{reportId}"]` at the local draft key, sets `allowUnsavedUnload`, then `await save()` and opens the step's page (`openPage`),
-reloading when the step was made on the current page or records none — so the server judges the page gates against the undone state rather than the state before it.
-The resolved value of that save is not checked; a refused save still leaves, and the step's page re-adopts the undone draft through the boot-time recovery selection and shows the refused value there.
+**Undo and redo mostly navigate.** `restoreHistory` applies the change, forces `pendingSave`, persists the local draft and the history stacks, points `sessionStorage["vulnreport-recovery:{reportId}"]` at the local draft key, then saves.
+Most steps then open the step's page (`openPage`), reloading when the step was made on the current page or records none, so the server judges page gates against the undone state rather than the state before it.
+One same-page fast path stays put: when every changed path is scalar and maps to a setup text control (`[data-path]` input or textarea), Undo or Redo updates those controls in place, dispatches `change` on each restored control so setup validity is recomputed, clears the transient recovery pointer keys, and does not reload.
+If the save is refused on that same-page path, the page stays and shows the refusal state there.
+On the navigation path a refused save still leaves, and the opened page re-adopts the undone draft through the boot-time recovery selection.
 After an Undo has opened another page, Redo there brings the change back.
 If a page gate redirects, the draft opens where the tester lands.
 A storage failure anywhere in that sequence rolls the change back instead and leaves the page alone.
@@ -803,7 +809,7 @@ A stored value that breaks a rule is a Setup issue (`setup_issues` words every r
 | affected environments | `affected_environments` | `affectedEnvironments`, `scopeEnvironments` |
 | affected app types | `affected_channels` | `affectedChannels` |
 | which app types a report covers | `resolve_tested_channels` | the `tested_channels` seed in `setup()`, which twins branches 4 and 5 only |
-| which targets survive an app-type or environment change | the target loop in `reconcile_targets` | `findingsStrandedBy`, `scopeTextTargetCount` for warning about saved **and unsaved** rows, and `dropTargetsEverywhere` for the confirmed purge (`dropChannelEverywhere` wraps it) |
+| which targets survive an app-type or environment change | the target loop in `reconcile_targets` | `findingsStrandedBy`, `scopeTextTargetCount` for warning about saved **and unsaved** rows, and `dropTargetsEverywhere` for the confirmed purge (`dropChannelEverywhere` wraps it). The purge drops from both finding scopes and `report.scope_targets`, so one Undo restores both IDs and links |
 | which targets survive a scope-text edit | the same loop, reusing IDs by value | `survivingAfterScopeText`, `scopeTextStrandedFindings` — **not an exact twin**, see below |
 | what a scope line, component or description may hold | `scope_value_refusals`, called by `scope_box_refusals` for every app type: an invalid-characters refusal for characters Word cannot store (`WORD_REFUSED_CHARACTERS`, outside XML 1.0's Char production) and a too-long refusal against `SCOPE_LIMITS` (500 per Web/API line, 200 per component, 500 per description), each carrying the scope field, environment, app type, box and raw line index; `scope_text_refusals` lists them for `setup_results`, `reconcile_targets` raises the first one that is not about a stored line, and `changed_target_refusals` checks the targets a save without scope text changed | `vrRules.scopeRefusals` through `scopeValueRefusals`; each component row's validator in `buildComponentTable` finds its result by environment, app type, box and row index, and each Web/API textarea's validator reads its box's results. Any other character passes, so scope is free text. Both sides check the line trimmed as Python's `str.strip` trims it: `vrRules.strip`, because `String.prototype.trim` also strips U+FEFF and keeps U+001C-U+001F and U+0085. `vrRules.scopeTargets` trims the same way. Descriptions paired with a blank or `#` component are ignored on both sides |
 | a report covers at least one app type | `scope_text_refusals` returns a no-app-type refusal when the submitted app types are empty; `reconcile_targets` raises "select at least one app type" when `resolve_tested_channels` is empty | `vrRules.scopeRefusals`. Unreachable from the page, which refuses to untick the last app type box |

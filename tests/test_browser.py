@@ -20,6 +20,7 @@ from docx import Document
 from PIL import Image
 from playwright.sync_api import expect, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from app import acceptance, main, report_service
 from app.docx_import import NO_FINDINGS_TITLE
@@ -643,6 +644,64 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(owner.input_value(), "Keep this edit")
         self.assertTrue(page.get_by_role("button", name="Undo last change").is_enabled())
 
+    def test_setup_text_undo_and_redo_keep_the_page_loaded(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        owner = page.get_by_label("Application Owner")
+        owner.fill("Undo this value")
+        page.get_by_role("heading", name="Application").click()
+        history = page.evaluate(
+            "reportId => JSON.parse(sessionStorage.getItem(`vulnreport-history:${reportId}`) || '{}')",
+            report_id,
+        )
+        self.assertEqual(len(history.get("undoHistory", [])), 1)
+        step = history["undoHistory"][0]
+        self.assertEqual(step["page"], "setup")
+        change_paths = [change["path"] for change in step["changes"]]
+        self.assertIn(["engagement", "app_owner"], change_paths)
+        page.evaluate("window.undoMarker = 'kept'")
+        owner_value = '() => document.querySelector(\'[data-path="engagement.app_owner"]\')?.value'
+
+        page.get_by_role("button", name="Undo last change").click()
+        page.wait_for_function(f"{owner_value} === 'Browser Owner'", timeout=10_000)
+        self.assertEqual(owner.input_value(), "Browser Owner")
+        self.assertEqual(page.evaluate("window.undoMarker"), "kept", f"undo paths: {change_paths}")
+
+        page.get_by_role("button", name="Redo last change").click()
+        page.wait_for_function(f"{owner_value} === 'Undo this value'", timeout=10_000)
+        self.assertEqual(owner.input_value(), "Undo this value")
+        self.assertEqual(page.evaluate("window.undoMarker"), "kept")
+
+    def test_undoing_an_invalid_setup_edit_revalidates_the_restored_value(self) -> None:
+        report_id = self.ready_report()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        app_name = page.get_by_label("Application Name", exact=True)
+        invalid = "Bad/App"
+        valid = "Browser QA Updated"
+
+        app_name.fill(invalid)
+        app_name.press("Tab")
+        page.wait_for_function("document.querySelector('#save-button').textContent === 'Correct invalid Setup fields'")
+        self.assertIn("validation-error", app_name.get_attribute("class") or "")
+
+        app_name.fill(valid)
+        app_name.press("Tab")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self.assertNotIn("validation-error", app_name.get_attribute("class") or "")
+        self.assertEqual(main.workspace.load(report_id).engagement.app_name, valid)
+
+        page.get_by_role("button", name="Undo last change").click()
+        expect(app_name).to_have_value(invalid)
+        page.wait_for_function("document.querySelector('#save-button').textContent === 'Correct invalid Setup fields'")
+        self.assertIn("validation-error", app_name.get_attribute("class") or "")
+        self.assertEqual(
+            main.workspace.load(report_id).engagement.app_name,
+            valid,
+            "undo restored an invalid value but still saved it",
+        )
+
     def test_server_normalization_reaches_the_live_browser_draft(self) -> None:
         report_id = self.ready_report()
         page = self.page
@@ -957,15 +1016,20 @@ class BrowserWorkflowTests(unittest.TestCase):
         name.press_sequentially("Acme")
         self._paste_text(name, " Portal")
         self.assertEqual(name.input_value(), "Acme Portal")
+        page.evaluate("window.historyMarker = 'kept'")
 
-        with page.expect_navigation():
-            page.locator("#undo-button").click()
+        with self.assertRaises(PlaywrightTimeoutError):
+            with page.expect_navigation(timeout=700):
+                page.locator("#undo-button").click()
         expect(page.get_by_label("Application Name", exact=True)).to_have_value("Acme")
+        self.assertEqual(page.evaluate("window.historyMarker"), "kept")
 
-        with page.expect_navigation():
-            page.locator("#undo-button").click()
+        with self.assertRaises(PlaywrightTimeoutError):
+            with page.expect_navigation(timeout=700):
+                page.locator("#undo-button").click()
         expect(page.get_by_label("Application Name", exact=True)).to_have_value(original)
         expect(page.locator("#undo-button")).to_be_disabled()
+        self.assertEqual(page.evaluate("window.historyMarker"), "kept")
 
     def test_the_setup_character_limit_measures_a_paste_without_its_end_blanks(self) -> None:
         page = self.page
@@ -1950,6 +2014,19 @@ class BrowserWorkflowTests(unittest.TestCase):
         main.workspace.save(report)
         return report_id
 
+    def _two_web_targets(self) -> str:
+        """A web report with two production targets, both referenced by its one finding."""
+        report_id = self.ready_report(include_finding=True)
+        report = main.workspace.load(report_id)
+        report.engagement.tested_channels = ["web"]
+        report.scope_targets = [
+            ScopeTarget(target_id="tgt_a", environment="production", channel="web", value="https://a.example.test", order=0),
+            ScopeTarget(target_id="tgt_b", environment="production", channel="web", value="https://b.example.test", order=1),
+        ]
+        report.vulnerabilities[0].scope = Scope(mode="custom", target_ids=["tgt_a", "tgt_b"])
+        main.workspace.save(report)
+        return report_id
+
     def _assert_both_components_kept(self, report_id: str) -> None:
         saved = main.workspace.load(report_id)
         self.assertEqual(
@@ -1989,6 +2066,65 @@ class BrowserWorkflowTests(unittest.TestCase):
         page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
 
         self._assert_both_components_kept(report_id)
+
+    def test_confirming_then_undoing_a_component_rename_restores_the_original_target_id(self) -> None:
+        report_id = self._two_thick_client_components()
+        page = self.page
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+
+        component = page.get_by_role("textbox", name="Thick Client Component", exact=True).nth(1)
+        component.fill("Updater2.exe")
+        component.press("Tab")
+        page.locator(".vr-dialog").wait_for()
+        page.get_by_role("button", name="Change them anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        page.get_by_role("button", name="Undo last change").click()
+        expect(component).to_have_value("Updater.exe")
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+        self._assert_both_components_kept(report_id)
+
+    def test_setup_web_scope_removal_waits_for_confirmation_before_saving(self) -> None:
+        report_id = self._two_web_targets()
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 100")
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        scope_box = page.get_by_role("textbox", name="Web", exact=True).first
+
+        scope_box.fill("https://b.example.test")
+        page.wait_for_function("document.querySelector('#save-button')?.textContent === 'Confirm the scope target change'")
+        self.assertEqual(main.workspace.load(report_id).vulnerabilities[0].scope.target_ids, ["tgt_a", "tgt_b"])
+
+        scope_box.blur()
+        page.locator(".vr-dialog").wait_for()
+        page.get_by_role("button", name="Change them anyway").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        saved = main.workspace.load(report_id)
+        self.assertEqual([(target.target_id, target.value) for target in saved.scope_targets], [("tgt_b", "https://b.example.test")])
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_b"])
+
+    def test_cancelling_a_setup_web_scope_removal_keeps_targets_and_links(self) -> None:
+        report_id = self._two_web_targets()
+        page = self.page
+        page.add_init_script("window.VULNREPORT_AUTOSAVE_IDLE_MS = 100")
+        page.goto(f"{self.base_url}/reports/{report_id}/setup")
+        scope_box = page.get_by_role("textbox", name="Web", exact=True).first
+
+        scope_box.fill("https://b.example.test")
+        page.wait_for_function("document.querySelector('#save-button')?.textContent === 'Confirm the scope target change'")
+        scope_box.blur()
+        page.locator(".vr-dialog").wait_for()
+        page.get_by_role("button", name="Keep the current targets").click()
+        page.locator('#save-button[data-save-state="saved"]').wait_for(timeout=10_000)
+
+        expect(scope_box).to_have_value("https://a.example.test\nhttps://b.example.test")
+        saved = main.workspace.load(report_id)
+        self.assertEqual(
+            [(target.target_id, target.value) for target in saved.scope_targets],
+            [("tgt_a", "https://a.example.test"), ("tgt_b", "https://b.example.test")],
+        )
+        self.assertEqual(saved.vulnerabilities[0].scope.target_ids, ["tgt_a", "tgt_b"])
 
     def test_a_component_needs_a_description_before_setup_will_let_you_leave(self) -> None:
         """A description-only entry would pass an unnarrowed textarea count and 422 server-side.
@@ -6106,6 +6242,29 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertNotEqual(page.locator("#save-button").get_attribute("data-save-state"), "unsaved", "opening Setup changed the report")
         self.assertEqual(self._saved_engagement(report_id).non_production_label, "TEST/MO")
 
+    def test_a_typed_non_production_name_keeps_the_date_fields_inside_a_narrow_window(self) -> None:
+        """A typed name widens the first column of both coverage rows to 290px. In a window too narrow
+        to share what is left, the date fields ran past their section and the page scrolled sideways."""
+        report_id = self.ready_report()
+        report = main.workspace.load(report_id)
+        report.engagement.tested_environments = ["production", "non_production"]
+        report.engagement.non_production_label = "TEST/MO"
+        main.workspace.save(report)
+
+        page = self.page
+        for width in (444, 390):
+            with self.subTest(window=width):
+                page.set_viewport_size({"width": width, "height": 900})
+                self._setup_page(report_id)
+                fields = page.locator(".environment-window .date-pair input")
+                expect(fields).to_have_count(6)
+                past_section = fields.evaluate_all(
+                    "inputs => inputs.filter(input => input.getBoundingClientRect().right > input.closest('section').getBoundingClientRect().right + 0.5).length"
+                )
+                self.assertEqual(past_section, 0, "a date field runs past its section")
+                sideways = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                self.assertLessEqual(sideways, 0, "the page scrolls sideways")
+
     def _retest_setup(self, report_id: str, environments: list[str], label: str = "NON-PROD"):
         report = main.workspace.load(report_id)
         report.engagement.report_type = "retest"
@@ -7288,6 +7447,32 @@ class BrowserWorkflowTests(unittest.TestCase):
         proof = next(content for content in main.workspace.load(report_id).vulnerabilities[0].contents if content.type == "proof_of_concept")
         first_item = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list").items[0]
         self.assertEqual("".join(run.text for run in first_item.runs), "Send parameter 1. value")
+
+    def test_a_long_unbroken_last_step_stays_inside_the_conclusion_section(self) -> None:
+        """A URL has nowhere to break. It widened the section's one grid column, and the section clips,
+        so the Dismiss button and the right edge of every card in it were cut off."""
+        report_id = self.ready_report(include_finding=True)
+        report, finding = self._complete_finding(report_id)
+        finding.status = "open_previously_discovered"
+        self._fill_retest_history(report, finding)
+        proof = next(content for content in finding.contents if content.type == "proof_of_concept")
+        steps = next(fragment for fragment in proof.fragments if fragment.type == "numbered_list")
+        steps.items = [ListItem(runs=[Run(text="Open https://portal.example.test/export?include=" + "transactions," * 30)])]
+        acceptance.provision(report)
+        main.workspace.save(report)
+
+        page = self.page
+        conclusion = page.locator('.content-block[data-content-type="in_conclusion"]')
+        offer = conclusion.locator("[data-conclusion-step]")
+        for width in (1280, 444):
+            with self.subTest(window=width):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.goto(f"{self.base_url}/reports/{report_id}/edit")
+                page.wait_for_selector("#issue-count")
+                expect(offer).to_have_count(1)
+                section, button = conclusion.bounding_box(), offer.get_by_role("button", name="Dismiss").bounding_box()
+                self.assertLessEqual(button["x"] + button["width"], section["x"] + section["width"], "the Dismiss button is cut off")
+                self.assertLessEqual(conclusion.evaluate("block => block.scrollWidth - block.clientWidth"), 0, "the section's content is wider than the section")
 
     def test_the_conclusion_offer_puts_the_last_step_in_front_of_the_sentence(self) -> None:
         """The step shares the sentence's paragraph rather than taking one of its own, so the client

@@ -3,8 +3,9 @@
 Usage:
     .venv/bin/python scripts/burp_release.py [name]
 
-Copies only the runtime-required files into a staging folder, zips it, and
-writes the result to dist/<name>.zip (dist/ is a build output, gitignored).
+Copies only the runtime-required files into a staging folder, hardens the staging
+copy with the BLA CLI, zips it, and writes the result to dist/<name>.zip
+(dist/ is a build output, gitignored).
 
 This script is independent of scripts/default_release.py (docs/plans/split-release-into-burp-and-default.md).
 Nothing it ships should hint that a non-Burp build exists.
@@ -12,6 +13,7 @@ Nothing it ships should hint that a non-Burp build exists.
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -42,6 +44,10 @@ EXCLUDE_RELATIVE = {
 EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "graphify-out"}
 EXCLUDE_SUFFIXES = {".pyc"}
 
+# Pinned so release hardening is deterministic across machines.
+BLA_PACKAGE = "bla-agents@3.6.0"
+BLA_COMMAND = ("npx", "--yes", BLA_PACKAGE)
+
 
 def _ignore(directory: str, names: list[str]) -> set[str]:
     current = Path(directory)
@@ -54,7 +60,16 @@ def _ignore(directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
-def build_release(name: str) -> Path:
+def harden_staging(staging: Path) -> None:
+    command = [*BLA_COMMAND, "harden", str(staging), "--apply"]
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        return
+    detail = (result.stderr or result.stdout).strip() or f"exit code {result.returncode}"
+    raise RuntimeError(f"BLA harden failed for {staging}: {detail}")
+
+
+def build_release(name: str, *, run_hardening: bool = False) -> Path:
     staging = DIST / name
     if staging.exists():
         shutil.rmtree(staging)
@@ -64,6 +79,8 @@ def build_release(name: str) -> Path:
         shutil.copy2(ROOT / source, staging / target)
     for dirname in INCLUDE_DIRS:
         shutil.copytree(ROOT / dirname, staging / dirname, ignore=_ignore)
+    if run_hardening:
+        harden_staging(staging)
 
     archive = shutil.make_archive(str(DIST / name), "zip", root_dir=DIST, base_dir=name)
     shutil.rmtree(staging)
@@ -73,7 +90,7 @@ def build_release(name: str) -> Path:
 def main() -> int:
     name = sys.argv[1] if len(sys.argv) > 1 else f"Report-Generator-Burp-{date.today():%Y-%m-%d}"
     DIST.mkdir(exist_ok=True)
-    archive = build_release(name)
+    archive = build_release(name, run_hardening=True)
     print(archive)
     return 0
 

@@ -994,6 +994,18 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
     payload["engagement"]["tested_channels"] = channels
 
     old = {(target.environment, target.channel, target.value): target.target_id for target in prior.scope_targets}
+    submitted_targets = payload.get("scope_targets", [])
+    submitted_ids = {}
+    if isinstance(submitted_targets, list):
+        for target in submitted_targets:
+            if not isinstance(target, dict):
+                continue
+            key = (target.get("environment"), target.get("channel"), target.get("value"))
+            target_id = target.get("target_id")
+            if not all(isinstance(part, str) for part in key) or not isinstance(target_id, str):
+                continue
+            submitted_ids.setdefault(key, target_id)
+    used_ids = set()
     targets = []
     for environment in environments:
         environment_values = submitted.get(environment, {})
@@ -1034,7 +1046,16 @@ def reconcile_targets(payload: dict, prior: Report) -> list[str] | None:
                 seen.add(value)
                 cleaned.append((value, description))
             for order, (value, description) in enumerate(cleaned):
-                targets.append({"target_id": old.get((environment, channel, value), f"tgt_{uuid.uuid4().hex[:8]}"), "environment": environment, "channel": channel, "value": value, "description": description, "order": order})
+                key = (environment, channel, value)
+                target_id = old.get(key) or submitted_ids.get(key)
+                if target_id in used_ids:
+                    target_id = None
+                if target_id is None:
+                    target_id = f"tgt_{uuid.uuid4().hex[:8]}"
+                    while target_id in used_ids:
+                        target_id = f"tgt_{uuid.uuid4().hex[:8]}"
+                used_ids.add(target_id)
+                targets.append({"target_id": target_id, "environment": environment, "channel": channel, "value": value, "description": description, "order": order})
     payload["scope_targets"] = targets
     target_ids = {target["target_id"] for target in targets}
     prior_targets = [target.model_dump(mode="json") for target in prior.scope_targets]

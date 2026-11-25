@@ -13,7 +13,8 @@ Rules that this section sets override the general advice below. The full recipe 
 1. Start a throwaway app in the background: `.venv/bin/python -m scripts.ui_check --report finding` (`none`, `empty`, `setup` or `finding`). Wait for its `URL` and `REPORT` lines. Pages are `<URL>/reports/<REPORT>/setup`, `/findings` and `/edit`.
 2. Run every `playwright-cli` command from `/tmp`, so `.playwright-cli/` does not land in the repository. Pass `--filename=/tmp/...` to `snapshot` and `screenshot`.
 3. Refs change prefix after a navigation (`e29` becomes `f1e29`). Take a fresh snapshot and grep it for the ref.
-4. Finish with `playwright-cli close` and stop the app by PID. A lasting regression test goes in `tests/test_browser.py`.
+4. Check every page you changed at 1280 and 444 px (`playwright-cli resize 1280 900`, then `resize 444 900`). At each width run the gate in the rule's "Check a UI change in a real browser" bullet and look at a screenshot.
+5. Finish with `playwright-cli close` and stop the app by PID. A lasting regression test goes in `tests/test_browser.py`.
 
 ## Quick start
 

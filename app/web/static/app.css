@@ -34,8 +34,11 @@ input:focus, select:focus, textarea:focus, .rich:focus { outline: 2px solid #c8d
 .environment-window { display: grid; align-items: center; background: transparent; }
 .environment-window + .environment-window { border-top: 1px solid var(--line); }
 .environment-window .coverage-option { display: inline-flex; align-items: center; gap: 7px; margin: 0; }
-/* Widened on the whole block rather than only the panel that needs it, so both rows keep a shared column. */
-.test-windows:has(.coverage-name-custom) .environment-window { grid-template-columns: 290px minmax(0, 1fr); }
+/* Widened on the whole block rather than only the panel that needs it, so both rows keep a shared column.
+   Only where the page has room: at 780px and below the rows stack, as they do without a typed name. */
+@media (min-width: 781px) {
+  .test-windows:has(.coverage-name-custom) .environment-window { grid-template-columns: 290px minmax(0, 1fr); }
+}
 .environment-window .coverage-name { flex: 0 0 auto; width: 112px; }
 .environment-window .coverage-name-custom { flex: 1 1 auto; min-width: 0; font-size: 13px; }
 .environment-window .date-pair { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 3px; }
@@ -237,7 +240,7 @@ input[data-path*="scope"],
 .poc-offer, .content-offer { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 11px; padding: 0 0 10px; border: 0; border-bottom: 1px solid var(--line-strong); background: transparent; }
 .offer-mark { flex: 0 0 auto; width: 13px; height: 13px; margin-top: 1px; color: var(--warning); }
 .offer-body { flex: 1; min-width: 0; }
-.poc-offer p, .content-offer p { margin: 0; color: var(--ink-soft); font-size: 10.5px; line-height: 1.5; }
+.poc-offer p, .content-offer p { margin: 0; color: var(--ink-soft); font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .offer-channels { display: inline-flex; overflow: hidden; margin-top: 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
 .offer-channels button { min-height: 0; padding: 3px 9px; border: 0; border-radius: 0; color: var(--muted); background: var(--panel); font-size: 10px; font-weight: 650; }
 .offer-channels button + button { border-left: 1px solid var(--line-strong); }

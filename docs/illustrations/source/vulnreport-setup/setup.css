@@ -1,0 +1,9 @@
+/* One window on a 28px gutter at the top, left and right, running off the bottom. */
+.vs .vs-win {
+  position: absolute;
+  top: 28px;
+  left: 28px;
+  width: 744px;
+  height: 800px;
+  box-shadow: var(--ss-shadow-hero);
+}

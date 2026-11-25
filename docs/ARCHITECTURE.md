@@ -13,6 +13,10 @@ a finished Microsoft Word document that matches the company's report template ex
 It runs on the tester's own machine. Starting it opens a small web server on that computer, and the
 browser talks only to that. Nothing goes to the internet.
 
+![Three browser windows side by side. The middle one shows the Findings page, a table of five findings with their severities and statuses. The Setup page on its left and the Content page on its right are drawn as gray bars.](illustrations/tour.png)
+
+*A mock-up of the three screens, drawn with invented data.*
+
 ---
 
 ## Tech stack
@@ -46,14 +50,26 @@ tester's name, the dates. Which environments were in scope, Production or Non-Pr
 and which kinds of application: web, API, mobile. Then the actual list of addresses and endpoints
 that were tested.
 
+![The Setup page in a browser window. An Application panel holds the application name, report type, tester and report date. A Test Coverage panel has Production ticked, with its start and end dates. A Scope panel has the Web and API app types ticked and one list of targets for each.](illustrations/step-1-setup.png)
+
+*A mock-up of the Setup screen with an invented client and invented targets.*
+
 **Step two — the findings.** A table of the vulnerabilities discovered. Each gets a name, a
 likelihood, an impact, a severity, a status, and a choice of which scope targets it affects. The
 tester can tick targets from step one, or type in extra endpoints by hand.
+
+![The Findings page in a browser window. A table lists findings with likelihood, impact, severity and status. The first finding is open and shows its web and API targets with a tick box each, and a box for extra endpoints.](illustrations/step-2-findings.png)
+
+*A mock-up of the Findings screen with invented findings.*
 
 **Step three — the writing.** For every finding: a description, a recommended remediation, a proof
 of concept with numbered steps, and screenshots. On a retest there are two extra sections — last
 year's proof of concept, kept for comparison, and a conclusion saying whether the issue is now
 resolved.
+
+![The Content page in a browser window, with a sketch of a Word report page in front of its left edge. One finding is open on its proof of concept, which has three numbered steps and a screenshot with a caption. Description and Remediation are closed.](illustrations/step-3-content.png)
+
+*A mock-up of the Content screen with a sketch of the Word page it feeds, drawn with invented data.*
 
 The steps are ordered. The findings screen will not open until the engagement details are complete,
 and the writing screen will not open until every finding has a name, a severity and at least one

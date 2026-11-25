@@ -17,7 +17,7 @@ from app.models import Report
 from app.vocabulary import client_vocabulary
 
 try:
-    from playwright.sync_api import expect, sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, sync_playwright
 except ImportError:  # pragma: no cover - the dev requirements install it
     sync_playwright = None
 
@@ -30,7 +30,7 @@ PAGE = """<!doctype html>
   <button id="save-button" type="button"></button>
   <button id="undo-button" type="button"></button>
   <button id="redo-button" type="button"></button>
-  <input id="owner-field" data-field="owner">
+  <input id="owner-field" data-field="owner" data-path="engagement.app_owner">
 </main>
 <script>
   // Counted as each save is sent, so a test reads it in step with the clock, before any answer arrives.
@@ -446,17 +446,19 @@ class SaveModuleTests(unittest.TestCase):
         self.page.goto(page_url("findings"))
         self.start(saved, "findings")
         self.assertIsNone(self.changed_field())
+        [step] = self.history()["undoHistory"]
+        self.assertEqual(step["page"], "setup")
 
-        with self.page.expect_navigation(url=page_url("setup")):
-            self.page.locator("#undo-button").click()
+        self.page.locator("#undo-button").click()
+        self.page.wait_for_url(page_url("setup"))
         self.start(report_json(**self.saves[-1]), "setup")
         self.assertEqual(self.changed_field(), OWNER_FIELD)
-        # Redo on the step's own page reloads it, and the field comes back again.
-        with self.page.expect_navigation(url=page_url("setup")):
-            self.page.locator("#redo-button").click()
-        self.start(report_json(**self.saves[-1]), "setup")
-
-        self.assertEqual(self.changed_field(), OWNER_FIELD)
+        self.page.evaluate("window.historyMarker = 'kept'")
+        with self.assertRaises(PlaywrightTimeoutError):
+            with self.page.expect_navigation(url=page_url("setup"), timeout=700):
+                self.page.locator("#redo-button").click()
+        self.assertEqual(self.page.evaluate("window.historyMarker"), "kept")
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Typed on Setup")
 
     def test_a_page_the_tester_is_redirected_to_gets_no_field(self) -> None:
         saved = self.step_made_on("setup", "Typed on Setup", in_field=True)
@@ -521,37 +523,56 @@ class SaveModuleTests(unittest.TestCase):
         saved = self.step_made_on("setup", "Typed on Setup")
         self.page.goto(page_url("findings"))
         self.start(saved, "findings")
+        [step] = self.history()["undoHistory"]
+        self.assertEqual(step["page"], "setup")
 
-        with self.page.expect_navigation(url=page_url("setup")):
-            self.page.locator("#undo-button").click()
+        self.page.locator("#undo-button").click()
+        self.page.wait_for_url(page_url("setup"))
         self.assertEqual(self.saves[-1]["engagement"]["app_owner"], report_json()["engagement"]["app_owner"])
         self.start(report_json(**self.saves[-1]), "setup")
-        with self.page.expect_navigation(url=page_url("setup")):
-            self.page.locator("#redo-button").click()
+        self.page.evaluate("window.historyMarker = 'kept'")
+        with self.assertRaises(PlaywrightTimeoutError):
+            with self.page.expect_navigation(url=page_url("setup"), timeout=700):
+                self.page.locator("#redo-button").click()
 
+        self.assertEqual(self.page.evaluate("window.historyMarker"), "kept")
         self.assertEqual(self.saves[-1]["engagement"]["app_owner"], "Typed on Setup")
 
-    def test_an_undo_reloads_the_page_when_its_step_was_made_there_or_records_no_page(self) -> None:
+    def test_simple_same_page_undo_and_redo_keep_the_page_loaded(self) -> None:
+        self.step_made_on("findings", "Typed on Findings")
+        self.page.evaluate("window.historyMarker = 'kept'")
+        sent = len(self.saves)
+
+        with self.assertRaises(PlaywrightTimeoutError):
+            with self.page.expect_navigation(url=page_url("findings"), timeout=700):
+                self.page.locator("#undo-button").click()
+
+        self.assertEqual(len(self.saves), sent + 1)
+        self.assertEqual(self.page.evaluate("window.historyMarker"), "kept")
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), report_json()["engagement"]["app_owner"])
+
+        with self.assertRaises(PlaywrightTimeoutError):
+            with self.page.expect_navigation(url=page_url("findings"), timeout=700):
+                self.page.locator("#redo-button").click()
+
+        self.assertEqual(len(self.saves), sent + 2)
+        self.assertEqual(self.page.evaluate("window.historyMarker"), "kept")
+        self.assertEqual(self.page.evaluate("saveCode.report.engagement.app_owner"), "Typed on Findings")
+
+    def test_an_undo_reloads_the_page_when_its_step_records_no_page(self) -> None:
         older_step = {"changes": [{"path": ["engagement", "app_owner"], "beforePresent": True, "before": "Before", "afterPresent": True, "after": ""}]}
-        cases = [("a step made on this page", None), ("a step written before steps recorded a page", older_step)]
-        for name, planted in cases:
-            with self.subTest(name):
-                self.open_page()
-                if planted:
-                    self.page.evaluate(
-                        "([key, step]) => sessionStorage.setItem(key, JSON.stringify({undoHistory: [step], redoHistory: []}))",
-                        [f"vulnreport-history:{REPORT_ID}", planted],
-                    )
-                    self.start(report_json(), "findings")
-                else:
-                    self.step_made_on("findings", "Typed on Findings")
-                sent = len(self.saves)
+        self.page.evaluate(
+            "([key, step]) => sessionStorage.setItem(key, JSON.stringify({undoHistory: [step], redoHistory: []}))",
+            [f"vulnreport-history:{REPORT_ID}", older_step],
+        )
+        self.start(report_json(), "findings")
+        sent = len(self.saves)
 
-                with self.page.expect_navigation(url=page_url("findings")):
-                    self.page.locator("#undo-button").click()
+        with self.page.expect_navigation(url=page_url("findings")):
+            self.page.locator("#undo-button").click()
 
-                self.assertEqual(len(self.saves), sent + 1)
-                self.assertEqual(self.saves[-1]["engagement"]["app_owner"], "Before" if planted else report_json()["engagement"]["app_owner"])
+        self.assertEqual(len(self.saves), sent + 1)
+        self.assertEqual(self.saves[-1]["engagement"]["app_owner"], "Before")
 
     def test_an_undo_history_from_before_another_tabs_save_is_dropped_when_the_page_loads(self) -> None:
         """Undo puts back whole arrays, such as a table's rows. A history carried over a reload would lay this

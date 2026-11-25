@@ -108,9 +108,21 @@ def annotate(source: bytes, suffix: str) -> bytes:
 
 
 def harden_staging(staging: Path) -> None:
-    command = [*BLA_COMMAND, "harden", str(staging), "--apply"]
-    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    command = [*BLA_COMMAND, "harden", "."]
+    result = subprocess.run(command, cwd=staging, capture_output=True, text=True, check=False)
     if result.returncode == 0:
+        hardened = staging / ".bla-hardened"
+        if not hardened.is_dir():
+            raise RuntimeError(f"BLA harden failed for {staging}: missing {hardened}")
+        for source in hardened.rglob("*"):
+            relative = source.relative_to(hardened)
+            target = staging / relative
+            if source.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        shutil.rmtree(hardened)
         return
     detail = (result.stderr or result.stdout).strip() or f"exit code {result.returncode}"
     raise RuntimeError(f"BLA harden failed for {staging}: {detail}")

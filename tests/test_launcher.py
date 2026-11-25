@@ -827,17 +827,36 @@ class ReleaseHardeningTests(unittest.TestCase):
     def test_harden_staging_runs_pinned_bla_command(self) -> None:
         for script in (default_release, burp_release):
             with self.subTest(script=script.__name__):
-                staging = Path("tmp-release")
+                with tempfile.TemporaryDirectory() as directory:
+                    staging = Path(directory)
+                    mirror = staging / ".bla-hardened"
+                    (mirror / "app").mkdir(parents=True)
+                    (mirror / "app" / "main.py").write_text("hardened", encoding="utf-8")
+                    (staging / "app").mkdir(parents=True)
+                    (staging / "app" / "main.py").write_text("original", encoding="utf-8")
+                    result = subprocess.CompletedProcess(args=["npx"], returncode=0, stdout="", stderr="")
+                    with patch.object(script.subprocess, "run", return_value=result) as run_call:
+                        script.harden_staging(staging)
+                    run_call.assert_called_once_with(
+                        [*script.BLA_COMMAND, "harden", "."],
+                        cwd=staging,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual((staging / "app" / "main.py").read_text(encoding="utf-8"), "hardened")
+                    self.assertFalse(mirror.exists())
+
+    def test_harden_staging_refuses_success_without_hardened_mirror(self) -> None:
+        for script in (default_release, burp_release):
+            with self.subTest(script=script.__name__), tempfile.TemporaryDirectory() as directory:
+                staging = Path(directory)
                 result = subprocess.CompletedProcess(args=["npx"], returncode=0, stdout="", stderr="")
                 with patch.object(script.subprocess, "run", return_value=result) as run_call:
-                    script.harden_staging(staging)
-                run_call.assert_called_once_with(
-                    [*script.BLA_COMMAND, "harden", str(staging), "--apply"],
-                    cwd=script.ROOT,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
+                    expected = re.escape(f"BLA harden failed for {staging}: missing {staging / '.bla-hardened'}")
+                    with self.assertRaisesRegex(RuntimeError, expected):
+                        script.harden_staging(staging)
+                run_call.assert_called_once_with([*script.BLA_COMMAND, "harden", "."], cwd=staging, capture_output=True, text=True, check=False)
 
     def test_harden_staging_raises_with_process_output_when_bla_fails(self) -> None:
         for script in (default_release, burp_release):

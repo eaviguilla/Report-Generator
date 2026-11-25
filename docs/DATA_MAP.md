@@ -58,8 +58,8 @@ A file that a newer release no longer has stays behind, and Burp keeps running t
 
 **Folder names are derived, not authoritative.** A report is located by scanning every `apps/*/*/draft.json` and matching the `report_id` field (`Workspace.find_path`). Renaming a folder by hand does not break lookup; editing `report_id` inside the file does.
 
-**Report data never ships.** `scripts/default_release.py` stages the plain web app from `requirements.txt`, `README.md`, `run.py` (its launcher, at the release root), `app/` minus `app/init.py` (the other build's launcher), and `resources/` only, then runs `npx --yes bla-agents@3.6.0 harden <staging> --apply` before zipping.
-`scripts/burp_release.py` stages the Burp build the same way, but from `README-burp.md` (shipped renamed to `README.md`), `report_generator_burp.py`, and `app/` complete with `app/init.py`; it leaves `run.py` out, runs the same BLA hardening on its staging folder, then zips.
+**Report data never ships.** `scripts/default_release.py` stages the plain web app from `requirements.txt`, `README.md`, `run.py` (its launcher, at the release root), `app/` minus `app/init.py` (the other build's launcher), and `resources/` only, then runs `npx --yes bla-agents@3.6.0 harden .` inside the staging folder and overlays the generated `.bla-hardened/` mirror before zipping.
+`scripts/burp_release.py` stages the Burp build the same way, but from `README-burp.md` (shipped renamed to `README.md`), `report_generator_burp.py`, and `app/` complete with `app/init.py`; it leaves `run.py` out, runs the same BLA hardening inside its staging folder, overlays the hardened mirror, then zips.
 Either way `data/` and `generated/` are deliberately left behind, so a release zip carries the library but no drafts, no evidence, and no finished documents.
 `dist/` is a build output and gitignored.
 

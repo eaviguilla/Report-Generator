@@ -47,6 +47,7 @@ EXCLUDE_SUFFIXES = {".pyc"}
 # Pinned so release hardening is deterministic across machines.
 BLA_PACKAGE = "bla-agents@3.6.0"
 BLA_COMMAND = ("npx", "--yes", BLA_PACKAGE)
+BLA_EXCLUDES = ("resources/*.docx", "resources/**/*.docx")
 
 
 def _ignore(directory: str, names: list[str]) -> set[str]:
@@ -61,7 +62,7 @@ def _ignore(directory: str, names: list[str]) -> set[str]:
 
 
 def harden_staging(staging: Path) -> None:
-    command = [*BLA_COMMAND, "harden", "."]
+    command = [*BLA_COMMAND, "harden", ".", "--exclude", ",".join(BLA_EXCLUDES)]
     result = subprocess.run(command, cwd=staging, capture_output=True, text=True, check=False)
     if result.returncode == 0:
         hardened = staging / ".bla-hardened"

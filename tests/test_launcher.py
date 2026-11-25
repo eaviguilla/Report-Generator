@@ -838,7 +838,7 @@ class ReleaseHardeningTests(unittest.TestCase):
                     with patch.object(script.subprocess, "run", return_value=result) as run_call:
                         script.harden_staging(staging)
                     run_call.assert_called_once_with(
-                        [*script.BLA_COMMAND, "harden", "."],
+                        [*script.BLA_COMMAND, "harden", ".", "--exclude", ",".join(script.BLA_EXCLUDES)],
                         cwd=staging,
                         capture_output=True,
                         text=True,
@@ -856,7 +856,13 @@ class ReleaseHardeningTests(unittest.TestCase):
                     expected = re.escape(f"BLA harden failed for {staging}: missing {staging / '.bla-hardened'}")
                     with self.assertRaisesRegex(RuntimeError, expected):
                         script.harden_staging(staging)
-                run_call.assert_called_once_with([*script.BLA_COMMAND, "harden", "."], cwd=staging, capture_output=True, text=True, check=False)
+                run_call.assert_called_once_with(
+                    [*script.BLA_COMMAND, "harden", ".", "--exclude", ",".join(script.BLA_EXCLUDES)],
+                    cwd=staging,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
 
     def test_harden_staging_raises_with_process_output_when_bla_fails(self) -> None:
         for script in (default_release, burp_release):
